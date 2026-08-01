@@ -49,6 +49,11 @@ const FRACTAL_IDS = { mandelbulb: 0, mandelbox: 1, menger: 2, julia: 3 };
 // Quality tiers -> internal-resolution scale factor.
 const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 
+// Camera orbit distance per fractal — each estimator lives at a different
+// world scale, so a single radius would sit inside the larger ones.
+// Indexed by fractal id (see FRACTAL_IDS).
+const CAM_RADIUS = [2.55, 6.5, 5.6, 3.0]; // mandelbulb, mandelbox, menger, julia
+
 const HDR_FORMAT = 'rgba16float';
 
 /**
@@ -324,16 +329,17 @@ export async function initFractalBackground(canvas, options = {}) {
     const t = state.animTime;
     const rm = reducedMotion();
 
-    // Orbital Lissajous drift, always looking near origin.
-    const radius = 2.55;
+    // Orbital Lissajous drift, always looking near origin. Distance and bob
+    // scale with the selected fractal's world size so it always frames well.
+    const radius = CAM_RADIUS[state.fractalType] ?? 2.55;
     const ax = rm ? 0.9 : t * 0.09;
     const ay = rm ? 0.55 : t * 0.063;
-    // Parallax nudge (disabled under reduced motion).
-    const px = rm ? 0 : state.parallax.x * 0.5;
-    const py = rm ? 0 : state.parallax.y * 0.4;
+    // Parallax nudge (disabled under reduced motion), scaled to distance.
+    const px = rm ? 0 : state.parallax.x * radius * 0.2;
+    const py = rm ? 0 : state.parallax.y * radius * 0.16;
 
     const camX = Math.cos(ax) * radius + px;
-    const camY = Math.sin(ay) * 0.9 + 0.15 + py;
+    const camY = Math.sin(ay) * (radius * 0.35) + radius * 0.06 + py;
     const camZ = Math.sin(ax) * radius;
 
     // Fractal parameter morphing.
