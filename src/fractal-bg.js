@@ -52,7 +52,7 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 // Camera orbit distance per fractal — each estimator lives at a different
 // world scale, so a single radius would sit inside the larger ones.
 // Indexed by fractal id (see FRACTAL_IDS).
-const CAM_RADIUS = [2.55, 6.5, 5.6, 3.0]; // mandelbulb, mandelbox, menger, julia
+const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0]; // mandelbulb, mandelbox, menger, julia
 
 const HDR_FORMAT = 'rgba16float';
 

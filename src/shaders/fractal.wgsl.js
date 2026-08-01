@@ -171,28 +171,40 @@ fn deMandelbox(pos : vec3<f32>) -> DEResult {
   return res;
 }
 
-// Menger sponge via folding-space IFS.
+// Signed-distance box (outer bound for the Menger sponge).
+fn sdBox(p : vec3<f32>, b : vec3<f32>) -> f32 {
+  let di = abs(p) - b;
+  return min(max(di.x, max(di.y, di.z)), 0.0) + length(max(di, vec3<f32>(0.0)));
+}
+
+// Menger sponge — canonical folding-space IFS. The sponge occupies roughly
+// [-1,1]^3; each of the 5 iterations carves cross-shaped holes at 1/3 scale,
+// so the recursive detail actually shows instead of a near-solid box.
 fn deMenger(pos : vec3<f32>) -> DEResult {
-  // Start from a box, then repeatedly cut cross-shaped holes.
-  var p = pos * 0.5;
-  let d0 = max(abs(p.x), max(abs(p.y), abs(p.z))) - 1.0; // box SDF
-  var d = d0;
+  var p = pos;
+  var d = sdBox(p, vec3<f32>(1.0));
   var s = 1.0;
-  var trap = 1e10;
+  var colorTrap = 0.0;
   for (var m = 0; m < 5; m = m + 1) {
-    let a = (fract(p * s * 0.5 + 0.5) - 0.5) * 2.0 / s;
+    // Euclidean fold: a = mod(p*s, 2) - 1, landing in [-1,1].
+    let ps = p * s;
+    let a = ps - 2.0 * floor(ps * 0.5) - 1.0;
     s = s * 3.0;
     let r = abs(1.0 - 3.0 * abs(a));
     let da = max(r.x, r.y);
     let db = max(r.y, r.z);
     let dc = max(r.z, r.x);
     let c = (min(da, min(db, dc)) - 1.0) / s;
-    d = max(d, c);
-    trap = min(trap, length(a));
+    if (c > d) {
+      d = c;
+      // Trap at the recursion level that defines this surface point, mixed
+      // with the folded position -> varied iridescent banding (not flat grey).
+      colorTrap = f32(m) * 0.16 + length(a) * 0.33;
+    }
   }
   var res : DEResult;
-  res.dist = d * 2.0;
-  res.trap = trap;
+  res.dist = d;
+  res.trap = colorTrap;
   return res;
 }
 
