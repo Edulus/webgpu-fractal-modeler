@@ -86,10 +86,32 @@ behind your DOM.
 | `setPalette(name)`          | Switch cosine palette at runtime.                                 |
 | `setQuality(mode)`          | `'low'`/`'medium'`/`'high'`/`'auto'`; recreates render targets.   |
 | `setTransparent(bool)`      | Toggle transparent-over-page vs. opaque gradient background.      |
+| `setExplorer(bool)`         | Model-explorer preset: opaque bg, no auto-drift, full navigation. |
+| `setControls(bool)`         | Enable drag/pinch/wheel navigation without the full preset.       |
+| `setAutoOrbit(bool)`        | Toggle the time-driven camera drift.                             |
+| `setZoom(n)` / `zoomBy(f)`  | Set/multiply the camera distance (1 = default framing).          |
+| `resetView()`               | Recenter the orbit and reset zoom.                               |
 | `pause()`                   | Stop the render loop.                                             |
 | `resume()`                  | Resume (respects visibility/intersection gating).                |
 | `destroy()`                 | Tear down: observers, listeners, GPU textures, and the device.   |
-| `info` (getter)             | `{ fractalType, qualityMode, qualityScale, fps, reducedMotion }`. |
+| `info` (getter)             | `{ fractalType, qualityMode, qualityScale, fps, reducedMotion, explorer, zoom }`. |
+
+### Navigation & explorer mode
+
+Beyond the drifting background, the fractal can be driven as a navigable 3D
+model. `setControls(true)` (or the all-in-one `setExplorer(true)`) enables:
+
+- **Drag** (mouse or one finger) to orbit around the fractal.
+- **Pinch** (two fingers) or **mouse wheel** to zoom in/out.
+- **Double-tap / double-click** or `resetView()` to recenter.
+
+`setExplorer(true)` additionally switches to an opaque background, stops the
+automatic camera drift, and adds a gentle idle spin when you're not touching it
+— turning the piece into a full-screen model viewer. Turning it back off
+restores the original background configuration. In the demo, the **Enter
+explorer mode** button wires this up and fades the page text out of the way.
+Navigation stays smooth even under `prefers-reduced-motion` (only the automatic
+parameter animation is frozen, not your input).
 
 ## How it works
 

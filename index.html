@@ -158,8 +158,45 @@
     }
     #fallback-note.show { display: block; }
 
+    #panel .hidden { display: none; }
+
+    #btn-explorer {
+      background: rgba(127, 231, 212, 0.14);
+      border-color: rgba(127, 231, 212, 0.4);
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    /* Navigation hint — only visible in explorer mode. */
+    #nav-hint {
+      position: fixed;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      padding: 9px 16px;
+      border-radius: 999px;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      backdrop-filter: blur(10px);
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.4s ease;
+    }
+    body.explorer #nav-hint { opacity: 1; }
+
+    /* Explorer mode: fade the reading content out of the way so the fractal
+       becomes a full-screen, navigable model. */
+    body.explorer .wrap { display: none; }
+    body.explorer { overflow: hidden; }
+    body.explorer #bg { z-index: 0; } /* bring canvas above the (hidden) content */
+
     @media (max-width: 640px) {
       #panel { width: 168px; top: 10px; right: 10px; padding: 10px 12px; }
+      #nav-hint { font-size: 11px; padding: 7px 12px; bottom: 12px; }
     }
   </style>
 </head>
@@ -199,8 +236,13 @@
       <button id="btn-pause">Pause</button>
       <button id="btn-resume">Resume</button>
     </div>
+    <button id="btn-explorer">Enter explorer mode</button>
+    <button id="btn-reset" class="hidden">Reset view</button>
     <div id="hud">initializing…</div>
   </div>
+
+  <!-- Navigation hint (shown only in explorer mode) -->
+  <div id="nav-hint">Drag to rotate · pinch or scroll to zoom · double-tap to reset</div>
 
   <!-- Fallback banner (shown if WebGPU is unavailable) -->
   <div id="fallback-note">
@@ -269,11 +311,35 @@
       document.getElementById('btn-pause').addEventListener('click', () => handle.pause());
       document.getElementById('btn-resume').addEventListener('click', () => handle.resume());
 
-      // HUD: show live fractal/quality/fps.
+      // Explorer mode: full-screen navigable model viewer.
+      const btnExplorer = document.getElementById('btn-explorer');
+      const btnReset = document.getElementById('btn-reset');
+      let explorerOn = false;
+      function toggleExplorer(on) {
+        explorerOn = on;
+        handle.setExplorer(on);
+        document.body.classList.toggle('explorer', on);
+        btnExplorer.textContent = on ? 'Exit explorer mode' : 'Enter explorer mode';
+        btnReset.classList.toggle('hidden', !on);
+      }
+      btnExplorer.addEventListener('click', () => toggleExplorer(!explorerOn));
+      btnReset.addEventListener('click', () => handle.resetView());
+
+      // Double-tap / double-click the model to reset the view.
+      canvas.addEventListener('dblclick', () => { if (explorerOn) handle.resetView(); });
+      let lastTap = 0;
+      canvas.addEventListener('pointerup', () => {
+        const now = performance.now();
+        if (explorerOn && now - lastTap < 300) handle.resetView();
+        lastTap = now;
+      });
+
+      // HUD: show live fractal/quality/fps (+ zoom while exploring).
       const names = ['mandelbulb', 'mandelbox', 'menger', 'julia', 'apollonian'];
       setInterval(() => {
         const i = handle.info;
         hud.textContent = `${names[i.fractalType]} · q${i.qualityScale} · ${i.fps}fps` +
+          (i.explorer ? ` · ${i.zoom}×` : '') +
           (i.reducedMotion ? ' · reduced-motion' : '');
       }, 500);
     }

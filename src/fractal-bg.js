@@ -53,7 +53,7 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 // world scale, so a single radius would sit inside the larger ones.
 // Indexed by fractal id (see FRACTAL_IDS).
 // mandelbulb, mandelbox, menger, julia, apollonian
-const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 2.4];
+const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.8];
 
 const HDR_FORMAT = 'rgba16float';
 
@@ -118,6 +118,17 @@ export async function initFractalBackground(canvas, options = {}) {
     fastFrames: 0,
     // input parallax
     parallax: { x: 0, y: 0, tx: 0, ty: 0 },
+    // navigation
+    autoOrbit: true,      // time-driven camera drift (background feel)
+    controls: false,      // drag/pinch/wheel interaction enabled
+    explorer: false,      // model-explorer preset (opaque, no auto-drift)
+    zoom: 1.0,            // camera distance multiplier (pinch/wheel)
+    orbit: { yaw: 0.6, pitch: 0.35, tyaw: 0.6, tpitch: 0.35, vyaw: 0, vpitch: 0 },
+    // active pointers for drag / pinch tracking
+    pointers: new Map(),
+    pinchDist0: 0,
+    pinchZoom0: 1,
+    lastInteract: 0,
   };
   state.uniformU32 = new Uint32Array(state.uniformData.buffer);
 
@@ -330,18 +341,40 @@ export async function initFractalBackground(canvas, options = {}) {
     const t = state.animTime;
     const rm = reducedMotion();
 
-    // Orbital Lissajous drift, always looking near origin. Distance and bob
-    // scale with the selected fractal's world size so it always frames well.
-    const radius = CAM_RADIUS[state.fractalType] ?? 2.55;
-    const ax = rm ? 0.9 : t * 0.09;
-    const ay = rm ? 0.55 : t * 0.063;
-    // Parallax nudge (disabled under reduced motion), scaled to distance.
-    const px = rm ? 0 : state.parallax.x * radius * 0.2;
-    const py = rm ? 0 : state.parallax.y * radius * 0.16;
+    // Base distance scales with the fractal's world size; zoom (pinch/wheel)
+    // multiplies it. Always looking near origin.
+    const baseR = CAM_RADIUS[state.fractalType] ?? 2.55;
+    const radius = baseR * state.zoom;
 
-    const camX = Math.cos(ax) * radius + px;
-    const camY = Math.sin(ay) * (radius * 0.35) + radius * 0.06 + py;
-    const camZ = Math.sin(ax) * radius;
+    let camX, camY, camZ;
+    if (state.explorer) {
+      // Model-explorer: spherical orbit driven by drag (with easing/inertia)
+      // plus a gentle idle spin when the user isn't touching it.
+      const o = state.orbit;
+      // Gentle idle spin after a couple of seconds of no interaction; folded
+      // into the target so there's no snap when the user grabs it again.
+      if (!rm && state.pointers.size === 0 && nowMs - state.lastInteract > 2500) {
+        o.tyaw += 0.0016;
+      }
+      o.tpitch = Math.max(-1.45, Math.min(1.45, o.tpitch));
+      o.yaw += (o.tyaw - o.yaw) * 0.18 + o.vyaw;
+      o.pitch += (o.tpitch - o.pitch) * 0.18 + o.vpitch;
+      o.vyaw *= 0.9; o.vpitch *= 0.9;
+      o.pitch = Math.max(-1.45, Math.min(1.45, o.pitch));
+      const cp = Math.cos(o.pitch);
+      camX = Math.cos(o.yaw) * cp * radius;
+      camY = Math.sin(o.pitch) * radius;
+      camZ = Math.sin(o.yaw) * cp * radius;
+    } else {
+      // Background: hypnotic Lissajous drift.
+      const ax = rm ? 0.9 : t * 0.09;
+      const ay = rm ? 0.55 : t * 0.063;
+      const px = rm ? 0 : state.parallax.x * radius * 0.2;
+      const py = rm ? 0 : state.parallax.y * radius * 0.16;
+      camX = Math.cos(ax) * radius + px;
+      camY = Math.sin(ay) * (radius * 0.35) + radius * 0.06 + py;
+      camZ = Math.sin(ax) * radius;
+    }
 
     // Fractal parameter morphing.
     const power = rm ? 8.0 : 8.0 + Math.sin(t * 0.15) * 1.0; // breathe 7..9
@@ -508,8 +541,10 @@ export async function initFractalBackground(canvas, options = {}) {
   // ---- Lifecycle ----
   function start() {
     if (state.running || state.disposed) return;
-    if (reducedMotion()) {
-      // Static pose: render once, do not spin rAF.
+    // Under reduced-motion we normally render a single static pose. But when
+    // interactive controls are on (explorer mode), keep the loop alive so
+    // drag/pinch/zoom stay smooth — we just don't auto-animate parameters.
+    if (reducedMotion() && !state.controls) {
       renderFrame(performance.now(), true);
       return;
     }
@@ -562,7 +597,79 @@ export async function initFractalBackground(canvas, options = {}) {
     // Re-evaluate loop behavior when the user toggles the preference.
     stop();
     updateRunning();
-    if (reducedMotion()) renderFrame(performance.now(), true);
+    if (reducedMotion() && !state.controls) renderFrame(performance.now(), true);
+  }
+
+  // ---- Navigation: drag to orbit, pinch / wheel to zoom ----
+  const ZOOM_MIN = 0.25;
+  const ZOOM_MAX = 6.0;
+  const clampZoom = (z) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+
+  function pinchDistance() {
+    const pts = [...state.pointers.values()];
+    if (pts.length < 2) return 0;
+    return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  }
+
+  function nudgeRender() {
+    // If the loop isn't spinning (e.g. reduced-motion static), draw one frame.
+    if (!state.running) renderFrame(performance.now(), true);
+  }
+
+  function onPointerDown(e) {
+    if (!state.controls) return;
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    state.lastInteract = performance.now();
+    if (state.pointers.size === 2) {
+      state.pinchDist0 = pinchDistance();
+      state.pinchZoom0 = state.zoom;
+    }
+  }
+
+  function onPointerMove(e) {
+    if (!state.controls || !state.pointers.has(e.pointerId)) return;
+    const prev = state.pointers.get(e.pointerId);
+    const dx = e.clientX - prev.x;
+    const dy = e.clientY - prev.y;
+    state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    state.lastInteract = performance.now();
+
+    if (state.pointers.size >= 2) {
+      // Pinch: fingers apart -> zoom in (smaller radius).
+      const dist = pinchDistance();
+      if (state.pinchDist0 > 0 && dist > 0) {
+        state.zoom = clampZoom(state.pinchZoom0 * (state.pinchDist0 / dist));
+      }
+    } else {
+      // Single-pointer drag: orbit. Scale by viewport so it feels consistent.
+      const k = 3.2 / Math.max(300, Math.min(window.innerWidth, window.innerHeight));
+      state.orbit.tyaw += dx * k;
+      state.orbit.tpitch += dy * k;
+      state.orbit.vyaw = dx * k * 0.15;
+      state.orbit.vpitch = dy * k * 0.15;
+    }
+    nudgeRender();
+  }
+
+  function onPointerUp(e) {
+    if (!state.pointers.has(e.pointerId)) return;
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+    state.pointers.delete(e.pointerId);
+    // Re-baseline a pinch if one finger remains lifted from two.
+    if (state.pointers.size === 2) {
+      state.pinchDist0 = pinchDistance();
+      state.pinchZoom0 = state.zoom;
+    }
+    state.lastInteract = performance.now();
+  }
+
+  function onWheel(e) {
+    if (!state.controls) return;
+    e.preventDefault();
+    state.zoom = clampZoom(state.zoom * (e.deltaY > 0 ? 1.1 : 0.9));
+    state.lastInteract = performance.now();
+    nudgeRender();
   }
 
   // ---- Init / re-init ----
@@ -634,6 +741,11 @@ export async function initFractalBackground(canvas, options = {}) {
     document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('pointermove', onParallaxMove);
     removeMQListener(reducedMotionMQ, onReducedMotionChange);
+    canvas.removeEventListener('pointerdown', onPointerDown);
+    canvas.removeEventListener('pointermove', onPointerMove);
+    canvas.removeEventListener('pointerup', onPointerUp);
+    canvas.removeEventListener('pointercancel', onPointerUp);
+    canvas.removeEventListener('wheel', onWheel);
     try {
       if (state.targets) {
         state.targets.sceneTex.destroy();
@@ -645,6 +757,35 @@ export async function initFractalBackground(canvas, options = {}) {
     } catch (e) {
       /* ignore */
     }
+  }
+
+  // Apply the background alpha mode (transparent-over-page vs. opaque viewer).
+  function applyTransparent(v) {
+    state.transparent = !!v;
+    state.context.configure({
+      device: state.device,
+      format: state.format,
+      alphaMode: state.transparent ? 'premultiplied' : 'opaque',
+    });
+    if (!state.running) renderFrame(performance.now(), true);
+  }
+
+  // Enable/disable drag/pinch/wheel navigation.
+  function applyControls(on) {
+    state.controls = !!on;
+    canvas.style.pointerEvents = on ? 'auto' : 'none';
+    canvas.style.touchAction = on ? 'none' : '';
+    if (!on) state.pointers.clear();
+    updateRunning();
+    nudgeRender();
+  }
+
+  function resetView() {
+    state.zoom = 1.0;
+    const o = state.orbit;
+    o.tyaw = 0.6; o.tpitch = 0.35; o.vyaw = 0; o.vpitch = 0;
+    state.lastInteract = performance.now();
+    nudgeRender();
   }
 
   // matchMedia listener compat (older Safari uses addListener).
@@ -673,6 +814,13 @@ export async function initFractalBackground(canvas, options = {}) {
   window.addEventListener('pointermove', onParallaxMove, { passive: true });
   addMQListener(reducedMotionMQ, onReducedMotionChange);
 
+  // Navigation listeners live on the canvas; they no-op unless controls are on.
+  canvas.addEventListener('pointerdown', onPointerDown);
+  canvas.addEventListener('pointermove', onPointerMove);
+  canvas.addEventListener('pointerup', onPointerUp);
+  canvas.addEventListener('pointercancel', onPointerUp);
+  canvas.addEventListener('wheel', onWheel, { passive: false });
+
   isVisible = document.visibilityState === 'visible';
   updateRunning();
 
@@ -694,14 +842,23 @@ export async function initFractalBackground(canvas, options = {}) {
       else state.qualityScale = QUALITY_SCALE[mode] ?? 1.0;
       resize();
     },
-    setTransparent(v) {
-      state.transparent = !!v;
-      state.context.configure({
-        device: state.device,
-        format: state.format,
-        alphaMode: state.transparent ? 'premultiplied' : 'opaque',
-      });
-      if (!state.running) renderFrame(performance.now(), true);
+    setTransparent(v) { applyTransparent(v); },
+    // Enable drag/pinch/wheel navigation without the full explorer preset.
+    setControls(on) { applyControls(on); },
+    setAutoOrbit(on) { state.autoOrbit = !!on; nudgeRender(); },
+    // Camera distance multiplier (1 = default framing). Also see resetView().
+    setZoom(z) { state.zoom = clampZoom(z); nudgeRender(); },
+    zoomBy(factor) { state.zoom = clampZoom(state.zoom * factor); nudgeRender(); },
+    resetView,
+    // Model-explorer preset: opaque background, no auto-drift, full navigation.
+    // Turning it off restores the original (background) configuration.
+    setExplorer(on) {
+      state.explorer = !!on;
+      state.autoOrbit = !on;
+      applyControls(!!on);
+      applyTransparent(on ? false : !!opts.transparent);
+      resetView();
+      nudgeRender();
     },
     pause() { stop(); },
     resume() { updateRunning(); },
@@ -714,6 +871,8 @@ export async function initFractalBackground(canvas, options = {}) {
         qualityScale: +state.qualityScale.toFixed(2),
         fps: Math.round(state.fpsEMA),
         reducedMotion: reducedMotion(),
+        explorer: state.explorer,
+        zoom: +state.zoom.toFixed(2),
       };
     },
   };
