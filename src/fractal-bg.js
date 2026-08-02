@@ -44,7 +44,7 @@ const U = {
 const UNIFORM_FLOATS = 40;
 const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 160
 
-const FRACTAL_IDS = { mandelbulb: 0, mandelbox: 1, menger: 2, julia: 3 };
+const FRACTAL_IDS = { mandelbulb: 0, mandelbox: 1, menger: 2, julia: 3, apollonian: 4 };
 
 // Quality tiers -> internal-resolution scale factor.
 const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
@@ -52,7 +52,8 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 // Camera orbit distance per fractal — each estimator lives at a different
 // world scale, so a single radius would sit inside the larger ones.
 // Indexed by fractal id (see FRACTAL_IDS).
-const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0]; // mandelbulb, mandelbox, menger, julia
+// mandelbulb, mandelbox, menger, julia, apollonian
+const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 2.4];
 
 const HDR_FORMAT = 'rgba16float';
 

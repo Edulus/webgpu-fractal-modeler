@@ -247,6 +247,34 @@ fn deJulia(pos : vec3<f32>) -> DEResult {
   return res;
 }
 
+// Apollonian gasket — fractal sphere packing via repeated fold + sphere
+// inversion. Produces nested spheres of shrinking radius (the "packing
+// spheres" look). Classic IQ/Knighty formulation.
+fn deApollonian(pos : vec3<f32>) -> DEResult {
+  // Packing tightness 's' breathes slowly for a living, re-packing feel.
+  let anim = select(sin(u.time * 0.08), 0.0, u.reducedMotion > 0.5);
+  let s = 1.25 + 0.11 * anim;
+
+  var p = pos;
+  var scale = 1.0;
+  var trap = 1e10;
+  const AP_ITERS : i32 = 8;
+  for (var i = 0; i < AP_ITERS; i = i + 1) {
+    // Fold into the [-1,1] cell.
+    p = -1.0 + 2.0 * fract(0.5 * p + 0.5);
+    let r2 = max(dot(p, p), 1e-6);   // guard the inversion divide
+    trap = min(trap, r2);
+    let k = s / r2;                  // sphere inversion
+    p = p * k;
+    scale = scale * k;
+  }
+  var res : DEResult;
+  // Approximate distance estimate for the inverted packing.
+  res.dist = 0.25 * abs(p.y) / scale;
+  res.trap = sqrt(trap);
+  return res;
+}
+
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
   let ft = u.fractalType;
@@ -256,8 +284,10 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
     return deMandelbox(pos);
   } else if (ft < 2.5) {
     return deMenger(pos);
+  } else if (ft < 3.5) {
+    return deJulia(pos);
   }
-  return deJulia(pos);
+  return deApollonian(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {

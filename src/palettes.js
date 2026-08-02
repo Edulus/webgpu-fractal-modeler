@@ -42,6 +42,16 @@ export const PALETTES = {
     c: [1.0, 1.0, 1.0],
     d: [0.55, 0.6, 0.7],
   },
+
+  // Iridescence: soap-bubble / beetle-shell sheen. Per-channel frequencies are
+  // deliberately different so the hues drift in and out of phase, giving the
+  // shifting cyan->magenta->gold shimmer of a thin-film interference.
+  iridescence: {
+    a: [0.5, 0.5, 0.55],
+    b: [0.5, 0.5, 0.45],
+    c: [1.0, 1.35, 1.7],
+    d: [0.1, 0.35, 0.62],
+  },
 };
 
 export const DEFAULT_PALETTE = 'aurora';

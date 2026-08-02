@@ -175,6 +175,7 @@
         <option value="mandelbox">Mandelbox</option>
         <option value="menger">Menger sponge</option>
         <option value="julia">Quaternion Julia</option>
+        <option value="apollonian">Apollonian (sphere packing)</option>
       </select>
     </label>
     <label>Palette
@@ -183,6 +184,7 @@
         <option value="ember">Ember</option>
         <option value="oil-slick">Oil slick</option>
         <option value="mono-ice">Mono ice</option>
+        <option value="iridescence">Iridescence</option>
       </select>
     </label>
     <label>Quality
@@ -268,7 +270,7 @@
       document.getElementById('btn-resume').addEventListener('click', () => handle.resume());
 
       // HUD: show live fractal/quality/fps.
-      const names = ['mandelbulb', 'mandelbox', 'menger', 'julia'];
+      const names = ['mandelbulb', 'mandelbox', 'menger', 'julia', 'apollonian'];
       setInterval(() => {
         const i = handle.info;
         hud.textContent = `${names[i.fractalType]} · q${i.qualityScale} · ${i.fps}fps` +

@@ -70,8 +70,8 @@ behind your DOM.
 
 | Option          | Type       | Default        | Description                                                                 |
 | --------------- | ---------- | -------------- | --------------------------------------------------------------------------- |
-| `fractal`       | string     | `'mandelbulb'` | `'mandelbulb'` \| `'mandelbox'` \| `'menger'` \| `'julia'`                   |
-| `palette`       | string     | `'aurora'`     | `'aurora'` \| `'ember'` \| `'oil-slick'` \| `'mono-ice'`                     |
+| `fractal`       | string     | `'mandelbulb'` | `'mandelbulb'` \| `'mandelbox'` \| `'menger'` \| `'julia'` \| `'apollonian'` |
+| `palette`       | string     | `'aurora'`     | `'aurora'` \| `'ember'` \| `'oil-slick'` \| `'mono-ice'` \| `'iridescence'`  |
 | `quality`       | string     | `'auto'`       | `'low'` \| `'medium'` \| `'high'` \| `'auto'` (adaptive)                     |
 | `transparent`   | boolean    | `true`         | `true` = premultiplied alpha over the page; `false` = opaque gradient bg    |
 | `onUnsupported` | function   | `() => {}`     | Called with a reason string if WebGPU is missing or the device is lost      |
@@ -102,9 +102,11 @@ behind your DOM.
    emission/glow in A.
    - **Distance estimators:** Mandelbulb (analytic `0.5·log(r)·r/dr` with an
      animated `power`), Mandelbox (box fold + sphere fold), Menger sponge
-     (folding-space IFS), and a quaternion Julia. All loops are statically
-     bounded (`const` limits) for WGSL portability, with guarded `log`/`pow`
-     domains and clamped radii to avoid NaNs.
+     (folding-space IFS), a quaternion Julia, and an **Apollonian** gasket
+     (fold + sphere inversion — a fractal sphere packing of nested,
+     shrinking spheres with a slowly breathing packing tightness). All loops
+     are statically bounded (`const` limits) for WGSL portability, with
+     guarded `log`/`pow`/inversion domains and clamped radii to avoid NaNs.
    - **Shading:** tetrahedron (4-sample) normals, one key + fill directional
      light, **soft penumbra shadows** (min-ratio along the shadow ray),
      **ambient occlusion** from DE sampling, **orbit-trap coloring** fed into a
@@ -126,8 +128,10 @@ Palettes use Inigo Quilez cosine palettes, `a + b·cos(2π(c·t + d))`, with the
 coefficients uploaded as uniforms so they swap at runtime. The palette input is
 the orbit-trap value plus a slow time phase, so colors gently cycle. Presets live
 in `src/palettes.js`: **aurora** (teal→magenta), **ember** (deep red→gold),
-**oil-slick** (iridescent rainbow), **mono-ice** (cool monochrome). Bloom and
-overall exposure are tuned dark and moody so text stays readable on top.
+**oil-slick** (iridescent rainbow), **mono-ice** (cool monochrome), and
+**iridescence** (soap-bubble / beetle-shell thin-film sheen — per-channel
+frequencies drift in and out of phase for a shifting cyan→magenta→gold shimmer).
+Bloom and overall exposure are tuned dark and moody so text stays readable on top.
 
 ## Adaptive quality
 
