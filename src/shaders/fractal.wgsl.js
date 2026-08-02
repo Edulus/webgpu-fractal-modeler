@@ -268,9 +268,18 @@ fn deApollonian(pos : vec3<f32>) -> DEResult {
     p = p * k;
     scale = scale * k;
   }
-  var res : DEResult;
   // Approximate distance estimate for the inverted packing.
-  res.dist = 0.25 * abs(p.y) / scale;
+  let packing = 0.25 * abs(p.y) / scale;
+
+  // The fold is periodic, so the packing tiles all of space — intersect it with
+  // a bounding sphere so it reads as a finite ball of packed spheres (like the
+  // reference) that you can orbit and pull back from, instead of being forever
+  // "inside" an infinite lattice.
+  const BOUND : f32 = 1.3;
+  let shell = length(pos) - BOUND;
+
+  var res : DEResult;
+  res.dist = max(packing, shell);
   res.trap = sqrt(trap);
   return res;
 }

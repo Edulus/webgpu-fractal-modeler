@@ -53,7 +53,7 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 // world scale, so a single radius would sit inside the larger ones.
 // Indexed by fractal id (see FRACTAL_IDS).
 // mandelbulb, mandelbox, menger, julia, apollonian
-const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.8];
+const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0];
 
 const HDR_FORMAT = 'rgba16float';
 
@@ -129,6 +129,11 @@ export async function initFractalBackground(canvas, options = {}) {
     pinchDist0: 0,
     pinchZoom0: 1,
     lastInteract: 0,
+    // tap vs. drag/pinch discrimination (for double-tap-to-reset)
+    gestureMoved: false,
+    gestureMulti: false,
+    tapStart: null,
+    tapTime: 0,
   };
   state.uniformU32 = new Uint32Array(state.uniformData.buffer);
 
@@ -601,8 +606,9 @@ export async function initFractalBackground(canvas, options = {}) {
   }
 
   // ---- Navigation: drag to orbit, pinch / wheel to zoom ----
-  const ZOOM_MIN = 0.25;
-  const ZOOM_MAX = 6.0;
+  const ZOOM_MIN = 0.2;
+  const ZOOM_MAX = 14.0;   // large so you can pull fully outside any fractal
+  const TAP_MOVE = 10;     // px of movement that disqualifies a tap
   const clampZoom = (z) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
 
   function pinchDistance() {
@@ -621,7 +627,15 @@ export async function initFractalBackground(canvas, options = {}) {
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     state.lastInteract = performance.now();
-    if (state.pointers.size === 2) {
+    if (state.pointers.size === 1) {
+      // Begin a fresh gesture; remember where, to distinguish tap from drag.
+      state.gestureMoved = false;
+      state.gestureMulti = false;
+      state.tapStart = { x: e.clientX, y: e.clientY };
+    }
+    if (state.pointers.size >= 2) {
+      // A second finger means this is a pinch, never a tap.
+      state.gestureMulti = true;
       state.pinchDist0 = pinchDistance();
       state.pinchZoom0 = state.zoom;
     }
@@ -648,6 +662,10 @@ export async function initFractalBackground(canvas, options = {}) {
       state.orbit.tpitch += dy * k;
       state.orbit.vyaw = dx * k * 0.15;
       state.orbit.vpitch = dy * k * 0.15;
+      if (state.tapStart &&
+          Math.hypot(e.clientX - state.tapStart.x, e.clientY - state.tapStart.y) > TAP_MOVE) {
+        state.gestureMoved = true;
+      }
     }
     nudgeRender();
   }
@@ -656,12 +674,23 @@ export async function initFractalBackground(canvas, options = {}) {
     if (!state.pointers.has(e.pointerId)) return;
     try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
     state.pointers.delete(e.pointerId);
-    // Re-baseline a pinch if one finger remains lifted from two.
-    if (state.pointers.size === 2) {
-      state.pinchDist0 = pinchDistance();
-      state.pinchZoom0 = state.zoom;
-    }
     state.lastInteract = performance.now();
+
+    if (state.pointers.size === 1) {
+      // Dropped from a pinch to one finger: continuing as a drag, not a tap.
+      state.gestureMoved = true;
+      const remaining = [...state.pointers.values()][0];
+      state.tapStart = { x: remaining.x, y: remaining.y };
+    } else if (state.pointers.size === 0) {
+      // Gesture fully ended. A clean single-finger tap (no movement, no pinch)
+      // counts toward double-tap-to-reset — a pinch release never does.
+      if (state.controls && !state.gestureMoved && !state.gestureMulti) {
+        const now = performance.now();
+        if (now - state.tapTime < 320) { resetView(); state.tapTime = 0; }
+        else { state.tapTime = now; }
+      }
+      state.gestureMulti = false;
+    }
   }
 
   function onWheel(e) {
