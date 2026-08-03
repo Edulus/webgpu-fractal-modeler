@@ -319,6 +319,51 @@ fn deSpherePack(pos : vec3<f32>) -> DEResult {
   return res;
 }
 
+// Encrusted sphere — a smooth host sphere with a crust of packed spheres
+// growing over part of its surface, with a ragged fractal patch boundary.
+// Unlike the other two packings (which fill a volume), here the packing is
+// confined to a thin shell hugging the surface, so the smooth body shows
+// through where the crust hasn't grown.
+fn deEncrusted(pos : vec3<f32>) -> DEResult {
+  const R : f32 = 0.95;              // host sphere radius
+  let r = length(pos);
+  let base = r - R;                  // smooth body
+
+  // Packing field (fold + inversion, sphere primitive).
+  var p = pos;
+  var scale = 1.0;
+  var trap = 1e10;
+  const EN_ITERS : i32 = 8;
+  let anim = select(sin(u.time * 0.05), 0.0, u.reducedMotion > 0.5);
+  let s = 1.24 + 0.04 * anim;
+  for (var i = 0; i < EN_ITERS; i = i + 1) {
+    p = -1.0 + 2.0 * fract(0.5 * p + 0.5);
+    let r2 = max(dot(p, p), 1e-6);   // guard the inversion divide
+    trap = min(trap, r2);
+    let k = s / r2;
+    p = p * k;
+    scale = scale * k;
+  }
+  let packing = (length(p) - 1.0) / scale;
+
+  // Confine the packing to a shell sitting on the host surface.
+  let shell = max(r - (R + 0.38), (R - 0.03) - r);
+  var crust = max(packing, shell);
+
+  // Grow the crust over a cap, with the boundary perturbed by the orbit trap
+  // so it breaks up into an organic, coral-like edge instead of a clean circle.
+  // The 0.7 bias leaves most of the host sphere bare, as in the reference.
+  let n = pos / max(r, 1e-6);
+  let patch = dot(n, normalize(vec3<f32>(0.35, 1.0, 0.28))) - 0.7
+            + (sqrt(trap) - 0.55) * 0.55;
+  crust = max(crust, -patch * 0.3);
+
+  var res : DEResult;
+  res.dist = min(base, crust);
+  res.trap = sqrt(trap);
+  return res;
+}
+
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
   let ft = u.fractalType;
@@ -332,8 +377,10 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
     return deJulia(pos);
   } else if (ft < 4.5) {
     return deApollonian(pos);
+  } else if (ft < 5.5) {
+    return deSpherePack(pos);
   }
-  return deSpherePack(pos);
+  return deEncrusted(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {
@@ -418,7 +465,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // Strange attractors aren't distance fields — they're rasterized as line
   // geometry by a second pipeline drawn over this pass. Emit only the
   // background here so those lines have something to blend onto.
-  if (u.fractalType > 5.5) {
+  if (u.fractalType > 6.5) {
     let bg = backgroundColor(rd);
     return vec4<f32>(select(vec3<f32>(0.0), bg, u.bgMode >= 0.5), 0.0);
   }
