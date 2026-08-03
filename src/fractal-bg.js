@@ -44,7 +44,7 @@ const U = {
 const UNIFORM_FLOATS = 40;
 const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 160
 
-const FRACTAL_IDS = { mandelbulb: 0, mandelbox: 1, menger: 2, julia: 3, apollonian: 4, attractor: 5 };
+const FRACTAL_IDS = { mandelbulb: 0, mandelbox: 1, menger: 2, julia: 3, apollonian: 4, attractor: 5, lorenz: 6 };
 
 // Quality tiers -> internal-resolution scale factor.
 const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
@@ -52,8 +52,8 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 // Camera orbit distance per fractal — each estimator lives at a different
 // world scale, so a single radius would sit inside the larger ones.
 // Indexed by fractal id (see FRACTAL_IDS).
-// mandelbulb, mandelbox, menger, julia, apollonian, attractor
-const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 3.2];
+// mandelbulb, mandelbox, menger, julia, apollonian, attractor(Aizawa), lorenz
+const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 3.2, 3.0];
 
 // Resolution of the baked strange-attractor density volume (N^3 voxels).
 // Higher = crisper filaments (at the cost of memory + one-time build time).
@@ -226,6 +226,7 @@ export async function initFractalBackground(canvas, options = {}) {
     });
     state.volumeView = state.volumeTex.createView({ dimension: '3d' });
     state.volumeBuilt = false;
+    state.volumeVariant = null;
 
     // Raymarch pipeline -> HDR target.
     state.pipelines.raymarch = device.createRenderPipeline({
@@ -337,33 +338,55 @@ export async function initFractalBackground(canvas, options = {}) {
   // ---- Strange attractor: bake the trajectory into a density volume ----
   // Integrates the Aizawa attractor and splats its path into an N^3 grid
   // (R = density, G = normalized age along the trajectory), then uploads it to
-  // the 3D texture the shader volume-marches. Done once, lazily.
-  function buildAttractorVolume() {
+  // the 3D texture the shader volume-marches. Done once per variant, lazily.
+  //
+  // Per-attractor config: the derivative step, a fit transform (center + scale)
+  // that maps the attractor into the shader's [-1,1]^3 volume, and integration
+  // parameters. Lorenz moves fast and is large, so it needs a much smaller dt
+  // and a different fit than the compact Aizawa swirl.
+  const ATTRACTORS = {
+    aizawa: {
+      init: [0.1, 0.0, 0.0],
+      dt: 0.0025, steps: 1800000, warm: 5000,
+      center: [0, 0, 0.6], scale: 0.9 / 1.35,
+      deriv: (x, y, z) => {
+        const a = 0.95, b = 0.7, c = 0.6, d = 3.5, e = 0.25, f = 0.1;
+        return [
+          (z - b) * x - d * y,
+          d * x + (z - b) * y,
+          c + a * z - (z * z * z) / 3 - (x * x + y * y) * (1 + e * z) + f * z * x * x * x,
+        ];
+      },
+    },
+    lorenz: {
+      init: [0.1, 0.0, 0.0],
+      dt: 0.001, steps: 1600000, warm: 3000,
+      center: [0, 0, 25], scale: 0.9 / 28,
+      deriv: (x, y, z) => {
+        const sigma = 10, rho = 28, beta = 8 / 3;
+        return [sigma * (y - x), x * (rho - z) - y, x * y - beta * z];
+      },
+    },
+  };
+
+  function buildAttractorVolume(variant) {
+    const cfg = ATTRACTORS[variant] || ATTRACTORS.aizawa;
     const N = state.volumeN;
     const dens = new Float32Array(N * N * N);
     const ageSum = new Float32Array(N * N * N);
 
-    // Aizawa attractor parameters.
-    let x = 0.1, y = 0.0, z = 0.0;
-    const a = 0.95, b = 0.7, c = 0.6, d = 3.5, e = 0.25, f = 0.1;
-    // Smaller dt + many more steps -> continuous, crisp filaments at 192^3.
-    const dt = 0.0025;
-    const STEPS = 1800000, WARM = 5000;
-
-    // Fit the attractor (roughly centered near z=0.6, half-extent ~1.35) into
-    // the shader's [-1,1]^3 volume with a little padding.
-    const cz = 0.6;
-    const scale = 0.9 / 1.35;
+    let x = cfg.init[0], y = cfg.init[1], z = cfg.init[2];
+    const dt = cfg.dt, STEPS = cfg.steps, WARM = cfg.warm;
+    const cx = cfg.center[0], cy = cfg.center[1], cz = cfg.center[2];
+    const scale = cfg.scale;
     const clampi = (v) => (v < 0 ? 0 : v > N - 1 ? N - 1 : v);
 
     for (let i = 0; i < STEPS; i++) {
-      const dx = (z - b) * x - d * y;
-      const dy = d * x + (z - b) * y;
-      const dz = c + a * z - (z * z * z) / 3 - (x * x + y * y) * (1 + e * z) + f * z * x * x * x;
-      x += dx * dt; y += dy * dt; z += dz * dt;
+      const dv = cfg.deriv(x, y, z);
+      x += dv[0] * dt; y += dv[1] * dt; z += dv[2] * dt;
       if (i < WARM) continue;
 
-      const nx = x * scale, ny = y * scale, nz = (z - cz) * scale;
+      const nx = (x - cx) * scale, ny = (y - cy) * scale, nz = (z - cz) * scale;
       if (nx < -1 || nx > 1 || ny < -1 || ny > 1 || nz < -1 || nz > 1) continue;
 
       const gx = (nx * 0.5 + 0.5) * (N - 1);
@@ -408,10 +431,19 @@ export async function initFractalBackground(canvas, options = {}) {
       { width: N, height: N, depthOrArrayLayers: N }
     );
     state.volumeBuilt = true;
+    state.volumeVariant = variant;
   }
 
+  // Which attractor a given fractal id maps to.
+  function attractorVariantForType(ft) {
+    return ft === FRACTAL_IDS.lorenz ? 'lorenz' : 'aizawa';
+  }
+
+  // (Re)bake the volume if it's missing or holds a different attractor.
   function ensureAttractorVolume() {
-    if (!state.volumeBuilt && state.device) buildAttractorVolume();
+    if (!state.device) return;
+    const v = attractorVariantForType(state.fractalType);
+    if (!state.volumeBuilt || state.volumeVariant !== v) buildAttractorVolume(v);
   }
 
   // ---- Resize handling ----
@@ -840,7 +872,7 @@ export async function initFractalBackground(canvas, options = {}) {
 
     createStaticResources();
     resize();
-    if (state.fractalType === FRACTAL_IDS.attractor) ensureAttractorVolume();
+    if (state.fractalType >= FRACTAL_IDS.attractor) ensureAttractorVolume();
   }
 
   async function reinit() {
@@ -962,7 +994,8 @@ export async function initFractalBackground(canvas, options = {}) {
     setFractal(name) {
       if (name in FRACTAL_IDS) {
         state.fractalType = FRACTAL_IDS[name];
-        if (name === 'attractor') ensureAttractorVolume();
+        // Attractor family (5 = Aizawa, 6 = Lorenz) needs its volume baked.
+        if (state.fractalType >= FRACTAL_IDS.attractor) ensureAttractorVolume();
         if (!state.running) renderFrame(performance.now(), true);
       }
     },
