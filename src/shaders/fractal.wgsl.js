@@ -33,6 +33,7 @@ export const FRACTAL_WGSL = /* wgsl */ `
 //   148 bgMode       : f32   (0 = transparent, 1 = gradient background)
 //   152 reducedMotion: f32
 //   156 _pad         : f32
+//   160 viewProj     : mat4x4<f32>  (attractor line rasterization)
 struct Uniforms {
   resolution : vec2<f32>,
   time       : f32,
@@ -57,13 +58,10 @@ struct Uniforms {
   bgMode       : f32,
   reducedMotion: f32,
   _pad         : f32,
+  viewProj     : mat4x4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;
-// Baked strange-attractor density (r = density, g = age along trajectory).
-// Only sampled by the attractor branch; a 1^3 placeholder is bound otherwise.
-@group(0) @binding(1) var samp3d : sampler;
-@group(0) @binding(2) var volTex : texture_3d<f32>;
 
 // ---- Vertex: fullscreen triangle (no vertex buffer) -----------------------
 struct VSOut {
@@ -288,60 +286,6 @@ fn deApollonian(pos : vec3<f32>) -> DEResult {
   return res;
 }
 
-// Ray vs. the [-1,1]^3 box the attractor volume lives in.
-fn intersectBox(ro : vec3<f32>, rd : vec3<f32>) -> vec2<f32> {
-  let inv = 1.0 / rd;
-  let a = (vec3<f32>(-1.0) - ro) * inv;
-  let b = (vec3<f32>(1.0) - ro) * inv;
-  let tmin = min(a, b);
-  let tmax = max(a, b);
-  let t0 = max(max(tmin.x, tmin.y), tmin.z);
-  let t1 = min(min(tmax.x, tmax.y), tmax.z);
-  return vec2<f32>(t0, t1);
-}
-
-// Emission-only volume raymarch of the baked strange attractor. Colors by the
-// trajectory age so the ribbon cycles through the palette; density drives both
-// brightness and the glow channel so the filaments bloom.
-fn volumeAttractor(ro : vec3<f32>, rd : vec3<f32>) -> vec4<f32> {
-  let bb = intersectBox(ro, rd);
-  let tn = max(bb.x, 0.0);
-  let tf = bb.y;
-  if (tf <= tn) { return vec4<f32>(0.0); }
-
-  // More, finer steps keep filaments crisp when the volume is magnified.
-  const VSTEPS : i32 = 220;
-  let dt = (tf - tn) / f32(VSTEPS);
-  let phase = select(u.time * 0.03, 0.0, u.reducedMotion > 0.5);
-
-  var t = tn + dt * 0.5;
-  var col = vec3<f32>(0.0);
-  var trans = 1.0;   // remaining transmittance (front-to-back)
-  var glow = 0.0;
-
-  for (var i = 0; i < VSTEPS; i = i + 1) {
-    let p = ro + rd * t;
-    let uvw = p * 0.5 + 0.5;          // [-1,1] -> [0,1] texture coords
-    let s = textureSampleLevel(volTex, samp3d, uvw, 0.0);
-    let dens = s.r;
-    if (dens > 0.02) {
-      // Sharpen the transfer function so bright cores read as defined threads.
-      let d2 = dens * dens;
-      let base = palette(s.g * 1.4 + phase);
-      // Higher absorption -> front filaments occlude, giving crisp depth.
-      let a = clamp(d2 * 16.0 * dt, 0.0, 1.0);
-      col = col + trans * base * d2 * 14.0 * dt;
-      trans = trans * (1.0 - a);
-      glow = glow + d2 * 4.0 * dt;
-    }
-    t = t + dt;
-    if (trans < 0.015) { break; }
-  }
-
-  let glowOut = clamp(glow * u.glowStrength * 0.5, 0.0, 8.0);
-  return vec4<f32>(col, glowOut);
-}
-
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
   let ft = u.fractalType;
@@ -431,9 +375,12 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   let ta = u.camTarget;
   let rd = cameraRay(vec2<f32>(uv.x, 1.0 - uv.y), ro, ta, u.fov);
 
-  // Strange attractor is volumetric, not a distance field — handle separately.
+  // Strange attractors aren't distance fields — they're rasterized as line
+  // geometry by a second pipeline drawn over this pass. Emit only the
+  // background here so those lines have something to blend onto.
   if (u.fractalType > 4.5) {
-    return volumeAttractor(ro, rd);
+    let bg = backgroundColor(rd);
+    return vec4<f32>(select(vec3<f32>(0.0), bg, u.bgMode >= 0.5), 0.0);
   }
 
   // Adaptive epsilon: coarser when quality is low.

@@ -12,10 +12,11 @@
 
 import { FRACTAL_WGSL } from './shaders/fractal.wgsl.js';
 import { COMPOSITE_WGSL } from './shaders/composite.wgsl.js';
+import { ATTRACTOR_WGSL } from './shaders/attractor.wgsl.js';
 import { getPalette } from './palettes.js';
 
 // ---- Uniform buffer layout (mirror of the WGSL Uniforms struct) -----------
-// 40 f32 slots = 160 bytes. Byte offset = slot * 4.
+// 56 f32 slots = 224 bytes. Byte offset = slot * 4.
 const U = {
   resolution: 0, // vec2 -> slots 0,1
   time: 2,
@@ -40,9 +41,10 @@ const U = {
   bgMode: 37,
   reducedMotion: 38,
   _pad: 39,
+  viewProj: 40, // mat4 -> slots 40..55 (byte 160, 16-byte aligned)
 };
-const UNIFORM_FLOATS = 40;
-const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 160
+const UNIFORM_FLOATS = 56;
+const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 224
 
 const FRACTAL_IDS = { mandelbulb: 0, mandelbox: 1, menger: 2, julia: 3, apollonian: 4, attractor: 5, lorenz: 6 };
 
@@ -55,9 +57,50 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 // mandelbulb, mandelbox, menger, julia, apollonian, attractor(Aizawa), lorenz
 const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 3.2, 3.0];
 
-// Resolution of the baked strange-attractor density volume (N^3 voxels).
-// Higher = crisper filaments (at the cost of memory + one-time build time).
-const VOLUME_N = 192;
+// Number of integrated trajectory samples drawn as a line strip per attractor.
+// These are exact float positions (vector geometry), so the curve stays crisp
+// at any zoom — unlike a baked voxel grid, which quantizes it.
+const TRAJECTORY_POINTS = 600000;
+
+// ---- Small column-major mat4 helpers (WebGPU depth range [0,1]) ----
+function mat4Perspective(out, fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2);
+  out[0] = f / aspect; out[1] = 0; out[2] = 0; out[3] = 0;
+  out[4] = 0; out[5] = f; out[6] = 0; out[7] = 0;
+  out[8] = 0; out[9] = 0; out[10] = far / (near - far); out[11] = -1;
+  out[12] = 0; out[13] = 0; out[14] = (far * near) / (near - far); out[15] = 0;
+}
+
+function mat4LookAt(out, eye, center, up) {
+  let zx = eye[0] - center[0], zy = eye[1] - center[1], zz = eye[2] - center[2];
+  const zl = Math.hypot(zx, zy, zz) || 1;
+  zx /= zl; zy /= zl; zz /= zl;
+  let xx = up[1] * zz - up[2] * zy;
+  let xy = up[2] * zx - up[0] * zz;
+  let xz = up[0] * zy - up[1] * zx;
+  const xl = Math.hypot(xx, xy, xz) || 1;
+  xx /= xl; xy /= xl; xz /= xl;
+  const yx = zy * xz - zz * xy, yy = zz * xx - zx * xz, yz = zx * xy - zy * xx;
+  out[0] = xx; out[1] = yx; out[2] = zx; out[3] = 0;
+  out[4] = xy; out[5] = yy; out[6] = zy; out[7] = 0;
+  out[8] = xz; out[9] = yz; out[10] = zz; out[11] = 0;
+  out[12] = -(xx * eye[0] + xy * eye[1] + xz * eye[2]);
+  out[13] = -(yx * eye[0] + yy * eye[1] + yz * eye[2]);
+  out[14] = -(zx * eye[0] + zy * eye[1] + zz * eye[2]);
+  out[15] = 1;
+}
+
+function mat4Mul(out, a, b) {
+  for (let c = 0; c < 4; c++) {
+    for (let r = 0; r < 4; r++) {
+      out[c * 4 + r] =
+        a[r] * b[c * 4] +
+        a[4 + r] * b[c * 4 + 1] +
+        a[8 + r] * b[c * 4 + 2] +
+        a[12 + r] * b[c * 4 + 3];
+    }
+  }
+}
 
 const HDR_FORMAT = 'rgba16float';
 
@@ -141,6 +184,11 @@ export async function initFractalBackground(canvas, options = {}) {
   };
   state.uniformU32 = new Uint32Array(state.uniformData.buffer);
 
+  // Scratch matrices, reused each frame (no per-frame allocation).
+  const _proj = new Float32Array(16);
+  const _view = new Float32Array(16);
+  const _viewProj = new Float32Array(16);
+
   const reducedMotionMQ = window.matchMedia('(prefers-reduced-motion: reduce)');
   const coarsePointer = window.matchMedia('(pointer: coarse)').matches;
 
@@ -190,12 +238,9 @@ export async function initFractalBackground(canvas, options = {}) {
     const compositeModule = device.createShaderModule({ code: COMPOSITE_WGSL });
 
     // Bind group layouts.
-    // Raymarch pass: uniforms + the strange-attractor density volume (3D).
     const raymarchBGL = device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
-        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '3d' } },
       ],
     });
     const blurBGL = device.createBindGroupLayout({
@@ -216,17 +261,33 @@ export async function initFractalBackground(canvas, options = {}) {
 
     state._bgl = { raymarchBGL, blurBGL, compositeBGL };
 
-    // Baked strange-attractor density volume (populated lazily on first use).
-    state.volumeN = VOLUME_N;
-    state.volumeTex = device.createTexture({
-      size: { width: VOLUME_N, height: VOLUME_N, depthOrArrayLayers: VOLUME_N },
-      dimension: '3d',
-      format: 'rgba8unorm',
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    // Attractor line pipeline: additively blended trajectory over the HDR
+    // target, so overlapping filaments accumulate brightness and then bloom.
+    const attractorModule = device.createShaderModule({ code: ATTRACTOR_WGSL });
+    const addBlend = {
+      color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+      alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+    };
+    state.pipelines.attractor = device.createRenderPipeline({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [raymarchBGL] }),
+      vertex: {
+        module: attractorModule,
+        entryPoint: 'vs_line',
+        buffers: [{
+          arrayStride: 16, // vec3 position + f32 age
+          attributes: [
+            { shaderLocation: 0, offset: 0, format: 'float32x3' },
+            { shaderLocation: 1, offset: 12, format: 'float32' },
+          ],
+        }],
+      },
+      fragment: {
+        module: attractorModule,
+        entryPoint: 'fs_line',
+        targets: [{ format: HDR_FORMAT, blend: addBlend }],
+      },
+      primitive: { topology: 'line-strip' },
     });
-    state.volumeView = state.volumeTex.createView({ dimension: '3d' });
-    state.volumeBuilt = false;
-    state.volumeVariant = null;
 
     // Raymarch pipeline -> HDR target.
     state.pipelines.raymarch = device.createRenderPipeline({
@@ -302,11 +363,7 @@ export async function initFractalBackground(canvas, options = {}) {
     const ub = { buffer: state.uniformBuffer };
     state.bindGroups.raymarch = device.createBindGroup({
       layout: state._bgl.raymarchBGL,
-      entries: [
-        { binding: 0, resource: ub },
-        { binding: 1, resource: state.sampler },
-        { binding: 2, resource: state.volumeView },
-      ],
+      entries: [{ binding: 0, resource: ub }],
     });
     state.bindGroups.bloomH = device.createBindGroup({
       layout: state._bgl.blurBGL,
@@ -335,19 +392,22 @@ export async function initFractalBackground(canvas, options = {}) {
     });
   }
 
-  // ---- Strange attractor: bake the trajectory into a density volume ----
-  // Integrates the Aizawa attractor and splats its path into an N^3 grid
-  // (R = density, G = normalized age along the trajectory), then uploads it to
-  // the 3D texture the shader volume-marches. Done once per variant, lazily.
+  // ---- Strange attractors: integrate the trajectory into line geometry ----
+  // Each attractor is defined by an ODE with no closed-form distance function,
+  // so it can't be sphere-traced. We integrate it to exact float positions and
+  // upload those as a vertex buffer drawn as a line strip — vector geometry,
+  // so it stays crisp at any zoom (a baked voxel grid would quantize it).
   //
-  // Per-attractor config: the derivative step, a fit transform (center + scale)
-  // that maps the attractor into the shader's [-1,1]^3 volume, and integration
-  // parameters. Lorenz moves fast and is large, so it needs a much smaller dt
-  // and a different fit than the compact Aizawa swirl.
+  // Per-attractor config: the derivative, integration step, and a fit transform
+  // (center + scale) placing the attractor in roughly [-1,1]^3. Lorenz is large
+  // and fast-moving, so it needs a much smaller dt than the compact Aizawa.
   const ATTRACTORS = {
+    // dx/dt = (z-b)x - dy
+    // dy/dt = dx + (z-b)y
+    // dz/dt = c + az - z^3/3 - (x^2+y^2)(1+ez) + f z x^3
     aizawa: {
       init: [0.1, 0.0, 0.0],
-      dt: 0.0025, steps: 1800000, warm: 5000,
+      dt: 0.002, warm: 5000,
       center: [0, 0, 0.6], scale: 0.9 / 1.35,
       deriv: (x, y, z) => {
         const a = 0.95, b = 0.7, c = 0.6, d = 3.5, e = 0.25, f = 0.1;
@@ -358,9 +418,10 @@ export async function initFractalBackground(canvas, options = {}) {
         ];
       },
     },
+    // dx/dt = sigma(y-x), dy/dt = x(rho-z)-y, dz/dt = xy - beta*z
     lorenz: {
       init: [0.1, 0.0, 0.0],
-      dt: 0.001, steps: 1600000, warm: 3000,
+      dt: 0.0005, warm: 3000,
       center: [0, 0, 25], scale: 0.9 / 28,
       deriv: (x, y, z) => {
         const sigma = 10, rho = 28, beta = 8 / 3;
@@ -369,69 +430,48 @@ export async function initFractalBackground(canvas, options = {}) {
     },
   };
 
-  function buildAttractorVolume(variant) {
+  // Integrate with RK4 so the path stays accurate at larger steps (fewer,
+  // better-placed points beat many sloppy Euler ones). Writes interleaved
+  // [x, y, z, age] vertices.
+  function buildAttractorTrajectory(variant) {
     const cfg = ATTRACTORS[variant] || ATTRACTORS.aizawa;
-    const N = state.volumeN;
-    const dens = new Float32Array(N * N * N);
-    const ageSum = new Float32Array(N * N * N);
+    const N = TRAJECTORY_POINTS;
+    const verts = new Float32Array(N * 4);
 
     let x = cfg.init[0], y = cfg.init[1], z = cfg.init[2];
-    const dt = cfg.dt, STEPS = cfg.steps, WARM = cfg.warm;
+    const dt = cfg.dt, h = dt * 0.5;
     const cx = cfg.center[0], cy = cfg.center[1], cz = cfg.center[2];
-    const scale = cfg.scale;
-    const clampi = (v) => (v < 0 ? 0 : v > N - 1 ? N - 1 : v);
+    const s = cfg.scale;
 
-    for (let i = 0; i < STEPS; i++) {
-      const dv = cfg.deriv(x, y, z);
-      x += dv[0] * dt; y += dv[1] * dt; z += dv[2] * dt;
-      if (i < WARM) continue;
+    const step = () => {
+      const k1 = cfg.deriv(x, y, z);
+      const k2 = cfg.deriv(x + k1[0] * h, y + k1[1] * h, z + k1[2] * h);
+      const k3 = cfg.deriv(x + k2[0] * h, y + k2[1] * h, z + k2[2] * h);
+      const k4 = cfg.deriv(x + k3[0] * dt, y + k3[1] * dt, z + k3[2] * dt);
+      x += (dt / 6) * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]);
+      y += (dt / 6) * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]);
+      z += (dt / 6) * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]);
+    };
 
-      const nx = (x - cx) * scale, ny = (y - cy) * scale, nz = (z - cz) * scale;
-      if (nx < -1 || nx > 1 || ny < -1 || ny > 1 || nz < -1 || nz > 1) continue;
+    // Discard the transient so we only draw the attractor itself.
+    for (let i = 0; i < cfg.warm; i++) step();
 
-      const gx = (nx * 0.5 + 0.5) * (N - 1);
-      const gy = (ny * 0.5 + 0.5) * (N - 1);
-      const gz = (nz * 0.5 + 0.5) * (N - 1);
-      const age = (i - WARM) / (STEPS - WARM);
-
-      // Trilinear splat for smooth filaments.
-      const x0 = Math.floor(gx), y0 = Math.floor(gy), z0 = Math.floor(gz);
-      const fx = gx - x0, fy = gy - y0, fz = gz - z0;
-      for (let oz = 0; oz < 2; oz++) {
-        for (let oy = 0; oy < 2; oy++) {
-          for (let ox = 0; ox < 2; ox++) {
-            const w = (ox ? fx : 1 - fx) * (oy ? fy : 1 - fy) * (oz ? fz : 1 - fz);
-            if (w <= 0) continue;
-            const idx = clampi(x0 + ox) + clampi(y0 + oy) * N + clampi(z0 + oz) * N * N;
-            dens[idx] += w;
-            ageSum[idx] += w * age;
-          }
-        }
-      }
+    for (let i = 0; i < N; i++) {
+      step();
+      verts[i * 4] = (x - cx) * s;
+      verts[i * 4 + 1] = (y - cy) * s;
+      verts[i * 4 + 2] = (z - cz) * s;
+      verts[i * 4 + 3] = i / N; // normalized age -> palette
     }
 
-    let maxD = 0;
-    for (let i = 0; i < dens.length; i++) if (dens[i] > maxD) maxD = dens[i];
-    const inv = maxD > 0 ? 1 / maxD : 0;
-
-    const data = new Uint8Array(N * N * N * 4);
-    for (let i = 0; i < dens.length; i++) {
-      if (dens[i] > 0) {
-        // Compress dynamic range but keep the curve steep so filaments stay
-        // crisp (rather than a soft haze). Boosted so mid-density threads read.
-        data[i * 4] = Math.round(Math.min(1, Math.pow(dens[i] * inv, 0.5) * 1.4) * 255);
-        data[i * 4 + 1] = Math.round((ageSum[i] / dens[i]) * 255);
-      }
-    }
-
-    state.device.queue.writeTexture(
-      { texture: state.volumeTex },
-      data,
-      { bytesPerRow: N * 4, rowsPerImage: N },
-      { width: N, height: N, depthOrArrayLayers: N }
-    );
-    state.volumeBuilt = true;
-    state.volumeVariant = variant;
+    if (state.trajBuffer) state.trajBuffer.destroy();
+    state.trajBuffer = state.device.createBuffer({
+      size: verts.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+    state.device.queue.writeBuffer(state.trajBuffer, 0, verts);
+    state.trajCount = N;
+    state.trajVariant = variant;
   }
 
   // Which attractor a given fractal id maps to.
@@ -439,11 +479,11 @@ export async function initFractalBackground(canvas, options = {}) {
     return ft === FRACTAL_IDS.lorenz ? 'lorenz' : 'aizawa';
   }
 
-  // (Re)bake the volume if it's missing or holds a different attractor.
-  function ensureAttractorVolume() {
+  // (Re)build the trajectory if missing or holding a different attractor.
+  function ensureAttractorTrajectory() {
     if (!state.device) return;
     const v = attractorVariantForType(state.fractalType);
-    if (!state.volumeBuilt || state.volumeVariant !== v) buildAttractorVolume(v);
+    if (!state.trajBuffer || state.trajVariant !== v) buildAttractorTrajectory(v);
   }
 
   // ---- Resize handling ----
@@ -554,6 +594,15 @@ export async function initFractalBackground(canvas, options = {}) {
     d[U.reducedMotion] = rm ? 1.0 : 0.0;
     d[U._pad] = 0.0;
 
+    // View-projection for the attractor line pass (matches the raymarcher's
+    // camera: same eye, target, and vertical FOV).
+    const aspect = (state.targets ? state.targets.w / state.targets.h : 1) || 1;
+    mat4Perspective(_proj, d[U.fov], aspect, 0.01, 100.0);
+    mat4LookAt(_view, [camX, camY, camZ],
+      [d[U.camTarget], d[U.camTarget + 1], d[U.camTarget + 2]], [0, 1, 0]);
+    mat4Mul(_viewProj, _proj, _view);
+    d.set(_viewProj, U.viewProj);
+
     state.device.queue.writeBuffer(state.uniformBuffer, 0, state.uniformData);
   }
 
@@ -582,6 +631,15 @@ export async function initFractalBackground(canvas, options = {}) {
       pass.setPipeline(state.pipelines.raymarch);
       pass.setBindGroup(0, state.bindGroups.raymarch);
       pass.draw(3);
+
+      // Attractors: rasterize the trajectory as additive line geometry over
+      // the background the raymarch pass just wrote.
+      if (state.fractalType >= FRACTAL_IDS.attractor && state.trajBuffer) {
+        pass.setPipeline(state.pipelines.attractor);
+        pass.setBindGroup(0, state.bindGroups.raymarch);
+        pass.setVertexBuffer(0, state.trajBuffer);
+        pass.draw(state.trajCount);
+      }
       pass.end();
     }
     // Pass 2: bloom horizontal -> bloomA
@@ -872,7 +930,7 @@ export async function initFractalBackground(canvas, options = {}) {
 
     createStaticResources();
     resize();
-    if (state.fractalType >= FRACTAL_IDS.attractor) ensureAttractorVolume();
+    if (state.fractalType >= FRACTAL_IDS.attractor) ensureAttractorTrajectory();
   }
 
   async function reinit() {
@@ -916,7 +974,7 @@ export async function initFractalBackground(canvas, options = {}) {
         state.targets.bloomA.destroy();
         state.targets.bloomB.destroy();
       }
-      state.volumeTex && state.volumeTex.destroy();
+      state.trajBuffer && state.trajBuffer.destroy();
       state.uniformBuffer && state.uniformBuffer.destroy();
       state.device && state.device.destroy();
     } catch (e) {
@@ -994,8 +1052,8 @@ export async function initFractalBackground(canvas, options = {}) {
     setFractal(name) {
       if (name in FRACTAL_IDS) {
         state.fractalType = FRACTAL_IDS[name];
-        // Attractor family (5 = Aizawa, 6 = Lorenz) needs its volume baked.
-        if (state.fractalType >= FRACTAL_IDS.attractor) ensureAttractorVolume();
+        // Attractor family (5 = Aizawa, 6 = Lorenz) needs its trajectory built.
+        if (state.fractalType >= FRACTAL_IDS.attractor) ensureAttractorTrajectory();
         if (!state.running) renderFrame(performance.now(), true);
       }
     },

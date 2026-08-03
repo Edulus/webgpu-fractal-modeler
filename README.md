@@ -130,12 +130,15 @@ parameter animation is frozen, not your input).
      are statically bounded (`const` limits) for WGSL portability, with
      guarded `log`/`pow`/inversion domains and clamped radii to avoid NaNs.
    - **Strange attractors** (`'attractor'` = Aizawa, `'lorenz'` = the classic
-     butterfly): the odd ones out — an attractor isn't a surface, so instead of
-     sphere tracing it's baked on the CPU into a 192³ density volume (integrated
-     trajectory splatted trilinearly, storing density + trajectory age) and
-     **volume-raymarched** in the same fragment pass. It renders as a glowing
-     emissive ribbon colored by age, which the bloom pass makes luminous. The
-     volume is (re)built lazily whenever a different attractor is selected.
+     butterfly): the odd ones out. An attractor is a *trajectory*, not a
+     surface, and has no closed-form distance function — so it can't be
+     sphere-traced. Instead the ODE is integrated on the CPU with **RK4** to
+     600k exact float positions, uploaded as a vertex buffer, and rasterized as
+     an additively-blended **line strip** over the background in the same pass.
+     Because that's vector geometry rather than a baked voxel grid, the curve
+     stays crisp at any zoom. Color comes from position along the trajectory,
+     and the accumulated emission feeds the bloom pass. The trajectory is
+     rebuilt lazily whenever a different attractor is selected.
    - **Shading:** tetrahedron (4-sample) normals, one key + fill directional
      light, **soft penumbra shadows** (min-ratio along the shadow ray),
      **ambient occlusion** from DE sampling, **orbit-trap coloring** fed into a

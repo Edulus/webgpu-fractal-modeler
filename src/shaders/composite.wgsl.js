@@ -33,6 +33,7 @@ struct Uniforms {
   bgMode       : f32,
   reducedMotion: f32,
   _pad         : f32,
+  viewProj     : mat4x4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;
