@@ -399,7 +399,11 @@ fn deSurfacePack(pos : vec3<f32>) -> DEResult {
     let cellId = round(pos / cellSize);
     let q = pos - cellSize * cellId;
     let h = hash13(cellId + vec3<f32>(f32(lvl) * 7.13));
-    let rad = cellSize * (0.26 + 0.20 * h) * pulse;
+    // Cubed hash skews the size distribution: most spheres stay small and
+    // distinct, while occasional large ones punch through their neighbours.
+    // That mix is what gives both crisp beading and rich intersection curves —
+    // a linear distribution gives one or the other, never both.
+    let rad = cellSize * (0.25 + 0.85 * h * h * h) * pulse;
     let shellD = max(r - (R + SHELL), (R - SHELL * 0.9) - r);
     let cand = max(length(q) - rad, shellD);
     if (cand < d) {
@@ -413,6 +417,51 @@ fn deSurfacePack(pos : vec3<f32>) -> DEResult {
   res.dist = d;
   res.trap = trapV;
   return res;
+}
+
+// Intersection seams for the studded packing.
+//
+// A plain union hides where spheres cut through each other, so the surface
+// reads as flat beads. Here we find the two nearest sphere *surfaces* in the
+// local neighbourhood: where both pass through the same point, that point lies
+// on an intersection curve between two spheres. Feeding that into emission
+// lights up the seams as glowing circles and filigree.
+//
+// Only called once per pixel at the shading point — never inside the march
+// loop — so the 8-neighbour lookup per level stays cheap.
+fn surfacePackSeam(pos : vec3<f32>) -> vec2<f32> {
+  var d1 = 1e10;
+  var d2 = 1e10;
+  var hSeam = 0.0;
+  var cellSize = 0.22;
+  // Must match deSurfacePack's radii exactly or the seams drift off the joins.
+  let pulse = select(1.0 + 0.05 * sin(u.time * 0.12), 1.0, u.reducedMotion > 0.5);
+
+  for (var lvl = 0; lvl < 3; lvl = lvl + 1) {
+    let base = round(pos / cellSize);
+    let sgn = sign(pos - cellSize * base);
+    for (var i = 0; i < 8; i = i + 1) {
+      let o = vec3<f32>(f32(i & 1), f32((i >> 1u) & 1), f32((i >> 2u) & 1)) * sgn;
+      let cellId = base + o;
+      let q = pos - cellSize * cellId;
+      let h = hash13(cellId + vec3<f32>(f32(lvl) * 7.13));
+      let rad = cellSize * (0.25 + 0.85 * h * h * h) * pulse;
+      let dd = abs(length(q) - rad);   // distance to that sphere's SURFACE
+      if (dd < d1) {
+        d2 = d1;
+        d1 = dd;
+        hSeam = h;
+      } else if (dd < d2) {
+        d2 = dd;
+      }
+    }
+    cellSize = cellSize * 0.55;
+  }
+
+  // Two surfaces meeting here => intersection curve. Tight falloff keeps the
+  // seams as fine bright lines rather than broad washes.
+  let seam = 1.0 / (1.0 + 2600.0 * d2 * d2);
+  return vec2<f32>(seam, hSeam);
 }
 
 // Dispatch to the selected estimator.
@@ -586,6 +635,15 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
     let h = normalize(keyDir - rd);
     let spec = pow(max(dot(n, h), 0.0), 32.0) * sh;
     lit = lit + vec3<f32>(spec) * 0.4;
+
+    // Studded packing: light up the curves where spheres cut through each
+    // other. Evaluated once here, never in the march loop.
+    if (u.fractalType > 6.5 && u.fractalType < 7.5) {
+      let sm = surfacePackSeam(pos);
+      let seamCol = palette(sm.y * 2.1 + phase + 0.35);
+      lit = lit + seamCol * sm.x * 2.2;
+      glow = glow + sm.x * 24.0;
+    }
 
     // Distance fog into background.
     let fog = 1.0 - exp(-u.fogDensity * t * t * 0.05);
