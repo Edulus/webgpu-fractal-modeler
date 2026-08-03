@@ -70,7 +70,7 @@ behind your DOM.
 
 | Option          | Type       | Default        | Description                                                                 |
 | --------------- | ---------- | -------------- | --------------------------------------------------------------------------- |
-| `fractal`       | string     | `'mandelbulb'` | `'mandelbulb'` \| `'mandelbox'` \| `'menger'` \| `'julia'` \| `'apollonian'` \| `'attractor'` (Aizawa) \| `'lorenz'` |
+| `fractal`       | string     | `'mandelbulb'` | `'mandelbulb'` \| `'mandelbox'` \| `'menger'` \| `'julia'` \| `'apollonian'` \| `'spherepack'` \| `'attractor'` (Aizawa) \| `'lorenz'` |
 | `palette`       | string     | `'aurora'`     | `'aurora'` \| `'ember'` \| `'oil-slick'` \| `'mono-ice'` \| `'iridescence'`  |
 | `quality`       | string     | `'auto'`       | `'low'` \| `'medium'` \| `'high'` \| `'auto'` (adaptive)                     |
 | `transparent`   | boolean    | `true`         | `true` = premultiplied alpha over the page; `false` = opaque gradient bg    |
@@ -126,9 +126,13 @@ parameter animation is frozen, not your input).
      animated `power`), Mandelbox (box fold + sphere fold), Menger sponge
      (folding-space IFS), a quaternion Julia, and an **Apollonian** gasket
      (fold + sphere inversion — a fractal sphere packing of nested,
-     shrinking spheres with a slowly breathing packing tightness). All loops
-     are statically bounded (`const` limits) for WGSL portability, with
-     guarded `log`/`pow`/inversion domains and clamped radii to avoid NaNs.
+     shrinking spheres with a slowly breathing packing tightness), and
+     **`'spherepack'`** — the same fold + inversion machinery but with a
+     *sphere* base primitive instead of the Apollonian's plane, which resolves
+     the structure into nested tangent spheres rather than smooth sheet-like
+     lobes. All loops are statically bounded (`const` limits) for WGSL
+     portability, with guarded `log`/`pow`/inversion domains and clamped radii
+     to avoid NaNs.
    - **Strange attractors** (`'attractor'` = Aizawa, `'lorenz'` = the classic
      butterfly): the odd ones out. An attractor is a *trajectory*, not a
      surface, and has no closed-form distance function — so it can't be

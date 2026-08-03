@@ -286,6 +286,39 @@ fn deApollonian(pos : vec3<f32>) -> DEResult {
   return res;
 }
 
+// Sphere packing — same fold + inversion machinery as the Apollonian above,
+// but the base primitive is a SPHERE rather than a plane. The plane primitive
+// (abs(p.y)) is what gives the Apollonian its big smooth sheet-like lobes;
+// swapping in a sphere resolves the structure into nested tangent spheres of
+// many sizes — the classic "packing spheres" look.
+fn deSpherePack(pos : vec3<f32>) -> DEResult {
+  let anim = select(sin(u.time * 0.06), 0.0, u.reducedMotion > 0.5);
+  let s = 1.28 + 0.05 * anim;
+
+  var p = pos;
+  var scale = 1.0;
+  var trap = 1e10;
+  const SP_ITERS : i32 = 9;
+  for (var i = 0; i < SP_ITERS; i = i + 1) {
+    p = -1.0 + 2.0 * fract(0.5 * p + 0.5);
+    let r2 = max(dot(p, p), 1e-6);   // guard the inversion divide
+    trap = min(trap, r2);
+    let k = s / r2;
+    p = p * k;
+    scale = scale * k;
+  }
+
+  // Sphere primitive in the folded space.
+  let spheres = (length(p) - 1.1) / scale;
+  // Bound it so it reads as a finite cluster you can orbit and zoom out from.
+  let shell = length(pos) - 1.15;
+
+  var res : DEResult;
+  res.dist = max(spheres, shell);
+  res.trap = sqrt(trap);
+  return res;
+}
+
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
   let ft = u.fractalType;
@@ -297,8 +330,10 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
     return deMenger(pos);
   } else if (ft < 3.5) {
     return deJulia(pos);
+  } else if (ft < 4.5) {
+    return deApollonian(pos);
   }
-  return deApollonian(pos);
+  return deSpherePack(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {
@@ -383,7 +418,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // Strange attractors aren't distance fields — they're rasterized as line
   // geometry by a second pipeline drawn over this pass. Emit only the
   // background here so those lines have something to blend onto.
-  if (u.fractalType > 4.5) {
+  if (u.fractalType > 5.5) {
     let bg = backgroundColor(rd);
     return vec4<f32>(select(vec3<f32>(0.0), bg, u.bgMode >= 0.5), 0.0);
   }

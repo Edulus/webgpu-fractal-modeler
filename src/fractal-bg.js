@@ -46,7 +46,13 @@ const U = {
 const UNIFORM_FLOATS = 56;
 const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 224
 
-const FRACTAL_IDS = { mandelbulb: 0, mandelbox: 1, menger: 2, julia: 3, apollonian: 4, attractor: 5, lorenz: 6 };
+// Distance-estimated fractals occupy ids 0..5; the volumetric/line-rendered
+// attractors follow at 6+. The shader keys off that split, so keep DE types
+// contiguous at the front when adding new ones.
+const FRACTAL_IDS = {
+  mandelbulb: 0, mandelbox: 1, menger: 2, julia: 3, apollonian: 4,
+  spherepack: 5, attractor: 6, lorenz: 7,
+};
 
 // Quality tiers -> internal-resolution scale factor.
 const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
@@ -54,8 +60,9 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 // Camera orbit distance per fractal — each estimator lives at a different
 // world scale, so a single radius would sit inside the larger ones.
 // Indexed by fractal id (see FRACTAL_IDS).
-// mandelbulb, mandelbox, menger, julia, apollonian, attractor(Aizawa), lorenz
-const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 3.2, 3.0];
+// mandelbulb, mandelbox, menger, julia, apollonian, spherepack,
+// attractor(Aizawa), lorenz
+const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.2, 3.0];
 
 // Number of integrated trajectory samples drawn as a line strip per attractor.
 // These are exact float positions (vector geometry), so the curve stays crisp
