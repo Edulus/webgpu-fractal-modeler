@@ -353,10 +353,11 @@ fn deEncrusted(pos : vec3<f32>) -> DEResult {
   // Grow the crust over a cap, with the boundary perturbed by the orbit trap
   // so it breaks up into an organic, coral-like edge instead of a clean circle.
   // The 0.7 bias leaves most of the host sphere bare, as in the reference.
+  // NB: 'patch' is a reserved word in WGSL — don't name a variable that.
   let n = pos / max(r, 1e-6);
-  let patch = dot(n, normalize(vec3<f32>(0.35, 1.0, 0.28))) - 0.7
-            + (sqrt(trap) - 0.55) * 0.55;
-  crust = max(crust, -patch * 0.3);
+  let capMask = dot(n, normalize(vec3<f32>(0.35, 1.0, 0.28))) - 0.7
+              + (sqrt(trap) - 0.55) * 0.55;
+  crust = max(crust, -capMask * 0.3);
 
   var res : DEResult;
   res.dist = min(base, crust);

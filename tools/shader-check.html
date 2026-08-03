@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>WGSL compile check</title></head>
+<body style="font:14px/1.6 monospace;padding:24px">
+<h1 style="font-size:16px">WGSL compile check</h1>
+<p>Open this page in a WebGPU browser to compile every shader module and print
+any errors. Catches mistakes that never surface as a visible exception —
+notably reserved-keyword collisions, which silently blank the whole render.</p>
+<pre id="out">running…</pre>
+<script type="module">
+import { FRACTAL_WGSL } from '../src/shaders/fractal.wgsl.js';
+import { COMPOSITE_WGSL } from '../src/shaders/composite.wgsl.js';
+import { ATTRACTOR_WGSL } from '../src/shaders/attractor.wgsl.js';
+
+const out = [];
+try {
+  if (!navigator.gpu) throw new Error('WebGPU unavailable in this browser');
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) throw new Error('requestAdapter() returned null');
+  const device = await adapter.requestDevice();
+  const modules = [
+    ['fractal.wgsl', FRACTAL_WGSL],
+    ['composite.wgsl', COMPOSITE_WGSL],
+    ['attractor.wgsl', ATTRACTOR_WGSL],
+  ];
+  let failed = 0;
+  for (const [name, code] of modules) {
+    const info = await device.createShaderModule({ code }).getCompilationInfo();
+    const errors = info.messages.filter((m) => m.type === 'error');
+    const warnings = info.messages.filter((m) => m.type === 'warning');
+    if (errors.length) {
+      failed++;
+      out.push(`FAIL ${name}`);
+      for (const e of errors) out.push(`  line ${e.lineNum}:${e.linePos} ${e.message}`);
+    } else {
+      out.push(`ok   ${name}${warnings.length ? ` (${warnings.length} warning(s))` : ''}`);
+      for (const w of warnings) out.push(`  line ${w.lineNum}: ${w.message}`);
+    }
+  }
+  out.push('', failed ? `${failed} module(s) failed to compile.` : 'All shaders compiled.');
+} catch (e) {
+  out.push('ERROR: ' + e.message);
+}
+document.getElementById('out').textContent = out.join('\n');
+window.__shaderCheck = out.join('\n');
+</script>
+</body>
+</html>

@@ -194,6 +194,18 @@ a lower tier. Explicit tiers (`low`/`medium`/`high`) pin the scale.
   uniform buffer is rewritten per frame (targets are recreated only on
   resize/quality change).
 
+## Checking the shaders
+
+`tools/shader-check.html` compiles every WGSL module and prints any errors with
+line numbers. Open it in a WebGPU browser (serve the folder over HTTP) after
+editing a shader.
+
+Worth running: a WGSL error doesn't throw — the pipeline just produces nothing,
+so the entire render goes black with no console exception, and it looks like a
+much bigger problem than it is. Reserved-keyword collisions are an easy way to
+hit this (`patch`, `sample`, `filter`, `binding`, `enable` and friends are all
+reserved), since the name looks perfectly ordinary.
+
 ## Browser support
 
 Requires WebGPU (`navigator.gpu`):
