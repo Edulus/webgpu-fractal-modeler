@@ -213,6 +213,7 @@
         <option value="menger">Menger sponge</option>
         <option value="julia">Quaternion Julia</option>
         <option value="apollonian">Apollonian (sphere packing)</option>
+        <option value="attractor">Strange attractor (Aizawa)</option>
       </select>
     </label>
     <label>Palette
@@ -331,7 +332,7 @@
       // can tell a real tap from the end of a pinch.)
 
       // HUD: show live fractal/quality/fps (+ zoom while exploring).
-      const names = ['mandelbulb', 'mandelbox', 'menger', 'julia', 'apollonian'];
+      const names = ['mandelbulb', 'mandelbox', 'menger', 'julia', 'apollonian', 'attractor'];
       setInterval(() => {
         const i = handle.info;
         hud.textContent = `${names[i.fractalType]} · q${i.qualityScale} · ${i.fps}fps` +

@@ -70,7 +70,7 @@ behind your DOM.
 
 | Option          | Type       | Default        | Description                                                                 |
 | --------------- | ---------- | -------------- | --------------------------------------------------------------------------- |
-| `fractal`       | string     | `'mandelbulb'` | `'mandelbulb'` \| `'mandelbox'` \| `'menger'` \| `'julia'` \| `'apollonian'` |
+| `fractal`       | string     | `'mandelbulb'` | `'mandelbulb'` \| `'mandelbox'` \| `'menger'` \| `'julia'` \| `'apollonian'` \| `'attractor'` |
 | `palette`       | string     | `'aurora'`     | `'aurora'` \| `'ember'` \| `'oil-slick'` \| `'mono-ice'` \| `'iridescence'`  |
 | `quality`       | string     | `'auto'`       | `'low'` \| `'medium'` \| `'high'` \| `'auto'` (adaptive)                     |
 | `transparent`   | boolean    | `true`         | `true` = premultiplied alpha over the page; `false` = opaque gradient bg    |
@@ -129,6 +129,13 @@ parameter animation is frozen, not your input).
      shrinking spheres with a slowly breathing packing tightness). All loops
      are statically bounded (`const` limits) for WGSL portability, with
      guarded `log`/`pow`/inversion domains and clamped radii to avoid NaNs.
+   - **Strange attractor** (`'attractor'`): the odd one out — an Aizawa
+     attractor isn't a surface, so instead of sphere tracing it's baked on the
+     CPU into a 96³ density volume (integrated trajectory splatted trilinearly,
+     storing density + trajectory age) and **volume-raymarched** in the same
+     fragment pass. It renders as a glowing emissive ribbon colored by age,
+     which the bloom pass makes luminous. The volume is built once, lazily, the
+     first time the attractor is selected.
    - **Shading:** tetrahedron (4-sample) normals, one key + fill directional
      light, **soft penumbra shadows** (min-ratio along the shadow ray),
      **ambient occlusion** from DE sampling, **orbit-trap coloring** fed into a

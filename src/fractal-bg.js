@@ -44,7 +44,7 @@ const U = {
 const UNIFORM_FLOATS = 40;
 const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 160
 
-const FRACTAL_IDS = { mandelbulb: 0, mandelbox: 1, menger: 2, julia: 3, apollonian: 4 };
+const FRACTAL_IDS = { mandelbulb: 0, mandelbox: 1, menger: 2, julia: 3, apollonian: 4, attractor: 5 };
 
 // Quality tiers -> internal-resolution scale factor.
 const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
@@ -52,8 +52,11 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 // Camera orbit distance per fractal — each estimator lives at a different
 // world scale, so a single radius would sit inside the larger ones.
 // Indexed by fractal id (see FRACTAL_IDS).
-// mandelbulb, mandelbox, menger, julia, apollonian
-const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0];
+// mandelbulb, mandelbox, menger, julia, apollonian, attractor
+const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 3.2];
+
+// Resolution of the baked strange-attractor density volume (N^3 voxels).
+const VOLUME_N = 96;
 
 const HDR_FORMAT = 'rgba16float';
 
@@ -186,9 +189,12 @@ export async function initFractalBackground(canvas, options = {}) {
     const compositeModule = device.createShaderModule({ code: COMPOSITE_WGSL });
 
     // Bind group layouts.
-    const uniformOnlyBGL = device.createBindGroupLayout({
+    // Raymarch pass: uniforms + the strange-attractor density volume (3D).
+    const raymarchBGL = device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '3d' } },
       ],
     });
     const blurBGL = device.createBindGroupLayout({
@@ -207,11 +213,22 @@ export async function initFractalBackground(canvas, options = {}) {
       ],
     });
 
-    state._bgl = { uniformOnlyBGL, blurBGL, compositeBGL };
+    state._bgl = { raymarchBGL, blurBGL, compositeBGL };
+
+    // Baked strange-attractor density volume (populated lazily on first use).
+    state.volumeN = VOLUME_N;
+    state.volumeTex = device.createTexture({
+      size: { width: VOLUME_N, height: VOLUME_N, depthOrArrayLayers: VOLUME_N },
+      dimension: '3d',
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    state.volumeView = state.volumeTex.createView({ dimension: '3d' });
+    state.volumeBuilt = false;
 
     // Raymarch pipeline -> HDR target.
     state.pipelines.raymarch = device.createRenderPipeline({
-      layout: device.createPipelineLayout({ bindGroupLayouts: [uniformOnlyBGL] }),
+      layout: device.createPipelineLayout({ bindGroupLayouts: [raymarchBGL] }),
       vertex: { module: fractalModule, entryPoint: 'vs_main' },
       fragment: {
         module: fractalModule,
@@ -282,8 +299,12 @@ export async function initFractalBackground(canvas, options = {}) {
     // (Re)build bind groups that reference these views.
     const ub = { buffer: state.uniformBuffer };
     state.bindGroups.raymarch = device.createBindGroup({
-      layout: state._bgl.uniformOnlyBGL,
-      entries: [{ binding: 0, resource: ub }],
+      layout: state._bgl.raymarchBGL,
+      entries: [
+        { binding: 0, resource: ub },
+        { binding: 1, resource: state.sampler },
+        { binding: 2, resource: state.volumeView },
+      ],
     });
     state.bindGroups.bloomH = device.createBindGroup({
       layout: state._bgl.blurBGL,
@@ -310,6 +331,84 @@ export async function initFractalBackground(canvas, options = {}) {
         { binding: 3, resource: bloomBView },
       ],
     });
+  }
+
+  // ---- Strange attractor: bake the trajectory into a density volume ----
+  // Integrates the Aizawa attractor and splats its path into an N^3 grid
+  // (R = density, G = normalized age along the trajectory), then uploads it to
+  // the 3D texture the shader volume-marches. Done once, lazily.
+  function buildAttractorVolume() {
+    const N = state.volumeN;
+    const dens = new Float32Array(N * N * N);
+    const ageSum = new Float32Array(N * N * N);
+
+    // Aizawa attractor parameters.
+    let x = 0.1, y = 0.0, z = 0.0;
+    const a = 0.95, b = 0.7, c = 0.6, d = 3.5, e = 0.25, f = 0.1;
+    const dt = 0.004;
+    const STEPS = 500000, WARM = 3000;
+
+    // Fit the attractor (roughly centered near z=0.6, half-extent ~1.35) into
+    // the shader's [-1,1]^3 volume with a little padding.
+    const cz = 0.6;
+    const scale = 0.9 / 1.35;
+    const clampi = (v) => (v < 0 ? 0 : v > N - 1 ? N - 1 : v);
+
+    for (let i = 0; i < STEPS; i++) {
+      const dx = (z - b) * x - d * y;
+      const dy = d * x + (z - b) * y;
+      const dz = c + a * z - (z * z * z) / 3 - (x * x + y * y) * (1 + e * z) + f * z * x * x * x;
+      x += dx * dt; y += dy * dt; z += dz * dt;
+      if (i < WARM) continue;
+
+      const nx = x * scale, ny = y * scale, nz = (z - cz) * scale;
+      if (nx < -1 || nx > 1 || ny < -1 || ny > 1 || nz < -1 || nz > 1) continue;
+
+      const gx = (nx * 0.5 + 0.5) * (N - 1);
+      const gy = (ny * 0.5 + 0.5) * (N - 1);
+      const gz = (nz * 0.5 + 0.5) * (N - 1);
+      const age = (i - WARM) / (STEPS - WARM);
+
+      // Trilinear splat for smooth filaments.
+      const x0 = Math.floor(gx), y0 = Math.floor(gy), z0 = Math.floor(gz);
+      const fx = gx - x0, fy = gy - y0, fz = gz - z0;
+      for (let oz = 0; oz < 2; oz++) {
+        for (let oy = 0; oy < 2; oy++) {
+          for (let ox = 0; ox < 2; ox++) {
+            const w = (ox ? fx : 1 - fx) * (oy ? fy : 1 - fy) * (oz ? fz : 1 - fz);
+            if (w <= 0) continue;
+            const idx = clampi(x0 + ox) + clampi(y0 + oy) * N + clampi(z0 + oz) * N * N;
+            dens[idx] += w;
+            ageSum[idx] += w * age;
+          }
+        }
+      }
+    }
+
+    let maxD = 0;
+    for (let i = 0; i < dens.length; i++) if (dens[i] > maxD) maxD = dens[i];
+    const inv = maxD > 0 ? 1 / maxD : 0;
+
+    const data = new Uint8Array(N * N * N * 4);
+    for (let i = 0; i < dens.length; i++) {
+      if (dens[i] > 0) {
+        // pow<1 lifts the faint filaments so thin passes still register.
+        data[i * 4] = Math.round(Math.min(1, Math.pow(dens[i] * inv, 0.35)) * 255);
+        data[i * 4 + 1] = Math.round((ageSum[i] / dens[i]) * 255);
+      }
+    }
+
+    state.device.queue.writeTexture(
+      { texture: state.volumeTex },
+      data,
+      { bytesPerRow: N * 4, rowsPerImage: N },
+      { width: N, height: N, depthOrArrayLayers: N }
+    );
+    state.volumeBuilt = true;
+  }
+
+  function ensureAttractorVolume() {
+    if (!state.volumeBuilt && state.device) buildAttractorVolume();
   }
 
   // ---- Resize handling ----
@@ -738,6 +837,7 @@ export async function initFractalBackground(canvas, options = {}) {
 
     createStaticResources();
     resize();
+    if (state.fractalType === FRACTAL_IDS.attractor) ensureAttractorVolume();
   }
 
   async function reinit() {
@@ -781,6 +881,7 @@ export async function initFractalBackground(canvas, options = {}) {
         state.targets.bloomA.destroy();
         state.targets.bloomB.destroy();
       }
+      state.volumeTex && state.volumeTex.destroy();
       state.uniformBuffer && state.uniformBuffer.destroy();
       state.device && state.device.destroy();
     } catch (e) {
@@ -858,6 +959,7 @@ export async function initFractalBackground(canvas, options = {}) {
     setFractal(name) {
       if (name in FRACTAL_IDS) {
         state.fractalType = FRACTAL_IDS[name];
+        if (name === 'attractor') ensureAttractorVolume();
         if (!state.running) renderFrame(performance.now(), true);
       }
     },
