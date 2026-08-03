@@ -456,12 +456,27 @@ export async function initFractalBackground(canvas, options = {}) {
     // Discard the transient so we only draw the attractor itself.
     for (let i = 0; i < cfg.warm; i++) step();
 
+    // Store |velocity| per point. Speed is a smooth function of position on the
+    // attractor, so it gives spatially coherent color — neighbouring strands
+    // share a hue and additive overlap deepens it instead of averaging to white.
+    let sMin = Infinity, sMax = 0;
     for (let i = 0; i < N; i++) {
       step();
       verts[i * 4] = (x - cx) * s;
       verts[i * 4 + 1] = (y - cy) * s;
       verts[i * 4 + 2] = (z - cz) * s;
-      verts[i * 4 + 3] = i / N; // normalized age -> palette
+      const v = cfg.deriv(x, y, z);
+      const sp = Math.hypot(v[0], v[1], v[2]);
+      verts[i * 4 + 3] = sp;
+      if (sp < sMin) sMin = sp;
+      if (sp > sMax) sMax = sp;
+    }
+
+    // Normalize speed to 0..1. The sqrt spreads the low end, where most of the
+    // trajectory sits, across more of the palette.
+    const range = sMax - sMin || 1;
+    for (let i = 0; i < N; i++) {
+      verts[i * 4 + 3] = Math.sqrt((verts[i * 4 + 3] - sMin) / range);
     }
 
     if (state.trajBuffer) state.trajBuffer.destroy();
