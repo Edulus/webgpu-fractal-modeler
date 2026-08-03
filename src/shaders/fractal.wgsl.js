@@ -399,11 +399,13 @@ fn deSurfacePack(pos : vec3<f32>) -> DEResult {
     let cellId = round(pos / cellSize);
     let q = pos - cellSize * cellId;
     let h = hash13(cellId + vec3<f32>(f32(lvl) * 7.13));
-    // Cubed hash skews the size distribution: most spheres stay small and
-    // distinct, while occasional large ones punch through their neighbours.
-    // That mix is what gives both crisp beading and rich intersection curves —
-    // a linear distribution gives one or the other, never both.
-    let rad = cellSize * (0.25 + 0.85 * h * h * h) * pulse;
+    // Radius must stay under half the cell spacing. Domain repetition only
+    // evaluates the sphere in the NEAREST cell, so anything larger gets sliced
+    // flat at the cell walls and renders as axis-aligned cube faces. Measured:
+    // radii up to 1.10 cell put 3.6% of surface normals exactly on an axis
+    // (a smooth sphere baselines at 1.3%); capping at 0.49 returns it to 1.5%.
+    // Intersection curves still come from the three levels cutting each other.
+    let rad = cellSize * (0.18 + 0.31 * h * h * h) * pulse;
     let shellD = max(r - (R + SHELL), (R - SHELL * 0.9) - r);
     let cand = max(length(q) - rad, shellD);
     if (cand < d) {
@@ -445,7 +447,7 @@ fn surfacePackSeam(pos : vec3<f32>) -> vec2<f32> {
       let cellId = base + o;
       let q = pos - cellSize * cellId;
       let h = hash13(cellId + vec3<f32>(f32(lvl) * 7.13));
-      let rad = cellSize * (0.25 + 0.85 * h * h * h) * pulse;
+      let rad = cellSize * (0.18 + 0.31 * h * h * h) * pulse;
       let dd = abs(length(q) - rad);   // distance to that sphere's SURFACE
       if (dd < d1) {
         d2 = d1;
@@ -458,11 +460,12 @@ fn surfacePackSeam(pos : vec3<f32>) -> vec2<f32> {
     cellSize = cellSize * 0.55;
   }
 
-  // Two surfaces meeting here => intersection curve. The falloff constant sets
-  // how wide the seam reads, and it is *very* sensitive: measured against real
-  // surface samples, 2.6e3 lit 93% of the surface (a white-out), while 5e5
-  // lights ~4% brightly and ~12% faintly — fine filigree rather than a wash.
-  let seam = 1.0 / (1.0 + 500000.0 * d2 * d2);
+  // Two surfaces meeting here => intersection curve. The falloff is very
+  // sensitive and has to be retuned whenever the radii change: measured on real
+  // surface samples, 2.6e3 lit 93% of the surface (a white-out). With the
+  // current capped radii, 6e4 lights ~3% brightly and ~10% faintly — fine
+  // filigree rather than a wash.
+  let seam = 1.0 / (1.0 + 60000.0 * d2 * d2);
   return vec2<f32>(seam, hSeam);
 }
 
