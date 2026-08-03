@@ -1,6 +1,6 @@
 # WebGPU Fractal Modeler
 
-### ▶ [Live demo](https://edulus.github.io/webgpu-fractal-background/)
+### ▶ [Live demo](https://edulus.github.io/webgpu-fractal-modeler/)
 
 A self-contained, dependency-free **WebGPU platform for rendering, exploring, and embedding interactive 3D fractals and strange attractors**.
 
@@ -215,7 +215,7 @@ WGSL compilation failures may produce a black canvas without a JavaScript except
 
 The hosted build is currently available at:
 
-**https://edulus.github.io/webgpu-fractal-background/**
+**https://edulus.github.io/webgpu-fractal-modeler/**
 
 WebGPU requires a secure context. For local development, serve the repository over HTTP instead of opening `index.html` directly:
 
