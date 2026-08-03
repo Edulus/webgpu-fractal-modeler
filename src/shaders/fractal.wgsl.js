@@ -346,10 +346,15 @@ fn calcAO(p : vec3<f32>, n : vec3<f32>) -> f32 {
 }
 
 // Background gradient / atmosphere the fractal fogs into.
+//
+// Kept near-black: the composite pass applies gamma (1/2.2), which lifts small
+// linear values hard (0.03 linear reads as ~0.23 on screen). These values land
+// around 0.05-0.09 displayed — black enough for emissive filaments to pop,
+// with just a whisper of palette tint so it isn't a flat dead grey.
 fn backgroundColor(rd : vec3<f32>) -> vec3<f32> {
   let t = clamp(rd.y * 0.5 + 0.5, 0.0, 1.0);
-  let lo = u.paletteA.rgb * 0.06;
-  let hi = u.paletteA.rgb * 0.16 + vec3<f32>(0.01, 0.015, 0.03);
+  let lo = u.paletteA.rgb * 0.008;
+  let hi = u.paletteA.rgb * 0.022 + vec3<f32>(0.002, 0.003, 0.006);
   return mix(lo, hi, t);
 }
 
