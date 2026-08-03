@@ -160,6 +160,26 @@
 
     #panel .hidden { display: none; }
 
+    /* Collapsible panel header (the triangle toggle). */
+    #panel #panel-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      background: transparent;
+      border: none;
+      padding: 2px 2px 0;
+      color: var(--fg);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+    }
+    #panel-tri { transition: transform 0.2s ease; font-size: 12px; color: var(--muted); }
+    #panel.collapsed { width: auto; }
+    #panel.collapsed #panel-tri { transform: rotate(-90deg); }
+    #panel.collapsed > :not(#panel-toggle) { display: none; }
+
     #btn-explorer {
       background: rgba(127, 231, 212, 0.14);
       border-color: rgba(127, 231, 212, 0.4);
@@ -206,6 +226,10 @@
 
   <!-- Live controls -->
   <div id="panel">
+    <button id="panel-toggle" aria-expanded="true" aria-label="Collapse controls">
+      <span id="panel-title">Controls</span>
+      <span id="panel-tri">▾</span>
+    </button>
     <label>Fractal
       <select id="sel-fractal">
         <option value="mandelbulb">Mandelbulb</option>
@@ -288,6 +312,15 @@
     const canvas = document.getElementById('bg');
     const hud = document.getElementById('hud');
     const fallbackNote = document.getElementById('fallback-note');
+
+    // Collapse/expand the control panel by tapping the triangle at the top.
+    const panel = document.getElementById('panel');
+    const panelToggle = document.getElementById('panel-toggle');
+    panelToggle.addEventListener('click', () => {
+      const collapsed = panel.classList.toggle('collapsed');
+      panelToggle.setAttribute('aria-expanded', String(!collapsed));
+      panelToggle.setAttribute('aria-label', collapsed ? 'Expand controls' : 'Collapse controls');
+    });
 
     let handle = null;
 

@@ -309,7 +309,8 @@ fn volumeAttractor(ro : vec3<f32>, rd : vec3<f32>) -> vec4<f32> {
   let tf = bb.y;
   if (tf <= tn) { return vec4<f32>(0.0); }
 
-  const VSTEPS : i32 = 140;
+  // More, finer steps keep filaments crisp when the volume is magnified.
+  const VSTEPS : i32 = 220;
   let dt = (tf - tn) / f32(VSTEPS);
   let phase = select(u.time * 0.03, 0.0, u.reducedMotion > 0.5);
 
@@ -323,15 +324,18 @@ fn volumeAttractor(ro : vec3<f32>, rd : vec3<f32>) -> vec4<f32> {
     let uvw = p * 0.5 + 0.5;          // [-1,1] -> [0,1] texture coords
     let s = textureSampleLevel(volTex, samp3d, uvw, 0.0);
     let dens = s.r;
-    if (dens > 0.003) {
+    if (dens > 0.02) {
+      // Sharpen the transfer function so bright cores read as defined threads.
+      let d2 = dens * dens;
       let base = palette(s.g * 1.4 + phase);
-      let a = clamp(dens * 5.0 * dt, 0.0, 1.0);
-      col = col + trans * base * dens * 7.0 * dt;
+      // Higher absorption -> front filaments occlude, giving crisp depth.
+      let a = clamp(d2 * 16.0 * dt, 0.0, 1.0);
+      col = col + trans * base * d2 * 14.0 * dt;
       trans = trans * (1.0 - a);
-      glow = glow + dens * 3.5 * dt;
+      glow = glow + d2 * 4.0 * dt;
     }
     t = t + dt;
-    if (trans < 0.02) { break; }
+    if (trans < 0.015) { break; }
   }
 
   let glowOut = clamp(glow * u.glowStrength * 0.5, 0.0, 8.0);

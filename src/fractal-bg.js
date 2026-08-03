@@ -56,7 +56,8 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 3.2];
 
 // Resolution of the baked strange-attractor density volume (N^3 voxels).
-const VOLUME_N = 96;
+// Higher = crisper filaments (at the cost of memory + one-time build time).
+const VOLUME_N = 192;
 
 const HDR_FORMAT = 'rgba16float';
 
@@ -345,8 +346,9 @@ export async function initFractalBackground(canvas, options = {}) {
     // Aizawa attractor parameters.
     let x = 0.1, y = 0.0, z = 0.0;
     const a = 0.95, b = 0.7, c = 0.6, d = 3.5, e = 0.25, f = 0.1;
-    const dt = 0.004;
-    const STEPS = 500000, WARM = 3000;
+    // Smaller dt + many more steps -> continuous, crisp filaments at 192^3.
+    const dt = 0.0025;
+    const STEPS = 1800000, WARM = 5000;
 
     // Fit the attractor (roughly centered near z=0.6, half-extent ~1.35) into
     // the shader's [-1,1]^3 volume with a little padding.
@@ -392,8 +394,9 @@ export async function initFractalBackground(canvas, options = {}) {
     const data = new Uint8Array(N * N * N * 4);
     for (let i = 0; i < dens.length; i++) {
       if (dens[i] > 0) {
-        // pow<1 lifts the faint filaments so thin passes still register.
-        data[i * 4] = Math.round(Math.min(1, Math.pow(dens[i] * inv, 0.35)) * 255);
+        // Compress dynamic range but keep the curve steep so filaments stay
+        // crisp (rather than a soft haze). Boosted so mid-density threads read.
+        data[i * 4] = Math.round(Math.min(1, Math.pow(dens[i] * inv, 0.5) * 1.4) * 255);
         data[i * 4 + 1] = Math.round((ageSum[i] / dens[i]) * 255);
       }
     }

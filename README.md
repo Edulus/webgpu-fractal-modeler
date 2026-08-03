@@ -131,7 +131,7 @@ parameter animation is frozen, not your input).
      guarded `log`/`pow`/inversion domains and clamped radii to avoid NaNs.
    - **Strange attractor** (`'attractor'`): the odd one out — an Aizawa
      attractor isn't a surface, so instead of sphere tracing it's baked on the
-     CPU into a 96³ density volume (integrated trajectory splatted trilinearly,
+     CPU into a 192³ density volume (integrated trajectory splatted trilinearly,
      storing density + trajectory age) and **volume-raymarched** in the same
      fragment pass. It renders as a glowing emissive ribbon colored by age,
      which the bloom pass makes luminous. The volume is built once, lazily, the
