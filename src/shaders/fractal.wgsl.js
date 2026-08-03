@@ -458,9 +458,11 @@ fn surfacePackSeam(pos : vec3<f32>) -> vec2<f32> {
     cellSize = cellSize * 0.55;
   }
 
-  // Two surfaces meeting here => intersection curve. Tight falloff keeps the
-  // seams as fine bright lines rather than broad washes.
-  let seam = 1.0 / (1.0 + 2600.0 * d2 * d2);
+  // Two surfaces meeting here => intersection curve. The falloff constant sets
+  // how wide the seam reads, and it is *very* sensitive: measured against real
+  // surface samples, 2.6e3 lit 93% of the surface (a white-out), while 5e5
+  // lights ~4% brightly and ~12% faintly — fine filigree rather than a wash.
+  let seam = 1.0 / (1.0 + 500000.0 * d2 * d2);
   return vec2<f32>(seam, hSeam);
 }
 
@@ -641,8 +643,8 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
     if (u.fractalType > 6.5 && u.fractalType < 7.5) {
       let sm = surfacePackSeam(pos);
       let seamCol = palette(sm.y * 2.1 + phase + 0.35);
-      lit = lit + seamCol * sm.x * 2.2;
-      glow = glow + sm.x * 24.0;
+      lit = lit + seamCol * sm.x * 1.1;
+      glow = glow + sm.x * 3.5;
     }
 
     // Distance fog into background.
