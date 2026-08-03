@@ -1,34 +1,57 @@
-# WebGPU Raymarched 3D Fractal Background
+# WebGPU Fractal Modeler
 
 ### ▶ [Live demo](https://edulus.github.io/webgpu-fractal-background/)
 
-A self-contained, dependency-free **WebGPU** animated background that renders a
-distance-estimated 3D fractal (Mandelbulb by default; Mandelbox, Menger sponge, a
-quaternion Julia, three sphere packings, and two strange attractors are also
-selectable). It's built to sit *behind* page content as a full-viewport
-decorative layer — dazzling but never in the way — and it degrades gracefully
-when WebGPU is unavailable.
+A self-contained, dependency-free **WebGPU platform for rendering, exploring, and embedding interactive 3D fractals and strange attractors**.
 
-No Three.js, no Babylon, no build step, no npm. Just ES modules, WGSL, and HTML.
+The project began as an animated website background and has evolved into a full-screen 3D fractal model viewer with orbit controls, zoom, adaptive rendering quality, live model and palette switching, and reusable transparent rendering for websites and applications.
 
-```
-├── index.html                    demo page: real text/buttons on top, canvas behind
+No Three.js, no Babylon, no build step, and no npm. Just ES modules, WGSL, and HTML.
+
+## Applications
+
+- Interactive 3D fractal exploration
+- Full-screen generative visual experiences
+- Website and application backgrounds
+- Digital-art installations and gallery displays
+- Music visualizers and projection visuals
+- Educational demonstrations of fractals and strange attractors
+- A reusable WebGPU renderer for other projects
+
+## Included models
+
+- Mandelbulb
+- Mandelbox
+- Menger sponge
+- Quaternion Julia
+- Apollonian sphere packing
+- Nested sphere packing
+- Ornate planet with a polar bloom
+- Studded surface packing
+- Aizawa strange attractor
+- Lorenz strange attractor
+
+## Project structure
+
+```text
+├── index.html                    interactive model-viewer and background demo
 ├── src/
-│   ├── fractal-bg.js             main module — device, pipelines, render loop, lifecycle
+│   ├── fractal-bg.js             device, pipelines, controls, render loop, lifecycle
 │   ├── palettes.js               Inigo Quilez cosine-palette presets
 │   └── shaders/
-│       ├── fractal.wgsl.js       vertex + fragment raymarcher (inlined WGSL)
-│       ├── composite.wgsl.js     post-process: bloom + ACES tonemap + vignette + dither
+│       ├── fractal.wgsl.js       vertex + fragment raymarcher, inlined as WGSL
+│       ├── composite.wgsl.js     bloom, ACES tonemap, vignette, and dithering
 │       └── attractor.wgsl.js     strange attractors drawn as line geometry
 ├── tools/
 │   └── shader-check.html         compiles every WGSL module and reports errors
 └── .github/workflows/pages.yml   deploys the demo to GitHub Pages
 ```
 
-WGSL is **inlined as template strings** (not `fetch`-ed) so there are no
-CORS/fetch problems when running locally.
+WGSL is inlined as template strings rather than fetched at runtime, avoiding local CORS and shader-loading problems.
 
 ## Quick start
+
+The current API retains its original `initFractalBackground` name for compatibility with existing integrations.
 
 ```js
 import { initFractalBackground } from './src/fractal-bg.js';
@@ -38,205 +61,180 @@ const handle = await initFractalBackground(canvas, {
   fractal: 'mandelbulb',
   palette: 'aurora',
   quality: 'auto',
-  transparent: true,
+  transparent: false,
   onUnsupported: (reason) => {
-    // WebGPU missing/failed — show your own CSS fallback.
     canvas.style.display = 'none';
     console.warn(reason);
   },
 });
 ```
 
-The recommended CSS for the canvas (see `index.html`):
+### Model-viewer mode
+
+```js
+handle.setExplorer(true);
+```
+
+Explorer mode provides:
+
+- Mouse or one-finger drag to orbit
+- Pinch or mouse-wheel zoom
+- Double-tap, double-click, or `resetView()` to recenter
+- An opaque presentation background
+- A gentle idle rotation when the viewer is untouched
+
+Navigation remains available under `prefers-reduced-motion`; only automatic animation is frozen.
+
+### Background mode
+
+```js
+const handle = await initFractalBackground(canvas, {
+  fractal: 'mandelbulb',
+  palette: 'aurora',
+  quality: 'auto',
+  transparent: true,
+});
+```
+
+Recommended canvas CSS:
 
 ```css
-#bg { position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+#bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
 ```
 
-`pointer-events: none` keeps the background click-through; `z-index: -1` keeps it
-behind your DOM.
-
-### Running the demo
-
-The hosted build is at **<https://edulus.github.io/webgpu-fractal-background/>** —
-nothing to install, and it's served over HTTPS, which WebGPU requires.
-
-To run it locally, serve the folder over HTTP rather than opening the file
-directly:
-
-```bash
-# any static server works; pick one
-python3 -m http.server 8000
-npx http-server -c-1
-```
-
-then visit `http://localhost:8000/`.
-
-Opening `index.html` straight from `file://` works in Firefox and Safari 26+, but
-**Chrome/Edge block ES-module `import` over `file://`** (their CORS policy for
-module scripts — unrelated to this project), so the page will come up blank
-there. Use a local server or the hosted link instead.
+`pointer-events: none` keeps the canvas click-through, while the negative z-index places it behind the page interface.
 
 ## Options
 
-| Option          | Type       | Default        | Description                                                                 |
-| --------------- | ---------- | -------------- | --------------------------------------------------------------------------- |
-| `fractal`       | string     | `'mandelbulb'` | `'mandelbulb'` \| `'mandelbox'` \| `'menger'` \| `'julia'` \| `'apollonian'` \| `'spherepack'` \| `'encrusted'` \| `'surfacepack'` \| `'attractor'` (Aizawa) \| `'lorenz'` |
-| `palette`       | string     | `'aurora'`     | `'aurora'` \| `'ember'` \| `'oil-slick'` \| `'mono-ice'` \| `'iridescence'`  |
-| `quality`       | string     | `'auto'`       | `'low'` \| `'medium'` \| `'high'` \| `'auto'` (adaptive)                     |
-| `transparent`   | boolean    | `true`         | `true` = premultiplied alpha over the page; `false` = opaque gradient bg    |
-| `onUnsupported` | function   | `() => {}`     | Called with a reason string if WebGPU is missing or the device is lost      |
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `fractal` | string | `'mandelbulb'` | `'mandelbulb'`, `'mandelbox'`, `'menger'`, `'julia'`, `'apollonian'`, `'spherepack'`, `'encrusted'`, `'surfacepack'`, `'attractor'`, or `'lorenz'` |
+| `palette` | string | `'aurora'` | `'aurora'`, `'ember'`, `'oil-slick'`, `'mono-ice'`, or `'iridescence'` |
+| `quality` | string | `'auto'` | `'low'`, `'medium'`, `'high'`, or adaptive `'auto'` |
+| `transparent` | boolean | `true` | Premultiplied transparency over the page or an opaque gradient presentation background |
+| `onUnsupported` | function | `() => {}` | Receives a reason string when WebGPU initialization fails or the device is lost |
 
 ## Handle API
 
-`initFractalBackground` resolves to a handle (or `null` if unsupported):
+| Method | Description |
+| --- | --- |
+| `setFractal(name)` | Switch the model at runtime without reinitializing WebGPU. |
+| `setPalette(name)` | Switch the cosine palette at runtime. |
+| `setQuality(mode)` | Select low, medium, high, or adaptive rendering quality. |
+| `setTransparent(bool)` | Toggle transparent embedding and opaque presentation modes. |
+| `setExplorer(bool)` | Toggle the full model-viewer preset. |
+| `setControls(bool)` | Enable orbit and zoom controls independently. |
+| `setAutoOrbit(bool)` | Toggle time-driven camera movement. |
+| `setZoom(n)` / `zoomBy(f)` | Set or multiply camera distance. |
+| `resetView()` | Recenter the orbit and reset zoom. |
+| `pause()` | Stop the render loop. |
+| `resume()` | Resume rendering while respecting visibility gating. |
+| `destroy()` | Tear down observers, listeners, textures, and the WebGPU device. |
+| `info` | Returns model, quality, FPS, reduced-motion, explorer, and zoom state. |
 
-| Method                      | Description                                                        |
-| --------------------------- | ----------------------------------------------------------------- |
-| `setFractal(name)`          | Switch fractal at runtime (no re-init).                           |
-| `setPalette(name)`          | Switch cosine palette at runtime.                                 |
-| `setQuality(mode)`          | `'low'`/`'medium'`/`'high'`/`'auto'`; recreates render targets.   |
-| `setTransparent(bool)`      | Toggle transparent-over-page vs. opaque gradient background.      |
-| `setExplorer(bool)`         | Model-explorer preset: opaque bg, no auto-drift, full navigation. |
-| `setControls(bool)`         | Enable drag/pinch/wheel navigation without the full preset.       |
-| `setAutoOrbit(bool)`        | Toggle the time-driven camera drift.                             |
-| `setZoom(n)` / `zoomBy(f)`  | Set/multiply the camera distance (1 = default framing).          |
-| `resetView()`               | Recenter the orbit and reset zoom.                               |
-| `pause()`                   | Stop the render loop.                                             |
-| `resume()`                  | Resume (respects visibility/intersection gating).                |
-| `destroy()`                 | Tear down: observers, listeners, GPU textures, and the device.   |
-| `info` (getter)             | `{ fractalType, qualityMode, qualityScale, fps, reducedMotion, explorer, zoom }`. |
+## Rendering architecture
 
-### Navigation & explorer mode
+The renderer uses two principal stages:
 
-Beyond the drifting background, the fractal can be driven as a navigable 3D
-model. `setControls(true)` (or the all-in-one `setExplorer(true)`) enables:
+1. **HDR model pass**
+   - Distance-estimated models are sphere-traced in a fullscreen fragment shader.
+   - Strange attractors are integrated on the CPU with RK4 and drawn as additively blended line geometry.
+   - Surface shading includes tetrahedron normals, directional lighting, soft shadows, ambient occlusion, orbit-trap colour, Fresnel rim light, near-miss glow, and distance fog.
 
-- **Drag** (mouse or one finger) to orbit around the fractal.
-- **Pinch** (two fingers) or **mouse wheel** to zoom in/out.
-- **Double-tap / double-click** or `resetView()` to recenter.
+2. **Composite pass**
+   - Separable Gaussian bloom
+   - ACES tonemapping
+   - Gamma correction
+   - Subtle vignette
+   - Dithering to reduce banding
 
-`setExplorer(true)` additionally switches to an opaque background, stops the
-automatic camera drift, and adds a gentle idle spin when you're not touching it
-— turning the piece into a full-screen model viewer. Turning it back off
-restores the original background configuration. In the demo, the **Enter
-explorer mode** button wires this up and fades the page text out of the way.
-Navigation stays smooth even under `prefers-reduced-motion` (only the automatic
-parameter animation is frozen, not your input).
+The raymarch pass writes to an offscreen `rgba16float` texture. Lit colour occupies RGB, while emission and glow feed the alpha channel for post-processing.
 
-## How it works
+Uniforms occupy one 160-byte, 16-byte-aligned buffer. The byte offsets are mirrored between the WGSL structs and the JavaScript `U` offset table in `fractal-bg.js`; keep both definitions synchronized when changing the layout.
 
-**Two render passes into HDR, then composite:**
+## Model implementations
 
-1. **Raymarch pass** → renders the fractal into an offscreen `rgba16float`
-   texture at an internal resolution (scaled by the quality tier). A fullscreen
-   triangle (generated from `vertex_index`, no vertex buffer) drives a
-   distance-estimation sphere-tracing fragment shader. Output: lit color in RGB,
-   emission/glow in A.
-   - **Distance estimators:** Mandelbulb (analytic `0.5·log(r)·r/dr` with an
-     animated `power`), Mandelbox (box fold + sphere fold), Menger sponge
-     (folding-space IFS), a quaternion Julia, and an **Apollonian** gasket
-     (fold + sphere inversion — a fractal sphere packing of nested,
-     shrinking spheres with a slowly breathing packing tightness), and
-     **`'spherepack'`** — the same fold + inversion machinery but with a
-     *sphere* base primitive instead of the Apollonian's plane, which resolves
-     the structure into nested tangent spheres rather than smooth sheet-like
-     lobes, and **`'encrusted'`** — a smooth host body whose packing field is
-     masked to a polar cap, which renders as a banded planet with one ornate
-     bloom at the pole.
-   - **`'surfacepack'`** takes a different route to the "packed spheres" look.
-     The inversion fractals above resolve into smooth sheets at body scale, so
-     instead of an analytic fractal this repeats space into cells at three
-     scales, places one sphere per cell sized by a hash of the cell index, and
-     clips them to a thin shell around a solid core — hundreds of *discrete*
-     spheres of mixed sizes covering the surface, each taking its own palette
-     color from its hash. All loops are statically bounded (`const` limits) for WGSL
-     portability, with guarded `log`/`pow`/inversion domains and clamped radii
-     to avoid NaNs.
-   - **Strange attractors** (`'attractor'` = Aizawa, `'lorenz'` = the classic
-     butterfly): the odd ones out. An attractor is a *trajectory*, not a
-     surface, and has no closed-form distance function — so it can't be
-     sphere-traced. Instead the ODE is integrated on the CPU with **RK4** to
-     600k exact float positions, uploaded as a vertex buffer, and rasterized as
-     an additively-blended **line strip** over the background in the same pass.
-     Because that's vector geometry rather than a baked voxel grid, the curve
-     stays crisp at any zoom. Color comes from position along the trajectory,
-     and the accumulated emission feeds the bloom pass. The trajectory is
-     rebuilt lazily whenever a different attractor is selected.
-   - **Shading:** tetrahedron (4-sample) normals, one key + fill directional
-     light, **soft penumbra shadows** (min-ratio along the shadow ray),
-     **ambient occlusion** from DE sampling, **orbit-trap coloring** fed into a
-     cosine palette for iridescent banding, a Fresnel rim, near-miss **glow**,
-     and exponential **distance fog** into a background gradient.
-2. **Composite pass** → separable Gaussian **bloom** on the emission/bright
-   pixels (at half resolution, two passes), **ACES** tonemap, gamma, a subtle
-   **vignette** (keeps edges dark for text legibility), and **dithering** to
-   kill banding. Writes premultiplied color to the swap-chain.
+### Distance-estimated surfaces
 
-**Uniforms** are packed into a single 160-byte buffer with a std140-friendly,
-16-byte-aligned layout. The byte offsets are mirrored between the WGSL `struct`
-(both shader files) and the JS `U` offset table in `fractal-bg.js` — keep them in
-lockstep if you edit the struct.
+- **Mandelbulb:** analytic distance estimator with animated power
+- **Mandelbox:** box fold and sphere fold
+- **Menger sponge:** folding-space iterated function system
+- **Quaternion Julia:** four-dimensional iteration projected into a 3D distance field
+- **Apollonian:** fold and sphere inversion with a plane-derived primitive
+- **Nested sphere pack:** related inversion machinery using a sphere primitive
+- **Ornate planet:** a smooth host body with a packing field concentrated around a polar region
+- **Studded surface pack:** three scales of repeated cells containing discrete, hash-sized spheres clipped to a shell around a solid core
 
-### Color / palettes
+All shader loops are statically bounded for WGSL portability, with guarded logarithm, power, radius, and inversion domains.
 
-Palettes use Inigo Quilez cosine palettes, `a + b·cos(2π(c·t + d))`, with the
-coefficients uploaded as uniforms so they swap at runtime. The palette input is
-the orbit-trap value plus a slow time phase, so colors gently cycle. Presets live
-in `src/palettes.js`: **aurora** (teal→magenta), **ember** (deep red→gold),
-**oil-slick** (iridescent rainbow), **mono-ice** (cool monochrome), and
-**iridescence** (soap-bubble / beetle-shell thin-film sheen — per-channel
-frequencies drift in and out of phase for a shifting cyan→magenta→gold shimmer).
-Bloom and overall exposure are tuned dark and moody so text stays readable on top.
+### Strange attractors
+
+The Aizawa and Lorenz models are trajectories rather than closed surfaces. Their differential equations are integrated on the CPU using fourth-order Runge–Kutta, uploaded as vertex data, and rasterized as line strips. This keeps the curves crisp while orbiting and zooming.
+
+## Palettes
+
+Palettes use Inigo Quilez cosine palettes:
+
+```text
+a + b · cos(2π(c · t + d))
+```
+
+Available presets:
+
+- **Aurora:** teal to magenta
+- **Ember:** deep red to gold
+- **Oil slick:** iridescent rainbow
+- **Mono ice:** cool monochrome
+- **Iridescence:** shifting cyan, magenta, and gold
 
 ## Adaptive quality
 
-In `'auto'` mode a rolling FPS estimate (EMA) drives the internal render
-resolution and epsilon. If it stays below ~50 fps it steps `qualityScale` down;
-if it's comfortably above target for a sustained window it steps back up — with
-hysteresis so it never thrashes. Coarse-pointer / small-viewport devices start at
-a lower tier. Explicit tiers (`low`/`medium`/`high`) pin the scale.
+Adaptive mode uses a rolling FPS estimate to adjust internal rendering resolution and raymarch epsilon. Hysteresis prevents constant quality changes. Coarse-pointer and small-viewport devices begin at a lower tier, while explicit quality settings pin the scale.
 
-## Battery / lifecycle
+## Lifecycle and battery behaviour
 
-- **`ResizeObserver`** recreates render targets on resize; device pixel ratio is
-  capped (max 2) to protect mobile GPUs.
-- **`IntersectionObserver`** + **`visibilitychange`** pause the loop when the
-  canvas is scrolled offscreen or the tab is hidden.
-- **`prefers-reduced-motion`** freezes the camera and parameter animation to a
-  static pose and renders a single frame instead of spinning `requestAnimationFrame`.
-- **Device-lost** is handled: one automatic re-init attempt, then `onUnsupported`.
-- Pipelines, bind groups, samplers, and textures are created once; only the
-  uniform buffer is rewritten per frame (targets are recreated only on
-  resize/quality change).
+- `ResizeObserver` recreates render targets after resizing.
+- Device pixel ratio is capped at 2 to protect mobile GPUs.
+- `IntersectionObserver` pauses rendering when the canvas leaves the viewport.
+- `visibilitychange` pauses rendering in hidden tabs.
+- `prefers-reduced-motion` produces a static automatic pose while preserving direct navigation.
+- Device loss triggers one automatic reinitialization attempt before `onUnsupported` is called.
 
 ## Checking the shaders
 
-`tools/shader-check.html` compiles every WGSL module and prints any errors with
-line numbers. Open it in a WebGPU browser (serve the folder over HTTP) after
-editing a shader.
+Open `tools/shader-check.html` through a local HTTP server in a WebGPU browser after editing WGSL. It compiles every shader module and reports errors with line numbers.
 
-Worth running: a WGSL error doesn't throw — the pipeline just produces nothing,
-so the entire render goes black with no console exception, and it looks like a
-much bigger problem than it is. Reserved-keyword collisions are an easy way to
-hit this (`patch`, `sample`, `filter`, `binding`, `enable` and friends are all
-reserved), since the name looks perfectly ordinary.
+WGSL compilation failures may produce a black canvas without a JavaScript exception, so this checker is an important validation step. Ordinary-looking words such as `patch`, `sample`, `filter`, `binding`, and `enable` may be reserved identifiers.
+
+## Running locally
+
+The hosted build is currently available at:
+
+**https://edulus.github.io/webgpu-fractal-background/**
+
+WebGPU requires a secure context. For local development, serve the repository over HTTP instead of opening `index.html` directly:
+
+```bash
+python3 -m http.server 8000
+# or
+npx http-server -c-1
+```
+
+Then open `http://localhost:8000/`.
+
+Chrome and Edge block ES-module imports over `file://`. A local server also provides behaviour closer to GitHub Pages deployment.
 
 ## Browser support
 
-Requires WebGPU (`navigator.gpu`):
+Requires `navigator.gpu`:
 
-- **Chrome / Edge** 113+ (desktop; Android with WebGPU enabled).
-- **Safari 26+** (macOS/iOS).
-- **Firefox** with WebGPU enabled.
+- Chrome and Edge 113+
+- Safari 26+
+- Firefox with WebGPU enabled
 
-If `navigator.gpu` is missing or `requestAdapter()` returns `null`,
-`onUnsupported` fires and nothing is rendered — the caller shows a fallback (the
-demo swaps in a static CSS gradient).
-
-## Stretch features included
-
-- Mouse-move **parallax** that gently nudges the camera (disabled under
-  reduced-motion).
-- A fourth fractal (**quaternion Julia**).
-- **Dithering** to reduce banding on the dark gradient.
+When WebGPU is unavailable, the caller receives `onUnsupported` and can display a CSS, image, or video fallback.
