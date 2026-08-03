@@ -46,12 +46,14 @@ const U = {
 const UNIFORM_FLOATS = 56;
 const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 224
 
-// Distance-estimated fractals occupy ids 0..5; the volumetric/line-rendered
-// attractors follow at 6+. The shader keys off that split, so keep DE types
-// contiguous at the front when adding new ones.
+// Distance-estimated fractals occupy ids 0..8; the volumetric/line-rendered
+// attractors follow at 9+. The shader keys off that split (see the
+// `fractalType > 8.5` test in fractal.wgsl.js), so keep DE types contiguous at
+// the front when adding new ones and move the attractors up to match.
 const FRACTAL_IDS = {
   mandelbulb: 0, mandelbox: 1, menger: 2, julia: 3, apollonian: 4,
-  spherepack: 5, encrusted: 6, surfacepack: 7, attractor: 8, lorenz: 9,
+  spherepack: 5, encrusted: 6, surfacepack: 7, penrose: 8,
+  attractor: 9, lorenz: 10,
 };
 
 // Quality tiers -> internal-resolution scale factor.
@@ -61,8 +63,10 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 // world scale, so a single radius would sit inside the larger ones.
 // Indexed by fractal id (see FRACTAL_IDS).
 // mandelbulb, mandelbox, menger, julia, apollonian, spherepack, encrusted,
-// surfacepack, attractor(Aizawa), lorenz
-const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.1, 3.0, 3.2, 3.0];
+// surfacepack, penrose, attractor(Aizawa), lorenz
+// The Penrose disc is wide and flat, so it needs a little more room than the
+// roughly ball-shaped estimators to sit inside the frame edge-on.
+const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.1, 3.0, 3.5, 3.2, 3.0];
 
 // Number of integrated trajectory samples drawn as a line strip per attractor.
 // These are exact float positions (vector geometry), so the curve stays crisp
@@ -1074,7 +1078,7 @@ export async function initFractalBackground(canvas, options = {}) {
     setFractal(name) {
       if (name in FRACTAL_IDS) {
         state.fractalType = FRACTAL_IDS[name];
-        // Attractor family (5 = Aizawa, 6 = Lorenz) needs its trajectory built.
+        // The attractor family needs its trajectory buffer built before use.
         if (state.fractalType >= FRACTAL_IDS.attractor) ensureAttractorTrajectory();
         if (!state.running) renderFrame(performance.now(), true);
       }

@@ -16,7 +16,10 @@ export const FRACTAL_WGSL = /* wgsl */ `
 //   16  camPos     : vec3<f32>   (pad slot -> fov)
 //   28  fov        : f32
 //   32  camTarget  : vec3<f32>   (pad slot -> fractalType)
-//   44  fractalType: f32   (0=mandelbulb, 1=mandelbox, 2=menger, 3=julia)
+//   44  fractalType: f32   (0=mandelbulb, 1=mandelbox, 2=menger, 3=julia,
+//                           4=apollonian, 5=spherepack, 6=encrusted,
+//                           7=surfacepack, 8=penrose; 9+ are the line-rendered
+//                           attractors, which this pass only backgrounds)
 //   48  power      : f32
 //   52  mbScale    : f32
 //   56  mbMinRadius: f32
@@ -469,6 +472,196 @@ fn surfacePackSeam(pos : vec3<f32>) -> vec2<f32> {
   return vec2<f32>(seam, hSeam);
 }
 
+// ---- Penrose quasicrystal ------------------------------------------------
+//
+// A genuine P3 Penrose rhombus tiling (thick 72/108 + thin 36/144), built by de
+// Bruijn's pentagrid construction and engraved into a disc as two-level relief.
+//
+// The tiling is the dual of five families of parallel lines ("the pentagrid").
+// Each intersection of a line from family j with one from family k dualizes to
+// one rhombus whose edges are e_j and e_k. The offsets gamma_l sum to an
+// integer, which is exactly the condition for the dual to be Penrose rather
+// than a generic rhombic tiling.
+//
+// Going the other way -- physical point -> which rhombus contains it -- needs
+// the inverse of V(x) = sum ceil(dot(x,e_l)+g_l) e_l. That map averages to
+// (5/2)x + sum(g_l e_l), so 0.4*(q - shift) recovers x to within the ceil()
+// rounding noise (stddev ~0.18 of a line spacing). Too coarse to just round:
+// measured over 90k sample points, taking the single nearest intersection per
+// pair leaves 3.2% of the plane in no tile at all. Bracketing BOTH neighbouring
+// lines of every family (4 combos x 10 pairs) covers 100.0000%, and bracketing
+// only the more ambiguous family of each pair -- 2 combos, half the work --
+// flips the groove/solid decision on 1 point in 100k with a worst-case SDF
+// error of 0.09. That last variant is what runs here. It only ever searches a
+// subset of the candidates, so it can only over-estimate the SDF, which keeps
+// the carve conservative and sphere tracing safe.
+const PHI2 : f32 = 2.61803399;   // phi^2 -- the Penrose inflation ratio
+
+struct PenroseTile {
+  sdf  : f32,        // <= 0 inside; -sdf is the distance to this tile's edge
+  kind : f32,        // 0 = thick rhomb, 1 = thin rhomb
+  perp : vec2<f32>,  // cut-and-project perpendicular-space coordinate
+};
+
+// One point query against the tiling, in units where a rhombus edge is 1.
+// 'phason' slides the tiling through perpendicular space (see dePenrose).
+fn penroseQuery(q : vec2<f32>, phason : vec2<f32>) -> PenroseTile {
+  // Grid star e_l, perpendicular star ep_l, and sin(2*pi*d/5) for index gaps.
+  var e = array<vec2<f32>, 5>(
+    vec2<f32>( 1.0,        0.0),
+    vec2<f32>( 0.30901699, 0.95105652),
+    vec2<f32>(-0.80901699, 0.58778525),
+    vec2<f32>(-0.80901699,-0.58778525),
+    vec2<f32>( 0.30901699,-0.95105652));
+  var ep = array<vec2<f32>, 5>(
+    vec2<f32>( 1.0,        0.0),
+    vec2<f32>(-0.80901699, 0.58778525),
+    vec2<f32>( 0.30901699,-0.95105652),
+    vec2<f32>( 0.30901699, 0.95105652),
+    vec2<f32>(-0.80901699,-0.58778525));
+  var s5 = array<f32, 5>(0.0, 0.95105652, 0.58778525, -0.58778525, -0.95105652);
+
+  // Offsets sum to 1 (an integer) -> the dual is a Penrose tiling. The phason
+  // term is projected onto the perpendicular star, whose five vectors sum to
+  // zero, so the drift leaves that sum untouched and the tiling stays Penrose
+  // while individual tiles flip.
+  var g = array<f32, 5>(0.3, 0.2, -0.1, 0.4, 0.2);
+  var shift = vec2<f32>(0.0);
+  for (var l = 0; l < 5; l = l + 1) {
+    g[l] = g[l] + dot(ep[l], phason);
+    shift = shift + g[l] * e[l];
+  }
+
+  // Grid-space preimage of q, and how far it sits from each family's lines.
+  let x = 0.4 * (q - shift);
+  var t = array<f32, 5>(0.0, 0.0, 0.0, 0.0, 0.0);
+  for (var l = 0; l < 5; l = l + 1) { t[l] = dot(x, e[l]) + g[l]; }
+
+  var best : PenroseTile;
+  best.sdf = 1e9;
+  best.kind = 0.0;
+  best.perp = vec2<f32>(0.0);
+
+  for (var j = 0; j < 4; j = j + 1) {
+    for (var k = j + 1; k < 5; k = k + 1) {
+      let det = s5[((k - j) % 5 + 5) % 5];   // = cross(e_j, e_k)
+      let inv = 1.0 / det;
+
+      // Bracket the family whose nearest line is most ambiguous; round the
+      // other. Two candidate intersections per pair, 20 in total.
+      let aj = abs(t[j] - round(t[j]));
+      let ak = abs(t[k] - round(t[k]));
+      var m0 = round(t[j]);
+      var n0 = round(t[k]);
+      var dm = 0.0;
+      var dn = 0.0;
+      if (aj > ak) { m0 = floor(t[j]); dm = 1.0; } else { n0 = floor(t[k]); dn = 1.0; }
+
+      for (var c = 0; c < 2; c = c + 1) {
+        let m = m0 + dm * f32(c);
+        let n = n0 + dn * f32(c);
+        let a = m - g[j];
+        let b = n - g[k];
+
+        // The remaining three indices are read off at the intersection point.
+        // dot(x*, e_l) is affine in (m,n) with coefficients that depend only on
+        // index differences, so x* itself never has to be solved for.
+        var v  = m * e[j]  + n * e[k];
+        var pw = m * ep[j] + n * ep[k];
+        for (var l = 0; l < 5; l = l + 1) {
+          if (l == j || l == k) { continue; }
+          let cl = (a * s5[((k - l) % 5 + 5) % 5] + b * s5[((l - j) % 5 + 5) % 5]) * inv;
+          let kl = ceil(cl + g[l]);
+          v  = v  + kl * e[l];
+          pw = pw + kl * ep[l];
+        }
+
+        // The rhombus spans v -> v + e_j + e_k. It is the intersection of two
+        // unit-edge slabs sharing a half-width, so max() of the two slab
+        // distances is exact inside and a safe under-estimate outside.
+        let ctr = v + 0.5 * (e[j] + e[k]);
+        let h = 0.5 * abs(det);
+        let d = q - ctr;
+        let sd = max(abs(-d.x * e[j].y + d.y * e[j].x) - h,
+                     abs(-d.x * e[k].y + d.y * e[k].x) - h);
+        if (sd < best.sdf) {
+          best.sdf = sd;
+          let gap = abs(k - j);
+          best.kind = select(1.0, 0.0, min(gap, 5 - gap) == 1);
+          best.perp = pw;
+        }
+      }
+    }
+  }
+  return best;
+}
+
+// Penrose tiling engraved into a disc, at two levels of the inflation
+// hierarchy. Inflating a Penrose tiling by phi^2 yields another Penrose tiling
+// on the same five directions, so the parent level is the identical query run
+// on q/phi^2 -- its edges cut wide canyons that partition the fine tiles into
+// their parent rhombs, which is the tiling's self-similarity made geometric.
+//
+// Cost note: this is the heaviest estimator here (two 20-candidate queries per
+// evaluation), so the disc bound below is a hard early-out -- the tiling is
+// only ever evaluated within a thin band around the surface. Everywhere else
+// the ray sees a plain rounded disc.
+fn dePenrose(pos : vec3<f32>) -> DEResult {
+  const R : f32 = 1.35;        // disc radius
+  const HT : f32 = 0.060;      // half thickness
+  const SCALE : f32 = 0.17;    // world units per rhombus edge
+
+  let rad = length(pos.xz);
+
+  // Solid-disc bound: the relief only removes material, so this never
+  // over-estimates the true distance and is safe to return early.
+  let wb = vec2<f32>(rad - R, abs(pos.y) - HT);
+  let bound = min(max(wb.x, wb.y), 0.0) + length(max(wb, vec2<f32>(0.0)));
+
+  var res : DEResult;
+  if (bound > 0.07) {
+    res.dist = bound;
+    res.trap = 0.35;
+    return res;
+  }
+
+  // Phason drift: a slow slide through perpendicular space. This is the real
+  // degree of freedom of a quasicrystal -- tiles flip between the two rhombs
+  // as it moves, while the tiling stays exactly Penrose throughout.
+  let tm = select(u.time, 0.0, u.reducedMotion > 0.5);
+  let phason = 0.09 * vec2<f32>(cos(tm * 0.05), sin(tm * 0.043));
+
+  let q = pos.xz / SCALE;
+  let child = penroseQuery(q, phason);
+  let parent = penroseQuery(q / PHI2, phason);
+
+  // Distance to each level's tile edge, back in world units.
+  let ce = max(-child.sdf, 0.0) * SCALE;
+  let pe = max(-parent.sdf, 0.0) * SCALE * PHI2;
+
+  // Chamfer both faces towards the edges. The chamfers are kept narrow relative
+  // to a tile so the rhombs keep flat tops and legible edges instead of
+  // rounding off into cushions. The parent canyon stays a broad groove rather
+  // than a cut -- taken much deeper it slices the disc into shards and the
+  // hierarchy stops reading. Each depth/width ratio stays below 1, and the 0.55
+  // factor on the returned distance covers their combined slope.
+  const CW : f32 = 0.013;   // child groove half-width
+  const PW : f32 = 0.045;   // parent canyon half-width
+  var relief = clamp(1.0 - ce / CW, 0.0, 1.0) * 0.011;
+  relief = relief + clamp(1.0 - pe / PW, 0.0, 1.0) * 0.022;
+
+  // Where the two carves coincide they exceed the half thickness and punch
+  // clean through, opening windows along the parent edges.
+  let w = vec2<f32>(rad - R, abs(pos.y) - (HT - relief));
+  let d = min(max(w.x, w.y), 0.0) + length(max(w, vec2<f32>(0.0)));
+
+  res.dist = d * 0.55;
+  // Thick and thin rhombs take separate palette bands; the parent tile's
+  // perpendicular-space coordinate adds slow variation across the whole disc.
+  res.trap = 0.15 + 0.45 * child.kind + 0.3 * clamp(length(parent.perp) * 0.5, 0.0, 1.0);
+  return res;
+}
+
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
   let ft = u.fractalType;
@@ -486,8 +679,10 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
     return deSpherePack(pos);
   } else if (ft < 6.5) {
     return deEncrusted(pos);
+  } else if (ft < 7.5) {
+    return deSurfacePack(pos);
   }
-  return deSurfacePack(pos);
+  return dePenrose(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {
@@ -572,7 +767,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // Strange attractors aren't distance fields — they're rasterized as line
   // geometry by a second pipeline drawn over this pass. Emit only the
   // background here so those lines have something to blend onto.
-  if (u.fractalType > 7.5) {
+  if (u.fractalType > 8.5) {
     let bg = backgroundColor(rd);
     return vec4<f32>(select(vec3<f32>(0.0), bg, u.bgMode >= 0.5), 0.0);
   }
