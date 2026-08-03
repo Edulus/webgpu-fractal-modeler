@@ -1,23 +1,28 @@
 # WebGPU Raymarched 3D Fractal Background
 
+### ▶ [Live demo](https://edulus.github.io/webgpu-fractal-background/)
+
 A self-contained, dependency-free **WebGPU** animated background that renders a
-distance-estimated 3D fractal (Mandelbulb by default; Mandelbox, Menger sponge,
-and a quaternion Julia are also selectable). It's built to sit *behind* page
-content as a full-viewport decorative layer — dazzling but never in the way —
-and it degrades gracefully when WebGPU is unavailable.
+distance-estimated 3D fractal (Mandelbulb by default; Mandelbox, Menger sponge, a
+quaternion Julia, three sphere packings, and two strange attractors are also
+selectable). It's built to sit *behind* page content as a full-viewport
+decorative layer — dazzling but never in the way — and it degrades gracefully
+when WebGPU is unavailable.
 
 No Three.js, no Babylon, no build step, no npm. Just ES modules, WGSL, and HTML.
 
 ```
-webgpu-fractal-background/
 ├── index.html                    demo page: real text/buttons on top, canvas behind
 ├── src/
 │   ├── fractal-bg.js             main module — device, pipelines, render loop, lifecycle
 │   ├── palettes.js               Inigo Quilez cosine-palette presets
 │   └── shaders/
 │       ├── fractal.wgsl.js       vertex + fragment raymarcher (inlined WGSL)
-│       └── composite.wgsl.js     post-process: bloom + ACES tonemap + vignette + dither
-└── README.md
+│       ├── composite.wgsl.js     post-process: bloom + ACES tonemap + vignette + dither
+│       └── attractor.wgsl.js     strange attractors drawn as line geometry
+├── tools/
+│   └── shader-check.html         compiles every WGSL module and reports errors
+└── .github/workflows/pages.yml   deploys the demo to GitHub Pages
 ```
 
 WGSL is **inlined as template strings** (not `fetch`-ed) so there are no
@@ -53,18 +58,24 @@ behind your DOM.
 
 ### Running the demo
 
-- **Firefox and Safari 26+** load ES modules directly from `file://`, so you can
-  just open `index.html`.
-- **Chrome/Edge** block ES-module `import` from `file://` (their CORS policy for
-  module scripts — unrelated to this project). Serve the folder over HTTP:
+The hosted build is at **<https://edulus.github.io/webgpu-fractal-background/>** —
+nothing to install, and it's served over HTTPS, which WebGPU requires.
 
-  ```bash
-  # any static server works; pick one
-  python3 -m http.server 8000
-  npx http-server -c-1
-  ```
+To run it locally, serve the folder over HTTP rather than opening the file
+directly:
 
-  then visit `http://localhost:8000/`.
+```bash
+# any static server works; pick one
+python3 -m http.server 8000
+npx http-server -c-1
+```
+
+then visit `http://localhost:8000/`.
+
+Opening `index.html` straight from `file://` works in Firefox and Safari 26+, but
+**Chrome/Edge block ES-module `import` over `file://`** (their CORS policy for
+module scripts — unrelated to this project), so the page will come up blank
+there. Use a local server or the hosted link instead.
 
 ## Options
 
