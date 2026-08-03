@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>WebGPU Fractal Background — Demo</title>
+  <title>WebGPU Fractal Modeler — Interactive Demo</title>
   <style>
     :root {
       --fg: #eef2ff;
@@ -221,7 +221,7 @@
   </style>
 </head>
 <body>
-  <!-- Fractal background canvas -->
+  <!-- WebGPU fractal renderer canvas -->
   <canvas id="bg" aria-hidden="true"></canvas>
 
   <!-- Live controls -->
@@ -279,33 +279,34 @@
     Showing the static CSS gradient fallback. Try a recent Chrome/Edge, Safari 26+, or Firefox with WebGPU enabled.
   </div>
 
-  <!-- Page content sitting on top of the canvas -->
+  <!-- Page content demonstrating the embeddable background mode -->
   <main class="wrap">
-    <p class="eyebrow">WebGPU · Raymarched · Zero dependencies</p>
-    <h1>A fractal that lives behind your content.</h1>
+    <p class="eyebrow">WebGPU · Raymarched · Interactive 3D</p>
+    <h1>WebGPU Fractal Modeler</h1>
     <p class="lede">
-      This entire page is legible and interactive while a distance-estimated 3D
-      Mandelbulb drifts hypnotically behind it — soft shadows, ambient occlusion,
-      orbit-trap iridescence, and a gentle bloom, all in a single fragment shader.
-      Click the buttons. Select the text. The background never gets in the way.
+      Explore live 3D fractals and strange attractors directly in the browser.
+      Orbit, zoom, switch models, change palettes, and tune rendering quality in
+      real time. The same renderer can also become a transparent, animated layer
+      behind website or application content.
     </p>
     <div class="actions">
-      <button class="btn primary" onclick="alert('Buttons work — the canvas is pointer-events:none.')">Prove clicks work</button>
-      <button class="btn" onclick="document.getSelection().selectAllChildren(document.querySelector('.lede'))">Select the text</button>
+      <button class="btn primary" onclick="document.getElementById('btn-explorer').click()">Enter model viewer</button>
+      <button class="btn" onclick="document.getSelection().selectAllChildren(document.querySelector('.lede'))">Test background interaction</button>
     </div>
 
     <div class="content-block">
-      <h2>Legibility over spectacle</h2>
+      <h2>One renderer, multiple applications</h2>
       <p>
-        The composite pass is tuned dark and moody: a subtle vignette keeps the
-        edges quiet, ACES tonemapping tames highlights, and dithering kills
-        banding on the near-black gradient. Bright fractal filaments bloom just
-        enough to feel luminous without washing out this paragraph.
+        Use the opaque explorer preset for a full-screen navigable artwork, an
+        educational model viewer, a music visual, or an installation display.
+        Orbit and zoom remain responsive while the adaptive quality system keeps
+        the renderer practical across a range of GPUs.
       </p>
       <p>
-        Switch the fractal type, palette, and quality tier using the panel in the
-        top-right — every change happens live, with no re-initialization. Scroll
-        away and the render loop pauses; hide the tab and it stops entirely.
+        Transparent mode places the same visuals behind ordinary page content.
+        The canvas stays click-through, and the dark composite treatment preserves
+        legibility through controlled bloom, ACES tonemapping, vignette, and
+        dithering. Switch the model, palette, and quality tier using the panel.
       </p>
     </div>
   </main>
@@ -334,7 +335,7 @@
       quality: 'auto',
       transparent: true,
       onUnsupported: (reason) => {
-        console.warn('Fractal background unsupported:', reason);
+        console.warn('Fractal renderer unsupported:', reason);
         canvas.style.display = 'none';
         fallbackNote.classList.add('show');
         hud.textContent = 'WebGPU unavailable';
