@@ -365,6 +365,56 @@ fn deEncrusted(pos : vec3<f32>) -> DEResult {
   return res;
 }
 
+// Hash a cell index to a pseudo-random 0..1 value (varies sphere size + color).
+fn hash13(p : vec3<f32>) -> f32 {
+  var q = fract(p * 0.3183099 + vec3<f32>(0.1, 0.2, 0.3));
+  q = q + vec3<f32>(dot(q, q.yzx + 19.19));
+  return fract((q.x + q.y) * q.z);
+}
+
+// Surface sphere packing — a solid body studded with DISCRETE spheres of many
+// sizes across its whole surface.
+//
+// The inversion-based packings above resolve into smooth sheets and lobes at
+// this scale. This takes the other route: repeat space into cells at three
+// scales, put one sphere per cell sized by a hash of the cell index, and clip
+// them to a thin shell around the body. The result is hundreds of separate
+// spheres of mixed sizes covering the surface — the look of a physical packing
+// rather than an analytic fractal. Each sphere takes its own palette color
+// from its hash.
+fn deSurfacePack(pos : vec3<f32>) -> DEResult {
+  const R : f32 = 1.0;
+  const SHELL : f32 = 0.09;
+  const SP_LEVELS : i32 = 3;
+
+  let r = length(pos);
+  // Gentle size pulse so the packing breathes without spheres popping.
+  let pulse = select(1.0 + 0.05 * sin(u.time * 0.12), 1.0, u.reducedMotion > 0.5);
+
+  var d = r - R * 0.985;      // solid core just under the shell
+  var trapV = 0.5;
+  var cellSize = 0.22;
+
+  for (var lvl = 0; lvl < SP_LEVELS; lvl = lvl + 1) {
+    let cellId = round(pos / cellSize);
+    let q = pos - cellSize * cellId;
+    let h = hash13(cellId + vec3<f32>(f32(lvl) * 7.13));
+    let rad = cellSize * (0.26 + 0.20 * h) * pulse;
+    let shellD = max(r - (R + SHELL), (R - SHELL * 0.9) - r);
+    let cand = max(length(q) - rad, shellD);
+    if (cand < d) {
+      d = cand;
+      trapV = h;              // each sphere gets its own color
+    }
+    cellSize = cellSize * 0.55;
+  }
+
+  var res : DEResult;
+  res.dist = d;
+  res.trap = trapV;
+  return res;
+}
+
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
   let ft = u.fractalType;
@@ -380,8 +430,10 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
     return deApollonian(pos);
   } else if (ft < 5.5) {
     return deSpherePack(pos);
+  } else if (ft < 6.5) {
+    return deEncrusted(pos);
   }
-  return deEncrusted(pos);
+  return deSurfacePack(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {
@@ -466,7 +518,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // Strange attractors aren't distance fields — they're rasterized as line
   // geometry by a second pipeline drawn over this pass. Emit only the
   // background here so those lines have something to blend onto.
-  if (u.fractalType > 6.5) {
+  if (u.fractalType > 7.5) {
     let bg = backgroundColor(rd);
     return vec4<f32>(select(vec3<f32>(0.0), bg, u.bgMode >= 0.5), 0.0);
   }

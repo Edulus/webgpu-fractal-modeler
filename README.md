@@ -70,7 +70,7 @@ behind your DOM.
 
 | Option          | Type       | Default        | Description                                                                 |
 | --------------- | ---------- | -------------- | --------------------------------------------------------------------------- |
-| `fractal`       | string     | `'mandelbulb'` | `'mandelbulb'` \| `'mandelbox'` \| `'menger'` \| `'julia'` \| `'apollonian'` \| `'spherepack'` \| `'encrusted'` \| `'attractor'` (Aizawa) \| `'lorenz'` |
+| `fractal`       | string     | `'mandelbulb'` | `'mandelbulb'` \| `'mandelbox'` \| `'menger'` \| `'julia'` \| `'apollonian'` \| `'spherepack'` \| `'encrusted'` \| `'surfacepack'` \| `'attractor'` (Aizawa) \| `'lorenz'` |
 | `palette`       | string     | `'aurora'`     | `'aurora'` \| `'ember'` \| `'oil-slick'` \| `'mono-ice'` \| `'iridescence'`  |
 | `quality`       | string     | `'auto'`       | `'low'` \| `'medium'` \| `'high'` \| `'auto'` (adaptive)                     |
 | `transparent`   | boolean    | `true`         | `true` = premultiplied alpha over the page; `false` = opaque gradient bg    |
@@ -130,11 +130,16 @@ parameter animation is frozen, not your input).
      **`'spherepack'`** — the same fold + inversion machinery but with a
      *sphere* base primitive instead of the Apollonian's plane, which resolves
      the structure into nested tangent spheres rather than smooth sheet-like
-     lobes, and **`'encrusted'`** — a smooth host sphere with the packing
-     confined to a thin surface shell, grown over a cap whose boundary is
-     perturbed by the orbit trap into a ragged, coral-like edge, so bare body
-     shows through where the crust hasn't grown. All loops are statically
-     bounded (`const` limits) for WGSL
+     lobes, and **`'encrusted'`** — a smooth host body whose packing field is
+     masked to a polar cap, which renders as a banded planet with one ornate
+     bloom at the pole.
+   - **`'surfacepack'`** takes a different route to the "packed spheres" look.
+     The inversion fractals above resolve into smooth sheets at body scale, so
+     instead of an analytic fractal this repeats space into cells at three
+     scales, places one sphere per cell sized by a hash of the cell index, and
+     clips them to a thin shell around a solid core — hundreds of *discrete*
+     spheres of mixed sizes covering the surface, each taking its own palette
+     color from its hash. All loops are statically bounded (`const` limits) for WGSL
      portability, with guarded `log`/`pow`/inversion domains and clamped radii
      to avoid NaNs.
    - **Strange attractors** (`'attractor'` = Aizawa, `'lorenz'` = the classic

@@ -238,7 +238,8 @@
         <option value="julia">Quaternion Julia</option>
         <option value="apollonian">Apollonian (sphere packing)</option>
         <option value="spherepack">Sphere pack (nested spheres)</option>
-        <option value="encrusted">Encrusted sphere (crust packing)</option>
+        <option value="encrusted">Ornate planet (polar bloom)</option>
+        <option value="surfacepack">Packed spheres (studded body)</option>
         <option value="attractor">Strange attractor (Aizawa)</option>
         <option value="lorenz">Strange attractor (Lorenz)</option>
       </select>
@@ -369,7 +370,7 @@
 
       // HUD: show live fractal/quality/fps (+ zoom while exploring).
       const names = ['mandelbulb', 'mandelbox', 'menger', 'julia', 'apollonian',
-        'spherepack', 'encrusted', 'attractor', 'lorenz'];
+        'spherepack', 'encrusted', 'surfacepack', 'attractor', 'lorenz'];
       setInterval(() => {
         const i = handle.info;
         hud.textContent = `${names[i.fractalType]} · q${i.qualityScale} · ${i.fps}fps` +
