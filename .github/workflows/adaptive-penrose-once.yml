@@ -1,0 +1,39 @@
+name: Apply adaptive Penrose once
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.issue.title == 'Run adaptive Penrose patch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Apply device-adaptive Penrose patch
+        run: python3 tools/apply-adaptive-penrose.py
+
+      - name: Validate JavaScript and wiring
+        run: |
+          node --input-type=module --check < src/fractal-bg.js
+          node --input-type=module --check < src/shaders/fractal.wgsl.js
+          grep -q "performanceTier: 39" src/fractal-bg.js
+          grep -q "activeMarchSteps = select(56, 88" src/shaders/fractal.wgsl.js
+          grep -q "two Penrose projections" README.md
+          grep -q "low complexity" index.html
+
+      - name: Commit implementation and remove one-time tools
+        run: |
+          rm tools/apply-adaptive-penrose.py
+          rm .github/workflows/adaptive-penrose-once.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Scale Penrose Sponge to device capability"
+          git push origin main
