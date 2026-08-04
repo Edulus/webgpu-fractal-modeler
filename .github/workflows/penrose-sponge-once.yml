@@ -1,3 +1,4 @@
+# Second push: workflow is now registered on the default branch.
 name: Apply Penrose Sponge once
 
 on:
@@ -208,8 +209,7 @@ A spherical host keeps the first implementation compact and fully explorable fro
 ### Strange attractors
 """)
 
-          workflow = Path('.github/workflows/penrose-sponge-once.yml')
-          workflow.unlink()
+          Path('.github/workflows/penrose-sponge-once.yml').unlink()
           PY
 
       - name: Validate JavaScript and wiring
