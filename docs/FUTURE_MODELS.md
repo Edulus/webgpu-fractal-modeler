@@ -55,20 +55,48 @@ A strong candidate should satisfy most of these conditions:
 
 These offer the best balance of visual distinction, mathematical legitimacy, implementation variety, and WebGPU feasibility.
 
+The ordering below applies three tie-breakers, in this order:
+
+1. **Capability before variety.** A model that unlocks a new kind of exploration outranks one that adds another shape to orbit. Every model shipped so far is an object viewed from outside; the first interior structure is worth more than a fourth attractor.
+2. **Reuse of proven machinery.** Candidates whose mathematics already has a working relative in `fractal.wgsl.js` carry far less risk than their raw complexity suggests.
+3. **Shared infrastructure first.** Where several candidates need the same new renderer path, the cheapest one goes first so the path is built once.
+
 | Priority | Model | Family | Why it belongs | Likely rendering route | Cost |
 | --- | --- | --- | --- | --- | --- |
-| 1 | **Rössler attractor** | Chaotic system | An iconic folded spiral attractor that contrasts clearly with Lorenz and Aizawa | CPU or compute integration, line strip | Low |
-| 2 | **Thomas attractor** | Chaotic system | Cyclic symmetry produces an unusually balanced, woven trajectory | CPU or compute integration, line strip | Low |
-| 3 | **Gyroid** | Triply periodic minimal surface | A continuous labyrinth with no straight lines or mirror planes; excellent for interior exploration | Analytic implicit field and raymarching | Low–medium |
-| 4 | **Schwarz D surface** | Triply periodic minimal surface | A highly connected diamond-like maze with strong volumetric presence | Analytic implicit field and raymarching | Low–medium |
-| 5 | **Kummer quartic** | Algebraic surface | A classical quartic with sixteen singular points and a distinctive sculptural form | Polynomial implicit surface | Medium |
-| 6 | **Barth sextic** | Algebraic surface | Icosahedral symmetry and many double points create an immediately recognizable object | Polynomial implicit surface | Medium |
-| 7 | **Hopf fibration** | Topology / 4D geometry | Interlocking circles fill space according to a deep geometric construction | Instanced curves or generated line geometry | Medium |
-| 8 | **Quaternion Mandelbrot set** | Hypercomplex fractal | Complements the existing Quaternion Julia set with the connected parameter-space family | Distance estimation or sliced membership field | High |
-| 9 | **Kleinian group limit set** | Fractal geometry | Inversion-generated tunnels and recursive cavities can produce some of the richest explorable forms | Sphere inversions and distance estimation | High |
-| 10 | **ABC flow** | Dynamical flow | A true 3D incompressible flow with chaotic streamlines, islands, and transport barriers | Compute-integrated streamline families | Medium–high |
-| 11 | **Clifford torus stereographic projection** | 4D projection | A precise higher-dimensional object whose projected geometry changes meaningfully with orientation | Parametric mesh or line families | Medium |
-| 12 | **Icosahedral quasicrystal** | 6D cut-and-project structure | The mathematically appropriate 3D relative of Penrose tiling, with genuine quasiperiodic volume | Precomputed point/voxel field, instancing, or implicit approximation | Research |
+| 1 | **Gyroid** | Triply periodic minimal surface | A continuous labyrinth with no straight lines or mirror planes. Six trig operations, and the first model in the catalog with a navigable interior | Analytic implicit field, Lipschitz-normalised | Low |
+| 2 | **Schwarz D surface** | Triply periodic minimal surface | A highly connected diamond-like maze with strong volumetric presence; near-free once the gyroid evaluator exists | Same implicit path as the gyroid | Low |
+| 3 | **Kleinian group limit set** | Fractal geometry | Inversion-generated tunnels and recursive cavities, among the richest explorable forms available. The fold-and-sphere-inversion machinery is already proven here by three shipped estimators | Sphere inversions and distance estimation | Medium |
+| 4 | **Rössler attractor** | Chaotic system | An iconic folded spiral that contrasts clearly with Lorenz and Aizawa | Existing trajectory pipeline, unchanged | Low |
+| 5 | **Thomas attractor** | Chaotic system | Cyclic symmetry produces an unusually balanced, woven trajectory — the most visually distinct of the attractor candidates | Existing trajectory pipeline, unchanged | Low |
+| 6 | **Sierpiński tetrahedron / octahedral IFS** | Recursive solid | A tetrahedral symmetry group genuinely unlike the cube-based Menger sponge, for roughly ten lines of fold-and-scale | Fold-and-scale distance estimator | Low |
+| 7 | **Barth sextic** | Algebraic surface | Icosahedral symmetry and a large singular set make it immediately recognizable | Bounded polynomial implicit, Lipschitz-normalised | Medium |
+| 8 | **Kummer quartic** | Algebraic surface | Sixteen singular points, the maximum for a quartic; reuses the Barth path | Same implicit path as the Barth sextic | Medium |
+| 9 | **Ammann rhombohedral / icosahedral quasicrystal** | 6D cut-and-project structure | The mathematically appropriate 3D relative of the Penrose relief, and the construction that retires the "extruded 2D pattern" objection | de Bruijn cut-and-project lifted 6D→3D, generalising `dePenrose` | Medium–high |
+| 10 | **Hopf fibration** | Topology / 4D geometry | Interlocking circles filling space by a deep geometric construction | Instanced or indexed line geometry — needs a new pipeline | Medium |
+| 11 | **Quaternion Mandelbrot set** | Hypercomplex fractal | Complements the existing Quaternion Julia set with the connected parameter-space family | Distance estimation or sliced membership field | High |
+| 12 | **ABC flow** | Dynamical flow | A true 3D incompressible flow with chaotic streamlines, islands, and transport barriers | Compute-integrated streamline families | Medium–high |
+
+**Clifford torus stereographic projection** remains a good candidate but is grouped with the Hopf fibration: both wait on the same line-geometry pipeline work, and neither should precede it.
+
+## Renderer prerequisites
+
+Three pieces of infrastructure gate large parts of the catalog. Each is worth building deliberately once rather than improvised per model.
+
+### Interior navigation
+
+Every model shipped so far is a bounded object orbited from outside, and the camera reflects that: `CAM_RADIUS` is a per-model orbit distance about the origin. Triply periodic surfaces, Kleinian limit sets, and hyperbolic honeycombs are interiors — their whole value is being inside them, where an orbit radius is meaningless.
+
+This needs a fly-through camera mode: free position, look direction decoupled from the origin, and near-plane behaviour that tolerates being arbitrarily close to a surface. It is the single largest unlock in this document, and priorities 1–3 all depend on it.
+
+### Lipschitz normalisation for implicit fields
+
+An implicit field `f(p) = 0` is not a distance field. Sphere tracing on a raw `f` overshoots wherever the gradient exceeds one, which punches holes through thin structure. Both the minimal surfaces and the algebraic surfaces need `f / |∇f|` — or a conservative fixed divisor — plus a step-size safety factor.
+
+The Penrose relief already carries a hand-derived version of this (its returned distance is scaled to cover the relief's slope), so the concept is established in the codebase; what is missing is a reusable helper rather than a per-model constant.
+
+### Line and instanced geometry
+
+The attractor pipeline draws a single non-indexed line strip from one vertex buffer. The Hopf fibration, Clifford torus, polytope projections, and knot families all need many separate curves, which means instancing or indexed draws. This is genuine pipeline work and should not be attempted as a variation on the attractor path.
 
 ## Chaotic attractors and dynamical systems
 
@@ -196,6 +224,10 @@ Simple tubes alone are insufficient. Knot models should expose invariants, spann
 
 The failed Penrose Sponge experiment establishes an important rule: a 2D pattern extruded through a sphere does not become a convincing 3D quasicrystal. Future quasicrystal work should begin from a genuine 3D construction.
 
+That rule applies to the shipped Penrose relief as well. It is an honest P3 tiling — de Bruijn pentagrid, two levels of φ² inflation, phason drift — but it is a 2D tiling engraved on a disc, which is exactly the pattern the "models to avoid" list warns about. It earns its place as a correct implementation of the 2D construction and as working cut-and-project machinery, not as a 3D quasicrystal.
+
+The successor is a direct generalisation rather than open research. The relief's query inverts the de Bruijn map from a 5D lattice projected to 2D; an icosahedral quasicrystal is the same construction from a 6D lattice projected to 3D, using the six icosahedral star vectors. The structure of the code carries over, including the candidate-bracketing that makes the inverse map exact. The cost does grow substantially — tiles are dual to *triples* of grid hyperplanes rather than pairs, so the search goes from 10 pairs × 2 candidates to 20 triples × 8, and each candidate does more work. Treat it as expensive and well-understood, not speculative.
+
 ## Eigenfunctions, wave fields, and probability volumes
 
 | Candidate | Visual model |
@@ -226,46 +258,61 @@ The catalog should resist visually attractive ideas that lack enough mathematica
 
 ## Suggested implementation sequence
 
-### Phase 1 — Extend existing pipelines
+### Phase 0 — Establish a performance baseline
+
+Measure real frame rates for the existing eleven models across a low-end integrated GPU, a mid-range discrete GPU, and a phone. The Penrose relief in particular is the heaviest estimator in the set and has never been profiled on hardware.
+
+Everything below adds cost. Without a baseline there is no way to tell whether a new model is slow or the renderer already was, and no basis for deciding when to optimise instead of adding.
+
+### Phase 1 — Interior navigation and implicit labyrinths
+
+1. Fly-through camera mode (see *Renderer prerequisites*)
+2. Lipschitz-normalised implicit-field helper
+3. Gyroid
+4. Schwarz D
+5. Neovius
+
+This phase carries the largest single gain in the document: the first models the viewer can move through rather than around. The two infrastructure items come first because the surfaces are nearly trivial once they exist.
+
+### Phase 2 — Extend the existing trajectory pipeline
 
 1. Rössler attractor
 2. Thomas attractor
 3. Halvorsen attractor
 
-These reuse the trajectory renderer and establish a family-selection architecture.
+These reuse the trajectory renderer unchanged and establish a family-selection architecture. Low risk and quick, but they add variety rather than capability — worth slotting in around heavier work rather than blocking on.
 
-### Phase 2 — Add implicit labyrinths
+### Phase 3 — Inversion geometry and recursive solids
 
-1. Gyroid
-2. Schwarz D
-3. Neovius
+1. Kleinian group limit set
+2. Sierpiński tetrahedron and octahedral IFS variants
 
-These establish a reusable triply periodic implicit-surface renderer with clipping and wall-thickness controls.
+The Kleinian estimator is the strongest visual payoff on the roadmap and reuses inversion machinery already proven by the Apollonian, nested-pack, and ornate-planet estimators. It also benefits directly from the Phase 1 camera work.
 
-### Phase 3 — Add algebraic surfaces
+### Phase 4 — Algebraic surfaces
 
-1. Kummer quartic
-2. Barth sextic
+1. Barth sextic
+2. Kummer quartic
 3. Cayley cubic
 
-These establish polynomial evaluation, bounded raymarching, singularity handling, and equation-aware presets.
+These reuse the Phase 1 implicit path and add polynomial evaluation, bounded raymarching, singularity handling, and equation-aware presets.
 
-### Phase 4 — Add higher-dimensional structures
+### Phase 5 — Line-geometry pipeline and higher-dimensional structures
 
-1. Hopf fibration
-2. Clifford torus stereographic projection
-3. 24-cell projection
+1. Instanced or indexed line-geometry pipeline (see *Renderer prerequisites*)
+2. Hopf fibration
+3. Clifford torus stereographic projection
+4. 24-cell projection
 
-These establish 4D rotation, projection, and generated-geometry controls.
+These establish 4D rotation, projection, and generated-geometry controls on top of the new pipeline.
 
-### Phase 5 — Research-grade models
+### Phase 6 — Research-grade models
 
-1. Quaternion Mandelbrot set
-2. Kleinian group limit set
-3. Icosahedral quasicrystal
-4. Hyperbolic honeycomb
+1. Icosahedral quasicrystal / Ammann rhombohedral tiling
+2. Quaternion Mandelbrot set
+3. Hyperbolic honeycomb
 
-These should be prototyped separately and admitted to the main model list only after they are visually convincing, mathematically faithful, and scalable across devices.
+These should be prototyped separately and admitted to the main model list only after they are visually convincing, mathematically faithful, and scalable across devices. The quasicrystal is the best understood of the three, being a dimensional lift of code already in the repository.
 
 ## Candidate evaluation record
 
@@ -280,3 +327,9 @@ Before implementation, each proposed model should receive a short design note co
 - visual reference target;
 - mathematical validation method;
 - reason it adds something distinct to the existing catalog.
+
+Two of these deserve more weight than the rest, because both have already caused problems in this repository.
+
+**Mathematical validation should be settled before any shader is written.** The Penrose relief was validated by implementing the construction on CPU first and rendering it to an image, which surfaced a candidate-search flaw leaving 3.2% of the plane untiled — invisible in a description, obvious in a picture. Prototype the mathematics in whatever language is convenient, look at the output, and only then port.
+
+**Measured cost should replace expected cost.** Record a real frame rate on at least one low-end device against the Phase 0 baseline. An estimate written during design is not evidence, and a model whose cost is still unmeasured should not be described as shipped.
