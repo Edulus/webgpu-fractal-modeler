@@ -32,10 +32,11 @@ The renderer already includes, in menu order, matching `FRACTAL_IDS` in `src/fra
 - Studded surface packing
 - Penrose quasicrystal relief
 - Gyroid (Schoen's triply periodic minimal surface)
+- Kleinian limit set
 - Aizawa attractor
 - Lorenz attractor
 
-All twelve are reachable from the demo's model selector. The first ten are
+All thirteen are reachable from the demo's model selector. The first eleven are
 distance-estimated surfaces sharing the raymarch pass; the two attractors are
 line geometry drawn by a second pipeline.
 
@@ -63,16 +64,15 @@ The ordering below applies three tie-breakers, in this order:
 | Priority | Model | Family | Why it belongs | Likely rendering route | Cost |
 | --- | --- | --- | --- | --- | --- |
 | 1 | **Schwarz D surface** | Triply periodic minimal surface | A highly connected diamond-like maze with strong volumetric presence; near-free once the gyroid evaluator exists | Same implicit path as the gyroid | Low |
-| 2 | **Kleinian group limit set** | Fractal geometry | Inversion-generated tunnels and recursive cavities, among the richest explorable forms available. The fold-and-sphere-inversion machinery is already proven here by three shipped estimators | Sphere inversions and distance estimation | Medium |
-| 3 | **Rössler attractor** | Chaotic system | An iconic folded spiral that contrasts clearly with Lorenz and Aizawa | Existing trajectory pipeline, unchanged | Low |
-| 4 | **Thomas attractor** | Chaotic system | Cyclic symmetry produces an unusually balanced, woven trajectory — the most visually distinct of the attractor candidates | Existing trajectory pipeline, unchanged | Low |
-| 5 | **Sierpiński tetrahedron / octahedral IFS** | Recursive solid | A tetrahedral symmetry group genuinely unlike the cube-based Menger sponge, for roughly ten lines of fold-and-scale | Fold-and-scale distance estimator | Low |
-| 6 | **Barth sextic** | Algebraic surface | Icosahedral symmetry and a large singular set make it immediately recognizable | Bounded polynomial implicit, Lipschitz-normalised | Medium |
-| 7 | **Kummer quartic** | Algebraic surface | Sixteen singular points, the maximum for a quartic; reuses the Barth path | Same implicit path as the Barth sextic | Medium |
-| 8 | **Ammann rhombohedral / icosahedral quasicrystal** | 6D cut-and-project structure | The mathematically appropriate 3D relative of the Penrose relief, and the construction that retires the "extruded 2D pattern" objection | de Bruijn cut-and-project lifted 6D→3D, generalising `dePenrose` | Medium–high |
-| 9 | **Hopf fibration** | Topology / 4D geometry | Interlocking circles filling space by a deep geometric construction | Instanced or indexed line geometry — needs a new pipeline | Medium |
-| 10 | **Quaternion Mandelbrot set** | Hypercomplex fractal | Complements the existing Quaternion Julia set with the connected parameter-space family | Distance estimation or sliced membership field | High |
-| 11 | **ABC flow** | Dynamical flow | A true 3D incompressible flow with chaotic streamlines, islands, and transport barriers | Compute-integrated streamline families | Medium–high |
+| 2 | **Rössler attractor** | Chaotic system | An iconic folded spiral that contrasts clearly with Lorenz and Aizawa | Existing trajectory pipeline, unchanged | Low |
+| 3 | **Thomas attractor** | Chaotic system | Cyclic symmetry produces an unusually balanced, woven trajectory — the most visually distinct of the attractor candidates | Existing trajectory pipeline, unchanged | Low |
+| 4 | **Sierpiński tetrahedron / octahedral IFS** | Recursive solid | A tetrahedral symmetry group genuinely unlike the cube-based Menger sponge, for roughly ten lines of fold-and-scale | Fold-and-scale distance estimator | Low |
+| 5 | **Barth sextic** | Algebraic surface | Icosahedral symmetry and a large singular set make it immediately recognizable | Bounded polynomial implicit, Lipschitz-normalised | Medium |
+| 6 | **Kummer quartic** | Algebraic surface | Sixteen singular points, the maximum for a quartic; reuses the Barth path | Same implicit path as the Barth sextic | Medium |
+| 7 | **Ammann rhombohedral / icosahedral quasicrystal** | 6D cut-and-project structure | The mathematically appropriate 3D relative of the Penrose relief, and the construction that retires the "extruded 2D pattern" objection | de Bruijn cut-and-project lifted 6D→3D, generalising `dePenrose` | Medium–high |
+| 8 | **Hopf fibration** | Topology / 4D geometry | Interlocking circles filling space by a deep geometric construction | Instanced or indexed line geometry — needs a new pipeline | Medium |
+| 9 | **Quaternion Mandelbrot set** | Hypercomplex fractal | Complements the existing Quaternion Julia set with the connected parameter-space family | Distance estimation or sliced membership field | High |
+| 10 | **ABC flow** | Dynamical flow | A true 3D incompressible flow with chaotic streamlines, islands, and transport barriers | Compute-integrated streamline families | Medium–high |
 
 **Clifford torus stereographic projection** remains a good candidate but is grouped with the Hopf fibration: both wait on the same line-geometry pipeline work, and neither should precede it.
 
@@ -86,7 +86,9 @@ Every model shipped so far is a bounded object orbited from outside, and the cam
 
 This needs a fly-through camera mode: free position, look direction decoupled from the origin, and near-plane behaviour that tolerates being arbitrarily close to a surface. It is the single largest unlock in this document.
 
-The shipped gyroid shows both the need and the workaround: it is clipped to a ball so the existing orbit camera has something bounded to circle, which opens its channels to view but discards the interior that is the whole point of a triply periodic surface. Schwarz D and the Kleinian limit sets will hit exactly the same ceiling.
+Two shipped models now show both the need and the workaround. The gyroid is clipped to a ball so the existing orbit camera has something bounded to circle, which opens its channels to view but discards the interior that is the whole point of a triply periodic surface. The Kleinian limit set is clipped the same way, and loses more by it — its recursive cavities are the structure. Schwarz D will make three.
+
+The pattern is now clear enough to state as a rule: every interior model added before the camera exists ships at a fraction of its value, and each one added raises the cost of the eventual retrofit.
 
 ### Lipschitz normalisation for implicit fields
 
@@ -286,10 +288,12 @@ These reuse the trajectory renderer unchanged and establish a family-selection a
 
 ### Phase 3 — Inversion geometry and recursive solids
 
-1. Kleinian group limit set
+1. ~~Kleinian group limit set~~ — **shipped**, ball-clipped like the gyroid
 2. Sierpiński tetrahedron and octahedral IFS variants
 
-The Kleinian estimator is the strongest visual payoff on the roadmap and reuses inversion machinery already proven by the Apollonian, nested-pack, and ornate-planet estimators. It also benefits directly from the Phase 1 camera work.
+The Kleinian estimator did reuse the inversion machinery proven by the Apollonian, nested-pack, and ornate-planet estimators, and cost far less than its "high" rating suggested. What it did not escape is the camera: it is clipped to a ball for the same reason the gyroid is, and its recursive cavities are exactly the kind of interior the orbit camera cannot enter.
+
+It also produced a reusable lesson recorded below — parameter sets for inversion groups have to be chosen by rendering, not by reference.
 
 ### Phase 4 — Algebraic surfaces
 
@@ -331,6 +335,8 @@ Before implementation, each proposed model should receive a short design note co
 - reason it adds something distinct to the existing catalog.
 
 Two of these deserve more weight than the rest, because both have already caused problems in this repository.
+
+**Parameter sets for iterated constructions must be chosen by rendering, not adopted from a reference.** The Kleinian estimator needed three sweeps: of the first four plausible parameter sets, three collapsed into featureless lobes, and at the chosen set the final primitive alone decided whether the surface read as tangent spheres or as granular noise. Budget for a sweep rather than a single attempt, and judge it at a realistic resolution — fine structure under-resolves and misleads at thumbnail size.
 
 **Mathematical validation should be settled before any shader is written.** The Penrose relief was validated by implementing the construction on CPU first and rendering it to an image, which surfaced a candidate-search flaw leaving 3.2% of the plane untiled — invisible in a description, obvious in a picture. Prototype the mathematics in whatever language is convenient, look at the output, and only then port.
 

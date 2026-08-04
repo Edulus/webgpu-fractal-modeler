@@ -30,6 +30,7 @@ No Three.js, no Babylon, no build step, and no npm. Just ES modules, WGSL, and H
 - Studded surface packing
 - Penrose quasicrystal tiling
 - Gyroid minimal surface
+- Kleinian limit set
 - Aizawa strange attractor
 - Lorenz strange attractor
 
@@ -115,7 +116,7 @@ Recommended canvas CSS:
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `fractal` | string | `'mandelbulb'` | `'mandelbulb'`, `'mandelbox'`, `'menger'`, `'julia'`, `'apollonian'`, `'spherepack'`, `'encrusted'`, `'surfacepack'`, `'penrose'`, `'gyroid'`, `'attractor'`, or `'lorenz'` |
+| `fractal` | string | `'mandelbulb'` | `'mandelbulb'`, `'mandelbox'`, `'menger'`, `'julia'`, `'apollonian'`, `'spherepack'`, `'encrusted'`, `'surfacepack'`, `'penrose'`, `'gyroid'`, `'kleinian'`, `'attractor'`, or `'lorenz'` |
 | `palette` | string | `'aurora'` | `'aurora'`, `'ember'`, `'oil-slick'`, `'mono-ice'`, or `'iridescence'` |
 | `quality` | string | `'auto'` | `'low'`, `'medium'`, `'high'`, or adaptive `'auto'` |
 | `transparent` | boolean | `true` | Premultiplied transparency over the page or an opaque gradient presentation background |
@@ -173,8 +174,17 @@ Uniforms occupy one 160-byte, 16-byte-aligned buffer. The byte offsets are mirro
 - **Studded surface pack:** three scales of repeated cells containing discrete, hash-sized spheres clipped to a shell around a solid core
 - **Penrose quasicrystal:** a true P3 rhombus tiling engraved into a disc at two levels of its inflation hierarchy
 - **Gyroid:** Schoen's triply periodic minimal surface, clipped to a ball
+- **Kleinian limit set:** box fold and conditional sphere inversion generating a discrete group's accumulation set
 
 All shader loops are statically bounded for WGSL portability, with guarded logarithm, power, radius, and inversion domains.
+
+#### Kleinian limit set
+
+A Kleinian group is a discrete group of Möbius transformations, and its limit set is the fractal set of accumulation points its orbits pile up on. The estimator generates one from two moves iterated together: a box fold reflecting a point back into the fundamental domain of a translation lattice, and an inversion in a sphere that fires only for points already inside it. The accumulated inversion factor carries the final primitive's distance back to world scale — the same fold-and-invert machinery as the Apollonian estimator, with a clamp fold instead of a modulo fold and a conditional inversion instead of an unconditional one.
+
+The smooth caps in the result are not an artefact: they are the group's tangent spheres, with recursive filigree running along the ridges where they meet. Slowly drifting the inversion radius walks the construction through a family of nearby Kleinian groups, morphing the limit set within a narrow band — the structure degenerates quickly outside it.
+
+Parameters came from rendering candidates rather than from a reference. The construction is sharply sensitive to them: of the first four published-looking parameter sets tried, three collapsed into featureless lobes, and swapping the final primitive alone was enough to turn the surface from tangent spheres into granular noise.
 
 #### Gyroid
 
