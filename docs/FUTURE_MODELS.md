@@ -22,15 +22,23 @@ Lorenz and Aizawa attractors are curves rather than solids, but they remain full
 
 The renderer already includes:
 
+Listed in menu order, matching `FRACTAL_IDS` in `src/fractal-bg.js`:
+
 - Mandelbulb
 - Mandelbox
 - Menger sponge
 - Quaternion Julia set
 - Apollonian sphere packing
 - Nested sphere packing
+- Ornate planet with a polar bloom
+- Studded surface packing
 - Penrose quasicrystal relief
 - Aizawa attractor
 - Lorenz attractor
+
+All eleven are reachable from the demo's model selector. The first nine are
+distance-estimated surfaces sharing the raymarch pass; the two attractors are
+line geometry drawn by a second pipeline.
 
 ## Selection criteria
 
