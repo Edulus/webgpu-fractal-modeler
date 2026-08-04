@@ -26,7 +26,7 @@ jobs:
           grep -q "performanceTier: 39" src/fractal-bg.js
           grep -q "activeMarchSteps = select(56, 88" src/shaders/fractal.wgsl.js
           grep -q "two Penrose projections" README.md
-          grep -q "low complexity" index.html
+          grep -q "performanceTier" index.html
 
       - name: Commit implementation and remove one-time tools
         run: |
