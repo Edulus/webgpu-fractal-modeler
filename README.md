@@ -186,9 +186,9 @@ A Penrose tiling inflated by φ² is another Penrose tiling on the same five dir
 
 #### Penrose sponge
 
-The volumetric model evaluates independently phased Penrose tilings on the XY, YZ, and ZX planes. Each tile-edge field is extruded through the host volume, and the pairwise intersections of those sheets become branching tunnels. The same construction runs again at the φ² parent scale, producing broad passages that contain a finer self-similar network.
+The volumetric model uses device-scaled workloads. Low-tier devices evaluate two Penrose projections to form a lightweight family of volumetric tunnels. Medium-tier devices add the third projection and its branching pairwise intersections. High-tier devices also evaluate all three projections at the φ² parent scale, restoring the broad passages and fine self-similar network together.
 
-A spherical host keeps the first implementation compact and fully explorable from every direction. The tunnels reach the exterior, exposing internal chambers and passages as the camera orbits and zooms. Phason drift changes all three quasicrystalline fields over time while preserving valid Penrose structure. Because this estimator performs six pentagrid queries per distance sample, its soft-shadow and ambient-occlusion sample counts are reduced specifically for this model.
+A spherical host keeps the model compact and explorable from every direction. The renderer classifies the device from pointer type, memory, logical cores, and physical pixel count, then watches live FPS. Sustained slow rendering lowers geometric complexity before reducing resolution; the low tier also disables Penrose shadows and ambient occlusion, limits march steps, and targets roughly 20 fps. This allows the same model to range from a mobile-safe approximation to the complete six-query hierarchy.
 
 ### Strange attractors
 
@@ -212,7 +212,7 @@ Available presets:
 
 ## Adaptive quality
 
-Adaptive mode uses a rolling FPS estimate to adjust internal rendering resolution and raymarch epsilon. Hysteresis prevents constant quality changes. Coarse-pointer and small-viewport devices begin at a lower tier, while explicit quality settings pin the scale.
+Adaptive mode uses a rolling FPS estimate to adjust internal rendering resolution and raymarch epsilon. Hysteresis prevents constant quality changes. Penrose Sponge additionally selects low, medium, or high geometric complexity from device characteristics and can downgrade that complexity after sustained slow frames. Explicit quality settings remain subject to the model's device-safe resolution cap.
 
 ## Lifecycle and battery behaviour
 

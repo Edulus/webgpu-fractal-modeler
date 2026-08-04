@@ -375,9 +375,11 @@
       const names = ['mandelbulb', 'mandelbox', 'menger', 'julia', 'apollonian',
         'spherepack', 'encrusted', 'surfacepack', 'penrose', 'penrose-sponge',
         'attractor', 'lorenz'];
+      const tiers = ['low', 'medium', 'high'];
       setInterval(() => {
         const i = handle.info;
         hud.textContent = `${names[i.fractalType]} · q${i.qualityScale} · ${i.fps}fps` +
+          (i.fractalType === 9 ? ` · ${tiers[i.performanceTier]} complexity` : '') +
           (i.explorer ? ` · ${i.zoom}×` : '') +
           (i.reducedMotion ? ' · reduced-motion' : '');
       }, 500);

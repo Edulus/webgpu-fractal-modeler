@@ -36,7 +36,7 @@ export const FRACTAL_WGSL = /* wgsl */ `
 //   144 qualityScale : f32
 //   148 bgMode       : f32   (0 = transparent, 1 = gradient background)
 //   152 reducedMotion: f32
-//   156 _pad         : f32
+//   156 performanceTier: f32 (0=low, 1=medium, 2=high)
 //   160 viewProj     : mat4x4<f32>  (attractor line rasterization)
 struct Uniforms {
   resolution : vec2<f32>,
@@ -61,7 +61,7 @@ struct Uniforms {
   qualityScale : f32,
   bgMode       : f32,
   reducedMotion: f32,
-  _pad         : f32,
+  performanceTier: f32,
   viewProj     : mat4x4<f32>,
 };
 
@@ -683,23 +683,20 @@ fn dePenroseSponge(pos : vec3<f32>) -> DEResult {
 
   let host = length(pos) - R;
   var res : DEResult;
-
-  // The tunnels only remove material, so outside the host sphere its exact
-  // distance is a safe early-out that avoids all six Penrose queries.
   if (host > 0.12) {
     res.dist = host;
     res.trap = 0.28;
     return res;
   }
 
-  let tm = select(u.time, 0.0, u.reducedMotion > 0.5);
+  let tier = clamp(u.performanceTier, 0.0, 2.0);
+  let animatePhason = tier > 0.5 && u.reducedMotion < 0.5;
+  let tm = select(0.0, u.time, animatePhason);
   let drift = 0.075 * vec2<f32>(cos(tm * 0.041), sin(tm * 0.037));
   let phXY = drift;
   let phYZ = vec2<f32>(drift.y, -drift.x) + vec2<f32>(0.11, -0.07);
   let phZX = vec2<f32>(-drift.x - drift.y, drift.x) + vec2<f32>(-0.08, 0.13);
 
-  // Small in-plane rotations keep the three extrusions from sharing obvious
-  // axial seams while preserving their mutually perpendicular carrier planes.
   let qXY = vec2<f32>(
     0.98480775 * pos.x - 0.17364818 * pos.y,
     0.17364818 * pos.x + 0.98480775 * pos.y) / SCALE;
@@ -710,38 +707,54 @@ fn dePenroseSponge(pos : vec3<f32>) -> DEResult {
     0.81915204 * pos.z + 0.57357644 * pos.x,
    -0.57357644 * pos.z + 0.81915204 * pos.x) / SCALE;
 
+  // Low tier: two Penrose projections form one family of volumetric tunnels.
+  // Medium adds the third projection and its branching pairwise intersections.
+  // High repeats all three at phi^2, restoring the full hierarchy.
   let childXY = penroseQuery(qXY, phXY);
   let childYZ = penroseQuery(qYZ, phYZ);
-  let childZX = penroseQuery(qZX, phZX);
-  let parentXY = penroseQuery(qXY / PHI2, phXY);
-  let parentYZ = penroseQuery(qYZ / PHI2, phYZ);
-  let parentZX = penroseQuery(qZX / PHI2, phZX);
-
   let edgeXY = max(-childXY.sdf, 0.0) * SCALE;
   let edgeYZ = max(-childYZ.sdf, 0.0) * SCALE;
-  let edgeZX = max(-childZX.sdf, 0.0) * SCALE;
-  let parentEdgeXY = max(-parentXY.sdf, 0.0) * SCALE * PHI2;
-  let parentEdgeYZ = max(-parentYZ.sdf, 0.0) * SCALE * PHI2;
-  let parentEdgeZX = max(-parentZX.sdf, 0.0) * SCALE * PHI2;
 
-  let fineTunnels = penroseTunnelNetwork(edgeXY, edgeYZ, edgeZX, FINE_W);
-  let parentTunnels = penroseTunnelNetwork(
-    parentEdgeXY, parentEdgeYZ, parentEdgeZX, PARENT_W);
-  let tunnels = min(fineTunnels, parentTunnels);
+  var fineTunnels = max(edgeXY - FINE_W, edgeYZ - FINE_W);
+  var kindMix = 0.5 * (childXY.kind + childYZ.kind);
+  var perpMix = clamp(
+    (length(childXY.perp) + length(childYZ.perp)) / 6.0, 0.0, 1.0);
 
-  // Signed-distance subtraction: retain the sphere while removing the union of
-  // the fine and parent tunnel networks. The scale factor is conservative for
-  // the combined projected fields and stabilizes sphere tracing near junctions.
-  res.dist = max(host, -tunnels) * 0.38;
+  if (tier > 0.5) {
+    let childZX = penroseQuery(qZX, phZX);
+    let edgeZX = max(-childZX.sdf, 0.0) * SCALE;
+    fineTunnels = penroseTunnelNetwork(edgeXY, edgeYZ, edgeZX, FINE_W);
+    kindMix = (childXY.kind + childYZ.kind + childZX.kind) / 3.0;
+    perpMix = clamp(
+      (length(childXY.perp) + length(childYZ.perp) + length(childZX.perp)) / 9.0,
+      0.0, 1.0);
+  }
 
-  let kindMix = (childXY.kind + childYZ.kind + childZX.kind) / 3.0;
-  let perpMix = clamp(
-    (length(parentXY.perp) + length(parentYZ.perp) + length(parentZX.perp)) / 9.0,
-    0.0, 1.0);
-  let hierarchy = clamp(
-    1.0 - min(parentEdgeXY, min(parentEdgeYZ, parentEdgeZX)) / PARENT_W,
-    0.0, 1.0);
-  res.trap = 0.10 + 0.34 * kindMix + 0.28 * perpMix + 0.22 * hierarchy;
+  var tunnels = fineTunnels;
+  var hierarchy = 0.0;
+  if (tier > 1.5) {
+    let parentXY = penroseQuery(qXY / PHI2, phXY);
+    let parentYZ = penroseQuery(qYZ / PHI2, phYZ);
+    let parentZX = penroseQuery(qZX / PHI2, phZX);
+    let parentEdgeXY = max(-parentXY.sdf, 0.0) * SCALE * PHI2;
+    let parentEdgeYZ = max(-parentYZ.sdf, 0.0) * SCALE * PHI2;
+    let parentEdgeZX = max(-parentZX.sdf, 0.0) * SCALE * PHI2;
+    let parentTunnels = penroseTunnelNetwork(
+      parentEdgeXY, parentEdgeYZ, parentEdgeZX, PARENT_W);
+    tunnels = min(tunnels, parentTunnels);
+    let parentPerp = clamp(
+      (length(parentXY.perp) + length(parentYZ.perp) + length(parentZX.perp)) / 9.0,
+      0.0, 1.0);
+    perpMix = mix(perpMix, parentPerp, 0.65);
+    hierarchy = clamp(
+      1.0 - min(parentEdgeXY, min(parentEdgeYZ, parentEdgeZX)) / PARENT_W,
+      0.0, 1.0);
+  }
+
+  var safety = select(0.31, 0.35, tier > 0.5);
+  if (tier > 1.5) { safety = 0.38; }
+  res.dist = max(host, -tunnels) * safety;
+  res.trap = 0.10 + 0.38 * kindMix + 0.30 * perpMix + 0.22 * hierarchy;
   return res;
 }
 
@@ -790,7 +803,11 @@ fn softShadow(ro : vec3<f32>, rd : vec3<f32>, kSoft : f32) -> f32 {
   var res = 1.0;
   var t = 0.02;
   const SH_STEPS : i32 = 40;
-  let activeSteps = select(40, 18, u.fractalType > 8.5 && u.fractalType < 9.5);
+  var activeSteps = 40;
+  if (u.fractalType > 8.5 && u.fractalType < 9.5) {
+    activeSteps = select(0, 8, u.performanceTier > 0.5);
+    if (u.performanceTier > 1.5) { activeSteps = 14; }
+  }
   for (var i = 0; i < SH_STEPS; i = i + 1) {
     if (i >= activeSteps) { break; }
     let h = mapDist(ro + rd * t);
@@ -807,7 +824,11 @@ fn calcAO(p : vec3<f32>, n : vec3<f32>) -> f32 {
   var occ = 0.0;
   var sca = 1.0;
   const AO_STEPS : i32 = 5;
-  let activeSteps = select(5, 3, u.fractalType > 8.5 && u.fractalType < 9.5);
+  var activeSteps = 5;
+  if (u.fractalType > 8.5 && u.fractalType < 9.5) {
+    activeSteps = select(0, 2, u.performanceTier > 0.5);
+    if (u.performanceTier > 1.5) { activeSteps = 3; }
+  }
   for (var i = 0; i < AO_STEPS; i = i + 1) {
     if (i >= activeSteps) { break; }
     let hr = 0.01 + 0.14 * f32(i) / 4.0;
@@ -864,6 +885,12 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // Adaptive epsilon: coarser when quality is low.
   let epsScale = mix(2.5, 1.0, clamp(u.qualityScale, 0.0, 1.0));
   let hitEps = BASE_EPS * epsScale;
+  let sponge = u.fractalType > 8.5 && u.fractalType < 9.5;
+  var activeMarchSteps = MAX_STEPS;
+  if (sponge) {
+    activeMarchSteps = select(56, 88, u.performanceTier > 0.5);
+    if (u.performanceTier > 1.5) { activeMarchSteps = 128; }
+  }
 
   var t = 0.05;
   var hit = false;
@@ -872,13 +899,16 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
 
   // Sphere tracing with a small relaxation factor and glow from near-misses.
   for (var i = 0; i < MAX_STEPS; i = i + 1) {
+    if (i >= activeMarchSteps) { break; }
     let pos = ro + rd * t;
     let de = mapDE(pos);
     let d = de.dist;
 
-    // Accumulate glow: how close we passed to the surface, weighted by 1/dist.
-    let near = exp(-d * 42.0);
-    glow = glow + near / (1.0 + t * t * 0.35);
+    // Skip the exponential near-miss glow on the lowest mobile tier.
+    if (!sponge || u.performanceTier > 0.5) {
+      let near = exp(-d * 42.0);
+      glow = glow + near / (1.0 + t * t * 0.35);
+    }
 
     let hitThresh = hitEps * t; // scale epsilon with distance for stable hits
     if (d < hitThresh) {
