@@ -20,9 +20,7 @@ Lorenz and Aizawa attractors are curves rather than solids, but they remain full
 
 ## Current baseline
 
-The renderer already includes:
-
-Listed in menu order, matching `FRACTAL_IDS` in `src/fractal-bg.js`:
+The renderer already includes, in menu order, matching `FRACTAL_IDS` in `src/fractal-bg.js`:
 
 - Mandelbulb
 - Mandelbox
@@ -33,10 +31,11 @@ Listed in menu order, matching `FRACTAL_IDS` in `src/fractal-bg.js`:
 - Ornate planet with a polar bloom
 - Studded surface packing
 - Penrose quasicrystal relief
+- Gyroid (Schoen's triply periodic minimal surface)
 - Aizawa attractor
 - Lorenz attractor
 
-All eleven are reachable from the demo's model selector. The first nine are
+All twelve are reachable from the demo's model selector. The first ten are
 distance-estimated surfaces sharing the raymarch pass; the two attractors are
 line geometry drawn by a second pipeline.
 
@@ -63,18 +62,17 @@ The ordering below applies three tie-breakers, in this order:
 
 | Priority | Model | Family | Why it belongs | Likely rendering route | Cost |
 | --- | --- | --- | --- | --- | --- |
-| 1 | **Gyroid** | Triply periodic minimal surface | A continuous labyrinth with no straight lines or mirror planes. Six trig operations, and the first model in the catalog with a navigable interior | Analytic implicit field, Lipschitz-normalised | Low |
-| 2 | **Schwarz D surface** | Triply periodic minimal surface | A highly connected diamond-like maze with strong volumetric presence; near-free once the gyroid evaluator exists | Same implicit path as the gyroid | Low |
-| 3 | **Kleinian group limit set** | Fractal geometry | Inversion-generated tunnels and recursive cavities, among the richest explorable forms available. The fold-and-sphere-inversion machinery is already proven here by three shipped estimators | Sphere inversions and distance estimation | Medium |
-| 4 | **Rössler attractor** | Chaotic system | An iconic folded spiral that contrasts clearly with Lorenz and Aizawa | Existing trajectory pipeline, unchanged | Low |
-| 5 | **Thomas attractor** | Chaotic system | Cyclic symmetry produces an unusually balanced, woven trajectory — the most visually distinct of the attractor candidates | Existing trajectory pipeline, unchanged | Low |
-| 6 | **Sierpiński tetrahedron / octahedral IFS** | Recursive solid | A tetrahedral symmetry group genuinely unlike the cube-based Menger sponge, for roughly ten lines of fold-and-scale | Fold-and-scale distance estimator | Low |
-| 7 | **Barth sextic** | Algebraic surface | Icosahedral symmetry and a large singular set make it immediately recognizable | Bounded polynomial implicit, Lipschitz-normalised | Medium |
-| 8 | **Kummer quartic** | Algebraic surface | Sixteen singular points, the maximum for a quartic; reuses the Barth path | Same implicit path as the Barth sextic | Medium |
-| 9 | **Ammann rhombohedral / icosahedral quasicrystal** | 6D cut-and-project structure | The mathematically appropriate 3D relative of the Penrose relief, and the construction that retires the "extruded 2D pattern" objection | de Bruijn cut-and-project lifted 6D→3D, generalising `dePenrose` | Medium–high |
-| 10 | **Hopf fibration** | Topology / 4D geometry | Interlocking circles filling space by a deep geometric construction | Instanced or indexed line geometry — needs a new pipeline | Medium |
-| 11 | **Quaternion Mandelbrot set** | Hypercomplex fractal | Complements the existing Quaternion Julia set with the connected parameter-space family | Distance estimation or sliced membership field | High |
-| 12 | **ABC flow** | Dynamical flow | A true 3D incompressible flow with chaotic streamlines, islands, and transport barriers | Compute-integrated streamline families | Medium–high |
+| 1 | **Schwarz D surface** | Triply periodic minimal surface | A highly connected diamond-like maze with strong volumetric presence; near-free once the gyroid evaluator exists | Same implicit path as the gyroid | Low |
+| 2 | **Kleinian group limit set** | Fractal geometry | Inversion-generated tunnels and recursive cavities, among the richest explorable forms available. The fold-and-sphere-inversion machinery is already proven here by three shipped estimators | Sphere inversions and distance estimation | Medium |
+| 3 | **Rössler attractor** | Chaotic system | An iconic folded spiral that contrasts clearly with Lorenz and Aizawa | Existing trajectory pipeline, unchanged | Low |
+| 4 | **Thomas attractor** | Chaotic system | Cyclic symmetry produces an unusually balanced, woven trajectory — the most visually distinct of the attractor candidates | Existing trajectory pipeline, unchanged | Low |
+| 5 | **Sierpiński tetrahedron / octahedral IFS** | Recursive solid | A tetrahedral symmetry group genuinely unlike the cube-based Menger sponge, for roughly ten lines of fold-and-scale | Fold-and-scale distance estimator | Low |
+| 6 | **Barth sextic** | Algebraic surface | Icosahedral symmetry and a large singular set make it immediately recognizable | Bounded polynomial implicit, Lipschitz-normalised | Medium |
+| 7 | **Kummer quartic** | Algebraic surface | Sixteen singular points, the maximum for a quartic; reuses the Barth path | Same implicit path as the Barth sextic | Medium |
+| 8 | **Ammann rhombohedral / icosahedral quasicrystal** | 6D cut-and-project structure | The mathematically appropriate 3D relative of the Penrose relief, and the construction that retires the "extruded 2D pattern" objection | de Bruijn cut-and-project lifted 6D→3D, generalising `dePenrose` | Medium–high |
+| 9 | **Hopf fibration** | Topology / 4D geometry | Interlocking circles filling space by a deep geometric construction | Instanced or indexed line geometry — needs a new pipeline | Medium |
+| 10 | **Quaternion Mandelbrot set** | Hypercomplex fractal | Complements the existing Quaternion Julia set with the connected parameter-space family | Distance estimation or sliced membership field | High |
+| 11 | **ABC flow** | Dynamical flow | A true 3D incompressible flow with chaotic streamlines, islands, and transport barriers | Compute-integrated streamline families | Medium–high |
 
 **Clifford torus stereographic projection** remains a good candidate but is grouped with the Hopf fibration: both wait on the same line-geometry pipeline work, and neither should precede it.
 
@@ -86,13 +84,17 @@ Three pieces of infrastructure gate large parts of the catalog. Each is worth bu
 
 Every model shipped so far is a bounded object orbited from outside, and the camera reflects that: `CAM_RADIUS` is a per-model orbit distance about the origin. Triply periodic surfaces, Kleinian limit sets, and hyperbolic honeycombs are interiors — their whole value is being inside them, where an orbit radius is meaningless.
 
-This needs a fly-through camera mode: free position, look direction decoupled from the origin, and near-plane behaviour that tolerates being arbitrarily close to a surface. It is the single largest unlock in this document, and priorities 1–3 all depend on it.
+This needs a fly-through camera mode: free position, look direction decoupled from the origin, and near-plane behaviour that tolerates being arbitrarily close to a surface. It is the single largest unlock in this document.
+
+The shipped gyroid shows both the need and the workaround: it is clipped to a ball so the existing orbit camera has something bounded to circle, which opens its channels to view but discards the interior that is the whole point of a triply periodic surface. Schwarz D and the Kleinian limit sets will hit exactly the same ceiling.
 
 ### Lipschitz normalisation for implicit fields
 
-An implicit field `f(p) = 0` is not a distance field. Sphere tracing on a raw `f` overshoots wherever the gradient exceeds one, which punches holes through thin structure. Both the minimal surfaces and the algebraic surfaces need `f / |∇f|` — or a conservative fixed divisor — plus a step-size safety factor.
+An implicit field `f(p) = 0` is not a distance field. Sphere tracing on a raw `f` overshoots wherever the gradient exceeds one, which punches holes through thin structure.
 
-The Penrose relief already carries a hand-derived version of this (its returned distance is scaled to cover the relief's slope), so the concept is established in the codebase; what is missing is a reusable helper rather than a per-model constant.
+The gyroid settles the question of which remedy to prefer. Dividing by the analytic gradient is the textbook answer and is wrong here: `|∇f|` bottoms out at `0.035` at the field's critical points, and dividing by that inflates a step roughly fiftyfold. Dividing by a **global bound on the gradient** is safe, needs no empirical safety factor, and is cheaper — no gradient, no square root. For the gyroid that bound is exactly √3, confirmed by sampling a full period at 729,000 points, and it costs only 1.26× more marching steps than an exact gradient would need at the surface.
+
+So the reusable helper should take a per-model Lipschitz constant rather than compute a gradient. Each new implicit surface needs that constant established by measurement — sample a full period or a bounding region, take the maximum gradient magnitude, and confirm nothing exceeds it. The algebraic surfaces will need the same treatment, with the added wrinkle that polynomials are unbounded, so the constant must be derived over the clipping region rather than globally.
 
 ### Line and instanced geometry
 
@@ -266,13 +268,13 @@ Everything below adds cost. Without a baseline there is no way to tell whether a
 
 ### Phase 1 — Interior navigation and implicit labyrinths
 
-1. Fly-through camera mode (see *Renderer prerequisites*)
-2. Lipschitz-normalised implicit-field helper
-3. Gyroid
-4. Schwarz D
-5. Neovius
+1. ~~Gyroid~~ — **shipped**, clipped to a ball as an interim measure
+2. Fly-through camera mode (see *Renderer prerequisites*)
+3. Schwarz D
+4. Neovius
+5. Lipschitz-constant helper, factored out of the gyroid
 
-This phase carries the largest single gain in the document: the first models the viewer can move through rather than around. The two infrastructure items come first because the surfaces are nearly trivial once they exist.
+The gyroid was taken first, out of order, because it is cheap enough to serve as the pilot: it establishes the fixed-Lipschitz-divisor pattern and proves the implicit path end to end. What it does *not* yet have is the interior, which is the real prize — so the camera is now the blocking item for the rest of this phase, not an optional prelude to it.
 
 ### Phase 2 — Extend the existing trajectory pipeline
 

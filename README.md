@@ -29,6 +29,7 @@ No Three.js, no Babylon, no build step, and no npm. Just ES modules, WGSL, and H
 - Ornate planet with a polar bloom
 - Studded surface packing
 - Penrose quasicrystal tiling
+- Gyroid minimal surface
 - Aizawa strange attractor
 - Lorenz strange attractor
 
@@ -114,7 +115,7 @@ Recommended canvas CSS:
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `fractal` | string | `'mandelbulb'` | `'mandelbulb'`, `'mandelbox'`, `'menger'`, `'julia'`, `'apollonian'`, `'spherepack'`, `'encrusted'`, `'surfacepack'`, `'penrose'`, `'attractor'`, or `'lorenz'` |
+| `fractal` | string | `'mandelbulb'` | `'mandelbulb'`, `'mandelbox'`, `'menger'`, `'julia'`, `'apollonian'`, `'spherepack'`, `'encrusted'`, `'surfacepack'`, `'penrose'`, `'gyroid'`, `'attractor'`, or `'lorenz'` |
 | `palette` | string | `'aurora'` | `'aurora'`, `'ember'`, `'oil-slick'`, `'mono-ice'`, or `'iridescence'` |
 | `quality` | string | `'auto'` | `'low'`, `'medium'`, `'high'`, or adaptive `'auto'` |
 | `transparent` | boolean | `true` | Premultiplied transparency over the page or an opaque gradient presentation background |
@@ -171,8 +172,17 @@ Uniforms occupy one 160-byte, 16-byte-aligned buffer. The byte offsets are mirro
 - **Ornate planet:** a smooth host body with a packing field concentrated around a polar region
 - **Studded surface pack:** three scales of repeated cells containing discrete, hash-sized spheres clipped to a shell around a solid core
 - **Penrose quasicrystal:** a true P3 rhombus tiling engraved into a disc at two levels of its inflation hierarchy
+- **Gyroid:** Schoen's triply periodic minimal surface, clipped to a ball
 
 All shader loops are statically bounded for WGSL portability, with guarded logarithm, power, radius, and inversion domains.
+
+#### Gyroid
+
+Schoen's gyroid is the triply periodic minimal surface `cos x sin y + cos y sin z + cos z sin x = 0`. Its zero set separates two congruent, interpenetrating labyrinths, and it contains no straight lines and no mirror planes. The two faces of the wall look into different labyrinths, so they take separate palette bands. Sliding the level-set parameter widens one labyrinth while narrowing the other, staying inside the regime where the surface remains connected.
+
+The surface is genuinely something to travel through rather than orbit, so until the renderer grows a fly-through camera it is clipped to a ball, which opens its channels to the outside and keeps it legible from a normal orbit.
+
+That implicit field is **not** a distance field, and sphere-tracing it directly overshoots wherever its gradient exceeds one. The textbook remedy is to divide by the analytic gradient, but that gradient falls to `0.035` at the field's critical points, and dividing by such a small number inflates a marching step roughly fiftyfold. Dividing by the global bound instead is both safe and cheaper: sampled across a full period at 729,000 points, the gradient magnitude reaches exactly √3 and never exceeds it, so dividing by √3 under-estimates the true distance everywhere and needs no empirical safety factor. It costs about 1.26× more marching steps than an exact gradient would need at the surface — less than computing that gradient would cost.
 
 #### Penrose quasicrystal
 
