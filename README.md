@@ -40,13 +40,15 @@ No Three.js, no Babylon, no build step, and no npm. Just ES modules, WGSL, and H
 ├── index.html                    interactive model-viewer and background demo
 ├── src/
 │   ├── fractal-bg.js             device, pipelines, controls, render loop, lifecycle
+│   ├── fly-camera.js             free-flight camera maths (pure, no WebGPU)
 │   ├── palettes.js               Inigo Quilez cosine-palette presets
 │   └── shaders/
 │       ├── fractal.wgsl.js       vertex + fragment raymarcher, inlined as WGSL
 │       ├── composite.wgsl.js     bloom, ACES tonemap, vignette, and dithering
 │       └── attractor.wgsl.js     strange attractors drawn as line geometry
 ├── tools/
-│   └── shader-check.html         compiles every WGSL module and reports errors
+│   ├── shader-check.html         compiles every WGSL module and reports errors
+│   └── fly-camera.test.js        camera unit tests (node tools/fly-camera.test.js)
 └── .github/workflows/pages.yml   deploys the demo to GitHub Pages
 ```
 
@@ -87,6 +89,31 @@ Explorer mode provides:
 - A gentle idle rotation when the viewer is untouched
 
 Navigation remains available under `prefers-reduced-motion`; only automatic animation is frozen.
+
+### Fly-through mode
+
+```js
+handle.setFly(true);
+```
+
+Every other camera in the project orbits a bounded object at a fixed radius from the origin. Fly-through replaces that with a free position and a look direction decoupled from the origin, so the camera can travel *into* a model rather than around it.
+
+- `W`/`S` forward and back, `A`/`D` strafe, `Q`/`E` down and up (arrows and PageUp/PageDown also work)
+- Hold `Shift` to sprint, `Alt` to creep
+- Drag to look; scroll to trim travel speed
+- On touch, drag to look and pinch to move along the view direction
+
+Vertical travel uses world up rather than camera up, so `E` still rises while looking straight down. Speed scales with each model's world size, and the frame delta is clamped so a stalled tab cannot teleport the camera through a wall.
+
+Two models change shape in this mode. The gyroid drops its bounding ball entirely — it is genuinely infinite and periodic, and the ball existed only to give the orbit camera something to circle. The Kleinian limit set widens its ball rather than removing it, since an unbounded version would let rays march forever through the gaps instead of terminating on the background.
+
+Because the camera can end up inside solid material, the raymarcher walks the ray origin forward into free space before tracing, and the marching step has a floor so a negative distance estimate can never drive the ray backwards.
+
+The camera maths lives in `src/fly-camera.js` as pure functions and is covered by `tools/fly-camera.test.js`, which runs in plain Node without a GPU:
+
+```sh
+node tools/fly-camera.test.js
+```
 
 ### Background mode
 
@@ -131,6 +158,8 @@ Recommended canvas CSS:
 | `setQuality(mode)` | Select low, medium, high, or adaptive rendering quality. |
 | `setTransparent(bool)` | Toggle transparent embedding and opaque presentation modes. |
 | `setExplorer(bool)` | Toggle the full model-viewer preset. |
+| `setFly(bool)` | Toggle free flight; interior models drop their bounding clip. |
+| `setFlySpeed(n)` | Set the travel speed multiplier. |
 | `setControls(bool)` | Enable orbit and zoom controls independently. |
 | `setAutoOrbit(bool)` | Toggle time-driven camera movement. |
 | `setZoom(n)` / `zoomBy(f)` | Set or multiply camera distance. |
@@ -138,7 +167,7 @@ Recommended canvas CSS:
 | `pause()` | Stop the render loop. |
 | `resume()` | Resume rendering while respecting visibility gating. |
 | `destroy()` | Tear down observers, listeners, textures, and the WebGPU device. |
-| `info` | Returns model, quality, FPS, reduced-motion, explorer, and zoom state. |
+| `info` | Returns model, quality, FPS, reduced-motion, explorer, fly, speed, position, and zoom state. |
 
 ## Rendering architecture
 

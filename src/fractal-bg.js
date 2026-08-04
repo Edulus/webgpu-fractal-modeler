@@ -6,6 +6,8 @@
 //   handle.setFractal('mandelbulb' | 'mandelbox' | 'menger' | 'julia')
 //   handle.setPalette('aurora' | 'ember' | 'oil-slick' | 'mono-ice')
 //   handle.setQuality('low' | 'medium' | 'high' | 'auto')
+//   handle.setExplorer(bool)   orbit a model
+//   handle.setFly(bool)        free flight, able to travel inside a model
 //   handle.pause() / handle.resume() / handle.destroy()
 //
 // No build step, no dependencies. Runs from file://. See README.md.
@@ -14,6 +16,10 @@ import { FRACTAL_WGSL } from './shaders/fractal.wgsl.js';
 import { COMPOSITE_WGSL } from './shaders/composite.wgsl.js';
 import { ATTRACTOR_WGSL } from './shaders/attractor.wgsl.js';
 import { getPalette } from './palettes.js';
+import {
+  makeFlyCamera, stepFlyCamera, aimFlyCamera, dollyFlyCamera, scaleFlySpeed,
+  FLY_SPEED_MIN, FLY_SPEED_MAX,
+} from './fly-camera.js';
 
 // ---- Uniform buffer layout (mirror of the WGSL Uniforms struct) -----------
 // 56 f32 slots = 224 bytes. Byte offset = slot * 4.
@@ -40,7 +46,7 @@ const U = {
   qualityScale: 36,
   bgMode: 37,
   reducedMotion: 38,
-  _pad: 39,
+  flyMode: 39,
   viewProj: 40, // mat4 -> slots 40..55 (byte 160, 16-byte aligned)
 };
 const UNIFORM_FLOATS = 56;
@@ -182,6 +188,13 @@ export async function initFractalBackground(canvas, options = {}) {
     explorer: false,      // model-explorer preset (opaque, no auto-drift)
     zoom: 1.0,            // camera distance multiplier (pinch/wheel)
     orbit: { yaw: 0.6, pitch: 0.35, tyaw: 0.6, tpitch: 0.35, vyaw: 0, vpitch: 0 },
+    // Fly-through: a free position with a look direction decoupled from the
+    // origin. The orbit camera cannot enter a model; this one can.
+    fly: false,
+    flyCam: makeFlyCamera([0, 0, 3.2]),
+    keys: new Set(),
+    frameDt: 16,
+    lastCamPos: [0, 0, 3.2],
     // active pointers for drag / pinch tracking
     pointers: new Map(),
     pinchDist0: 0,
@@ -552,7 +565,18 @@ export async function initFractalBackground(canvas, options = {}) {
     const radius = baseR * state.zoom;
 
     let camX, camY, camZ;
-    if (state.explorer) {
+    let tgtX = 0, tgtY = rm ? 0.0 : Math.sin(t * 0.05) * 0.05, tgtZ = 0;
+
+    if (state.fly) {
+      // Free flight: position is state and the look direction is independent of
+      // the origin, so the camera can travel into a structure instead of
+      // circling it. The maths lives in fly-camera.js so it can be tested
+      // without a GPU (see tools/fly-camera.test.js).
+      const cam = state.flyCam;
+      const fwd = stepFlyCamera(cam, state.keys, state.frameDt / 1000, baseR);
+      camX = cam.pos[0]; camY = cam.pos[1]; camZ = cam.pos[2];
+      tgtX = camX + fwd[0]; tgtY = camY + fwd[1]; tgtZ = camZ + fwd[2];
+    } else if (state.explorer) {
       // Model-explorer: spherical orbit driven by drag (with easing/inertia)
       // plus a gentle idle spin when the user isn't touching it.
       const o = state.orbit;
@@ -593,11 +617,14 @@ export async function initFractalBackground(canvas, options = {}) {
     d[U.camPos] = camX;
     d[U.camPos + 1] = camY;
     d[U.camPos + 2] = camZ;
+    state.lastCamPos[0] = camX;
+    state.lastCamPos[1] = camY;
+    state.lastCamPos[2] = camZ;
     d[U.fov] = 1.05; // radians
 
-    d[U.camTarget] = 0.0;
-    d[U.camTarget + 1] = rm ? 0.0 : Math.sin(t * 0.05) * 0.05;
-    d[U.camTarget + 2] = 0.0;
+    d[U.camTarget] = tgtX;
+    d[U.camTarget + 1] = tgtY;
+    d[U.camTarget + 2] = tgtZ;
 
     d[U.fractalType] = state.fractalType;
     d[U.power] = power;
@@ -618,6 +645,7 @@ export async function initFractalBackground(canvas, options = {}) {
     d[U.qualityScale] = state.qualityScale;
     d[U.bgMode] = state.transparent ? 0.0 : 1.0;
     d[U.reducedMotion] = rm ? 1.0 : 0.0;
+    d[U.flyMode] = state.fly ? 1.0 : 0.0;
     d[U._pad] = 0.0;
 
     // View-projection for the attractor line pass (matches the raymarcher's
@@ -748,6 +776,8 @@ export async function initFractalBackground(canvas, options = {}) {
     const dt = state.lastFrameTime ? nowMs - state.lastFrameTime : 16.7;
     state.lastFrameTime = nowMs;
 
+    state.frameDt = dt;
+
     if (!reducedMotion()) {
       state.animTime += dt / 1000;
       // Ease parallax toward target.
@@ -867,15 +897,34 @@ export async function initFractalBackground(canvas, options = {}) {
     state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     state.lastInteract = performance.now();
 
+    const k = 3.2 / Math.max(300, Math.min(window.innerWidth, window.innerHeight));
+
     if (state.pointers.size >= 2) {
-      // Pinch: fingers apart -> zoom in (smaller radius).
-      const dist = pinchDistance();
-      if (state.pinchDist0 > 0 && dist > 0) {
-        state.zoom = clampZoom(state.pinchZoom0 * (state.pinchDist0 / dist));
+      if (state.fly) {
+        // Two fingers: spread to move forward, pinch to back up. Zoom is
+        // meaningless when the camera is already free to travel.
+        const dist = pinchDistance();
+        if (state.pinchDist0 > 0 && dist > 0) {
+          dollyFlyCamera(state.flyCam,
+            (dist - state.pinchDist0) * 0.0025 * (CAM_RADIUS[state.fractalType] ?? 2.55));
+          state.pinchDist0 = dist;
+        }
+      } else {
+        // Pinch: fingers apart -> zoom in (smaller radius).
+        const dist = pinchDistance();
+        if (state.pinchDist0 > 0 && dist > 0) {
+          state.zoom = clampZoom(state.pinchZoom0 * (state.pinchDist0 / dist));
+        }
+      }
+    } else if (state.fly) {
+      // Single-pointer drag: aim. Drag right looks right, drag down looks down.
+      aimFlyCamera(state.flyCam, dx * k, -dy * k);
+      if (state.tapStart &&
+          Math.hypot(e.clientX - state.tapStart.x, e.clientY - state.tapStart.y) > TAP_MOVE) {
+        state.gestureMoved = true;
       }
     } else {
       // Single-pointer drag: orbit. Scale by viewport so it feels consistent.
-      const k = 3.2 / Math.max(300, Math.min(window.innerWidth, window.innerHeight));
       state.orbit.tyaw += dx * k;
       state.orbit.tpitch += dy * k;
       state.orbit.vyaw = dx * k * 0.15;
@@ -914,7 +963,12 @@ export async function initFractalBackground(canvas, options = {}) {
   function onWheel(e) {
     if (!state.controls) return;
     e.preventDefault();
-    state.zoom = clampZoom(state.zoom * (e.deltaY > 0 ? 1.1 : 0.9));
+    if (state.fly) {
+      // Wheel trims travel speed; there is nothing to zoom towards in flight.
+      scaleFlySpeed(state.flyCam, e.deltaY > 0 ? 0.87 : 1.15);
+    } else {
+      state.zoom = clampZoom(state.zoom * (e.deltaY > 0 ? 1.1 : 0.9));
+    }
     state.lastInteract = performance.now();
     nudgeRender();
   }
@@ -994,6 +1048,9 @@ export async function initFractalBackground(canvas, options = {}) {
     canvas.removeEventListener('pointerup', onPointerUp);
     canvas.removeEventListener('pointercancel', onPointerUp);
     canvas.removeEventListener('wheel', onWheel);
+    window.removeEventListener('keydown', onKeyDown);
+    window.removeEventListener('keyup', onKeyUp);
+    window.removeEventListener('blur', onBlur);
     try {
       if (state.targets) {
         state.targets.sceneTex.destroy();
@@ -1019,6 +1076,44 @@ export async function initFractalBackground(canvas, options = {}) {
     if (!state.running) renderFrame(performance.now(), true);
   }
 
+  // ---- Fly-through keyboard ------------------------------------------------
+  // Only WASD/QE plus the modifiers; everything else falls through so the page
+  // stays usable. Ignored while the user is typing into a field.
+  const FLY_KEYS = {
+    KeyW: 'w', KeyA: 'a', KeyS: 's', KeyD: 'd', KeyQ: 'q', KeyE: 'e',
+    ArrowUp: 'w', ArrowDown: 's', ArrowLeft: 'a', ArrowRight: 'd',
+    PageUp: 'e', PageDown: 'q',
+  };
+
+  function typingTarget(e) {
+    const el = e.target;
+    if (!el || el === document.body || el === canvas) return false;
+    const tag = el.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+  }
+
+  function onKeyDown(e) {
+    if (!state.fly || typingTarget(e)) return;
+    const k = FLY_KEYS[e.code];
+    if (k) {
+      state.keys.add(k);
+      e.preventDefault();     // arrows and PageUp/Down would scroll the page
+    }
+    if (e.shiftKey) state.keys.add('shift');
+    if (e.altKey) state.keys.add('alt');
+    if (k) nudgeRender();
+  }
+
+  function onKeyUp(e) {
+    const k = FLY_KEYS[e.code];
+    if (k) state.keys.delete(k);
+    if (!e.shiftKey) state.keys.delete('shift');
+    if (!e.altKey) state.keys.delete('alt');
+  }
+
+  // Held keys would otherwise stick down while the tab is in the background.
+  function onBlur() { state.keys.clear(); }
+
   // Enable/disable drag/pinch/wheel navigation.
   function applyControls(on) {
     state.controls = !!on;
@@ -1033,8 +1128,24 @@ export async function initFractalBackground(canvas, options = {}) {
     state.zoom = 1.0;
     const o = state.orbit;
     o.tyaw = 0.6; o.tpitch = 0.35; o.vyaw = 0; o.vpitch = 0;
+    if (state.fly) placeFlyCamera(false);
     state.lastInteract = performance.now();
     nudgeRender();
+  }
+
+  // Drop the free camera at the model's orbit distance, facing the origin, so
+  // entering fly mode starts from a framing the viewer already recognises.
+  function placeFlyCamera(continueFromCurrent) {
+    const r = (CAM_RADIUS[state.fractalType] ?? 2.55) * state.zoom;
+    const c = state.lastCamPos;
+    const len = Math.hypot(c[0], c[1], c[2]);
+    // Entering fly mode continues from wherever the orbit camera was, so the
+    // transition is seamless. Switching models does not: world scales differ by
+    // more than 2x across the catalog, and keeping the old position would drop
+    // the camera inside the larger ones.
+    const p = (continueFromCurrent && len > 1e-3) ? [c[0], c[1], c[2]] : [0, 0, r];
+    state.flyCam = makeFlyCamera(p);
+    state.keys.clear();
   }
 
   // matchMedia listener compat (older Safari uses addListener).
@@ -1069,6 +1180,9 @@ export async function initFractalBackground(canvas, options = {}) {
   canvas.addEventListener('pointerup', onPointerUp);
   canvas.addEventListener('pointercancel', onPointerUp);
   canvas.addEventListener('wheel', onWheel, { passive: false });
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+  window.addEventListener('blur', onBlur);
 
   isVisible = document.visibilityState === 'visible';
   updateRunning();
@@ -1078,6 +1192,8 @@ export async function initFractalBackground(canvas, options = {}) {
     setFractal(name) {
       if (name in FRACTAL_IDS) {
         state.fractalType = FRACTAL_IDS[name];
+        // Reframe the free camera for the new model's world scale.
+        if (state.fly) placeFlyCamera(false);
         // The attractor family needs its trajectory buffer built before use.
         if (state.fractalType >= FRACTAL_IDS.attractor) ensureAttractorTrajectory();
         if (!state.running) renderFrame(performance.now(), true);
@@ -1101,6 +1217,31 @@ export async function initFractalBackground(canvas, options = {}) {
     setZoom(z) { state.zoom = clampZoom(z); nudgeRender(); },
     zoomBy(factor) { state.zoom = clampZoom(state.zoom * factor); nudgeRender(); },
     resetView,
+    // Free fly-through: the camera leaves its orbit and can travel into a
+    // model. Interior structures (gyroid, Kleinian) drop their bounding clip
+    // while this is on, so there is something to travel through.
+    setFly(on) {
+      const want = !!on;
+      if (want === state.fly) return;
+      state.fly = want;
+      if (want) {
+        applyControls(true);
+        applyTransparent(false);
+        state.autoOrbit = false;
+        placeFlyCamera(true);
+      } else {
+        state.keys.clear();
+        applyControls(state.explorer);
+        applyTransparent(state.explorer ? false : !!opts.transparent);
+      }
+      updateRunning();
+      nudgeRender();
+    },
+    // Travel speed multiplier (wheel adjusts this while flying).
+    setFlySpeed(v) {
+      state.flyCam.speed = Math.max(FLY_SPEED_MIN, Math.min(FLY_SPEED_MAX, v));
+      nudgeRender();
+    },
     // Model-explorer preset: opaque background, no auto-drift, full navigation.
     // Turning it off restores the original (background) configuration.
     setExplorer(on) {
@@ -1123,6 +1264,9 @@ export async function initFractalBackground(canvas, options = {}) {
         fps: Math.round(state.fpsEMA),
         reducedMotion: reducedMotion(),
         explorer: state.explorer,
+        fly: state.fly,
+        flySpeed: +state.flyCam.speed.toFixed(2),
+        flyPos: state.fly ? state.flyCam.pos.map((v) => +v.toFixed(2)) : null,
         zoom: +state.zoom.toFixed(2),
       };
     },

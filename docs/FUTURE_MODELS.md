@@ -84,11 +84,13 @@ Three pieces of infrastructure gate large parts of the catalog. Each is worth bu
 
 Every model shipped so far is a bounded object orbited from outside, and the camera reflects that: `CAM_RADIUS` is a per-model orbit distance about the origin. Triply periodic surfaces, Kleinian limit sets, and hyperbolic honeycombs are interiors — their whole value is being inside them, where an orbit radius is meaningless.
 
-This needs a fly-through camera mode: free position, look direction decoupled from the origin, and near-plane behaviour that tolerates being arbitrarily close to a surface. It is the single largest unlock in this document.
+**Shipped.** `handle.setFly(true)` gives a free position with a look direction decoupled from the origin, keyboard and drag navigation, and per-model speed scaling. The gyroid now drops its bounding ball entirely in this mode and the Kleinian limit set widens its own, so both interiors are reachable.
 
-Two shipped models now show both the need and the workaround. The gyroid is clipped to a ball so the existing orbit camera has something bounded to circle, which opens its channels to view but discards the interior that is the whole point of a triply periodic surface. The Kleinian limit set is clipped the same way, and loses more by it — its recursive cavities are the structure. Schwarz D will make three.
+Three things were needed beyond the camera itself, and they are worth remembering for any future interior model:
 
-The pattern is now clear enough to state as a rule: every interior model added before the camera exists ships at a fraction of its value, and each one added raises the cost of the eventual retrofit.
+- **The clip has to be a per-model decision, not a global one.** The gyroid can lose its ball completely because it is periodic and fills space. The Kleinian cannot: without a bound, rays escaping through the gaps march to the far plane instead of terminating, so its ball is widened rather than removed.
+- **The marcher must tolerate starting inside solid material,** which an orbit camera can never do. The ray origin is walked forward into free space before tracing, and the step has a floor so a negative estimate cannot drive the ray backwards.
+- **The camera maths belongs outside the render loop.** Movement integrates per frame, so with the maths inline it could only be exercised on a machine holding a live WebGPU device. Pulled out into `src/fly-camera.js` as pure functions, it is covered by `tools/fly-camera.test.js` in plain Node.
 
 ### Lipschitz normalisation for implicit fields
 
@@ -270,13 +272,13 @@ Everything below adds cost. Without a baseline there is no way to tell whether a
 
 ### Phase 1 — Interior navigation and implicit labyrinths
 
-1. ~~Gyroid~~ — **shipped**, clipped to a ball as an interim measure
-2. Fly-through camera mode (see *Renderer prerequisites*)
+1. ~~Gyroid~~ — **shipped**
+2. ~~Fly-through camera mode~~ — **shipped**; the gyroid's interior is now reachable
 3. Schwarz D
 4. Neovius
 5. Lipschitz-constant helper, factored out of the gyroid
 
-The gyroid was taken first, out of order, because it is cheap enough to serve as the pilot: it establishes the fixed-Lipschitz-divisor pattern and proves the implicit path end to end. What it does *not* yet have is the interior, which is the real prize — so the camera is now the blocking item for the rest of this phase, not an optional prelude to it.
+The gyroid was taken first, out of order, as the pilot for the implicit path, and shipped clipped to a ball. The camera followed and removed that limitation. Schwarz D and Neovius can now be added without the caveat that shaped the first two interior models — they will be enterable from the day they land.
 
 ### Phase 2 — Extend the existing trajectory pipeline
 

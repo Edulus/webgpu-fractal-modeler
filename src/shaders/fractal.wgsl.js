@@ -36,7 +36,7 @@ export const FRACTAL_WGSL = /* wgsl */ `
 //   144 qualityScale : f32
 //   148 bgMode       : f32   (0 = transparent, 1 = gradient background)
 //   152 reducedMotion: f32
-//   156 _pad         : f32
+//   156 flyMode      : f32   (0 = orbit, 1 = free fly-through)
 //   160 viewProj     : mat4x4<f32>  (attractor line rasterization)
 struct Uniforms {
   resolution : vec2<f32>,
@@ -61,7 +61,7 @@ struct Uniforms {
   qualityScale : f32,
   bgMode       : f32,
   reducedMotion: f32,
-  _pad         : f32,
+  flyMode      : f32,
   viewProj     : mat4x4<f32>,
 };
 
@@ -692,10 +692,12 @@ fn deGyroid(pos : vec3<f32>) -> DEResult {
 
   var res : DEResult;
 
-  // The solid lies wholly inside the ball, so this never over-estimates and is
-  // safe to return before touching the trig.
+  // The ball exists only to give the orbit camera a bounded object to circle.
+  // Fly-through mode lifts it: the gyroid is genuinely infinite and periodic,
+  // and its interior is the whole point of a triply periodic surface.
+  let clipped = u.flyMode < 0.5;
   let ball = length(pos) - R;
-  if (ball > 0.25) {
+  if (clipped && ball > 0.25) {
     res.dist = ball;
     res.trap = 0.4;
     return res;
@@ -713,7 +715,7 @@ fn deGyroid(pos : vec3<f32>) -> DEResult {
   let f = c.x * s.y + c.y * s.z + c.z * s.x;
 
   let shell = (abs(f - level) - HALF) / (SQRT3 * FREQ);
-  res.dist = max(shell, ball);
+  res.dist = select(shell, max(shell, ball), clipped);
 
   // Which face of the wall this is: each looks into one of the two labyrinths,
   // so they take separate palette bands. Free -- reuses the trig above.
@@ -752,7 +754,11 @@ fn deKleinian(pos : vec3<f32>) -> DEResult {
   var res : DEResult;
 
   // The limit set lies wholly inside the ball, so this never over-estimates.
-  let shell = length(pos) - BOUND;
+  // Fly-through mode widens the ball instead of removing it: the construction
+  // does tile space, but an unbounded version would let rays march forever
+  // through the gaps rather than terminating on the background.
+  let bnd = select(BOUND, 7.0, u.flyMode > 0.5);
+  let shell = length(pos) - bnd;
   if (shell > 0.30) {
     res.dist = shell;
     res.trap = 0.4;
@@ -908,14 +914,28 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   let epsScale = mix(2.5, 1.0, clamp(u.qualityScale, 0.0, 1.0));
   let hitEps = BASE_EPS * epsScale;
 
-  var t = 0.05;
+  // Fly-through mode can put the camera inside solid material, where the DE is
+  // negative. Marching from there would report an instant hit and fill the
+  // screen with a flat wall, so walk the origin forward until it is in free
+  // space first. Costs one extra evaluation per pixel when already outside.
+  var ro2 = ro;
+  if (u.flyMode > 0.5) {
+    for (var g = 0; g < 12; g = g + 1) {
+      let dd = mapDE(ro2).dist;
+      if (dd > 0.0) { break; }
+      ro2 = ro2 + rd * max(-dd * 1.05, 0.01);
+    }
+  }
+
+  // Start closer in when flying: walls can be a hair in front of the camera.
+  var t = select(0.05, 0.008, u.flyMode > 0.5);
   var hit = false;
   var trap = 1.0;
   var glow = 0.0;
 
   // Sphere tracing with a small relaxation factor and glow from near-misses.
   for (var i = 0; i < MAX_STEPS; i = i + 1) {
-    let pos = ro + rd * t;
+    let pos = ro2 + rd * t;
     let de = mapDE(pos);
     let d = de.dist;
 
@@ -929,8 +949,10 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
       trap = de.trap;
       break;
     }
-    // relaxed step (slightly under 1.0 keeps thin filaments from tunneling)
-    t = t + d * 0.9;
+    // Relaxed step (slightly under 1.0 keeps thin filaments from tunneling).
+    // The floor guarantees forward progress: without it a near-zero or negative
+    // estimate stalls the march, or walks it backwards.
+    t = t + max(d * 0.9, 0.0008);
     if (t > MAX_DIST) { break; }
   }
 
@@ -938,7 +960,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   let bg = backgroundColor(rd);
 
   if (hit) {
-    let pos = ro + rd * t;
+    let pos = ro2 + rd * t;
     let n = calcNormal(pos, hitEps * t * 2.0);
 
     // Key + fill directional lighting.

@@ -207,6 +207,39 @@
       transition: opacity 0.4s ease;
     }
     body.explorer #nav-hint { opacity: 1; }
+    body.flying #nav-hint { opacity: 0; }
+
+    /* Fly-through hint — mirrors the orbit hint, shown only while flying. */
+    #fly-hint {
+      position: fixed;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      padding: 9px 16px;
+      border-radius: 999px;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      backdrop-filter: blur(10px);
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.4s ease;
+    }
+    body.flying #fly-hint { opacity: 1; }
+    body.flying .wrap { display: none; }
+    body.flying { overflow: hidden; }
+    body.flying #bg { z-index: 0; }
+
+    #btn-fly {
+      background: rgba(255, 190, 120, 0.14);
+      border-color: rgba(255, 190, 120, 0.4);
+      color: #ffc98a;
+      font-weight: 600;
+    }
+    #btn-fly.on { background: rgba(255, 190, 120, 0.3); }
 
     /* Explorer mode: fade the reading content out of the way so the fractal
        becomes a full-screen, navigable model. */
@@ -216,7 +249,7 @@
 
     @media (max-width: 640px) {
       #panel { width: 168px; top: 10px; right: 10px; padding: 10px 12px; }
-      #nav-hint { font-size: 11px; padding: 7px 12px; bottom: 12px; }
+      #nav-hint, #fly-hint { font-size: 11px; padding: 7px 12px; bottom: 12px; }
     }
   </style>
 </head>
@@ -269,12 +302,14 @@
       <button id="btn-resume">Resume</button>
     </div>
     <button id="btn-explorer">Enter explorer mode</button>
+    <button id="btn-fly">Fly through</button>
     <button id="btn-reset" class="hidden">Reset view</button>
     <div id="hud">initializing…</div>
   </div>
 
   <!-- Navigation hint (shown only in explorer mode) -->
   <div id="nav-hint">Drag to rotate · pinch or scroll to zoom · double-tap to reset</div>
+  <div id="fly-hint">WASD to move · Q/E down·up · drag to look · shift to sprint · scroll for speed</div>
 
   <!-- Fallback banner (shown if WebGPU is unavailable) -->
   <div id="fallback-note">
@@ -359,6 +394,8 @@
       // Explorer mode: full-screen navigable model viewer.
       const btnExplorer = document.getElementById('btn-explorer');
       const btnReset = document.getElementById('btn-reset');
+      const btnFly = document.getElementById('btn-fly');
+      let flyOn = false;
       let explorerOn = false;
       function toggleExplorer(on) {
         explorerOn = on;
@@ -367,7 +404,22 @@
         btnExplorer.textContent = on ? 'Exit explorer mode' : 'Enter explorer mode';
         btnReset.classList.toggle('hidden', !on);
       }
-      btnExplorer.addEventListener('click', () => toggleExplorer(!explorerOn));
+      function toggleFly(on) {
+        flyOn = on;
+        handle.setFly(on);
+        document.body.classList.toggle('flying', on);
+        btnFly.classList.toggle('on', on);
+        btnFly.textContent = on ? 'Exit fly-through' : 'Fly through';
+        btnReset.classList.toggle('hidden', !on && !explorerOn);
+        // Flying needs key focus, and the two camera modes are exclusive.
+        if (on && explorerOn) toggleExplorer(false);
+        if (on) document.body.focus();
+      }
+      btnExplorer.addEventListener('click', () => {
+        if (flyOn) toggleFly(false);
+        toggleExplorer(!explorerOn);
+      });
+      btnFly.addEventListener('click', () => toggleFly(!flyOn));
       btnReset.addEventListener('click', () => handle.resetView());
       // (Double-tap / double-click to reset is handled inside the library so it
       // can tell a real tap from the end of a pinch.)
@@ -379,7 +431,7 @@
       setInterval(() => {
         const i = handle.info;
         hud.textContent = `${names[i.fractalType]} · q${i.qualityScale} · ${i.fps}fps` +
-          (i.explorer ? ` · ${i.zoom}×` : '') +
+          (i.fly ? ` · fly ${i.flySpeed}×` : (i.explorer ? ` · ${i.zoom}×` : '')) +
           (i.reducedMotion ? ' · reduced-motion' : '');
       }, 500);
     }
