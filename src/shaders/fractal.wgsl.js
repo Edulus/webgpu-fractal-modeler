@@ -18,7 +18,8 @@ export const FRACTAL_WGSL = /* wgsl */ `
 //   32  camTarget  : vec3<f32>   (pad slot -> fractalType)
 //   44  fractalType: f32   (0=mandelbulb, 1=mandelbox, 2=menger, 3=julia,
 //                           4=apollonian, 5=spherepack, 6=encrusted,
-//                           7=surfacepack, 8=penrose; 9+ are the line-rendered
+//                           7=surfacepack, 8=penrose relief,
+//                           9=penrose sponge; 10+ are the line-rendered
 //                           attractors, which this pass only backgrounds)
 //   48  power      : f32
 //   52  mbScale    : f32
@@ -662,6 +663,88 @@ fn dePenrose(pos : vec3<f32>) -> DEResult {
   return res;
 }
 
+// Volumetric Penrose sponge. Three independently phased Penrose edge fields
+// are projected through the XY, YZ, and ZX planes. Pairwise intersections of
+// those extruded edge sheets become branching tunnels inside a spherical host.
+// The construction is repeated at the parent phi^2 scale, so broad passages
+// contain a finer self-similar network rather than a single decorative skin.
+fn penroseTunnelNetwork(exy : f32, eyz : f32, ezx : f32, width : f32) -> f32 {
+  let sxy = exy - width;
+  let syz = eyz - width;
+  let szx = ezx - width;
+  return min(max(sxy, syz), min(max(syz, szx), max(szx, sxy)));
+}
+
+fn dePenroseSponge(pos : vec3<f32>) -> DEResult {
+  const R : f32 = 1.28;
+  const SCALE : f32 = 0.18;
+  const FINE_W : f32 = 0.030;
+  const PARENT_W : f32 = 0.062;
+
+  let host = length(pos) - R;
+  var res : DEResult;
+
+  // The tunnels only remove material, so outside the host sphere its exact
+  // distance is a safe early-out that avoids all six Penrose queries.
+  if (host > 0.12) {
+    res.dist = host;
+    res.trap = 0.28;
+    return res;
+  }
+
+  let tm = select(u.time, 0.0, u.reducedMotion > 0.5);
+  let drift = 0.075 * vec2<f32>(cos(tm * 0.041), sin(tm * 0.037));
+  let phXY = drift;
+  let phYZ = vec2<f32>(drift.y, -drift.x) + vec2<f32>(0.11, -0.07);
+  let phZX = vec2<f32>(-drift.x - drift.y, drift.x) + vec2<f32>(-0.08, 0.13);
+
+  // Small in-plane rotations keep the three extrusions from sharing obvious
+  // axial seams while preserving their mutually perpendicular carrier planes.
+  let qXY = vec2<f32>(
+    0.98480775 * pos.x - 0.17364818 * pos.y,
+    0.17364818 * pos.x + 0.98480775 * pos.y) / SCALE;
+  let qYZ = vec2<f32>(
+    0.93232735 * pos.y - 0.36161543 * pos.z,
+    0.36161543 * pos.y + 0.93232735 * pos.z) / SCALE;
+  let qZX = vec2<f32>(
+    0.81915204 * pos.z + 0.57357644 * pos.x,
+   -0.57357644 * pos.z + 0.81915204 * pos.x) / SCALE;
+
+  let childXY = penroseQuery(qXY, phXY);
+  let childYZ = penroseQuery(qYZ, phYZ);
+  let childZX = penroseQuery(qZX, phZX);
+  let parentXY = penroseQuery(qXY / PHI2, phXY);
+  let parentYZ = penroseQuery(qYZ / PHI2, phYZ);
+  let parentZX = penroseQuery(qZX / PHI2, phZX);
+
+  let edgeXY = max(-childXY.sdf, 0.0) * SCALE;
+  let edgeYZ = max(-childYZ.sdf, 0.0) * SCALE;
+  let edgeZX = max(-childZX.sdf, 0.0) * SCALE;
+  let parentEdgeXY = max(-parentXY.sdf, 0.0) * SCALE * PHI2;
+  let parentEdgeYZ = max(-parentYZ.sdf, 0.0) * SCALE * PHI2;
+  let parentEdgeZX = max(-parentZX.sdf, 0.0) * SCALE * PHI2;
+
+  let fineTunnels = penroseTunnelNetwork(edgeXY, edgeYZ, edgeZX, FINE_W);
+  let parentTunnels = penroseTunnelNetwork(
+    parentEdgeXY, parentEdgeYZ, parentEdgeZX, PARENT_W);
+  let tunnels = min(fineTunnels, parentTunnels);
+
+  // Signed-distance subtraction: retain the sphere while removing the union of
+  // the fine and parent tunnel networks. The scale factor is conservative for
+  // the combined projected fields and stabilizes sphere tracing near junctions.
+  res.dist = max(host, -tunnels) * 0.38;
+
+  let kindMix = (childXY.kind + childYZ.kind + childZX.kind) / 3.0;
+  let perpMix = clamp(
+    (length(parentXY.perp) + length(parentYZ.perp) + length(parentZX.perp)) / 9.0,
+    0.0, 1.0);
+  let hierarchy = clamp(
+    1.0 - min(parentEdgeXY, min(parentEdgeYZ, parentEdgeZX)) / PARENT_W,
+    0.0, 1.0);
+  res.trap = 0.10 + 0.34 * kindMix + 0.28 * perpMix + 0.22 * hierarchy;
+  return res;
+}
+
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
   let ft = u.fractalType;
@@ -681,8 +764,10 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
     return deEncrusted(pos);
   } else if (ft < 7.5) {
     return deSurfacePack(pos);
+  } else if (ft < 8.5) {
+    return dePenrose(pos);
   }
-  return dePenrose(pos);
+  return dePenroseSponge(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {
@@ -705,7 +790,9 @@ fn softShadow(ro : vec3<f32>, rd : vec3<f32>, kSoft : f32) -> f32 {
   var res = 1.0;
   var t = 0.02;
   const SH_STEPS : i32 = 40;
+  let activeSteps = select(40, 18, u.fractalType > 8.5 && u.fractalType < 9.5);
   for (var i = 0; i < SH_STEPS; i = i + 1) {
+    if (i >= activeSteps) { break; }
     let h = mapDist(ro + rd * t);
     if (h < 0.0005) { return 0.0; }
     res = min(res, kSoft * h / t);
@@ -720,7 +807,9 @@ fn calcAO(p : vec3<f32>, n : vec3<f32>) -> f32 {
   var occ = 0.0;
   var sca = 1.0;
   const AO_STEPS : i32 = 5;
+  let activeSteps = select(5, 3, u.fractalType > 8.5 && u.fractalType < 9.5);
   for (var i = 0; i < AO_STEPS; i = i + 1) {
+    if (i >= activeSteps) { break; }
     let hr = 0.01 + 0.14 * f32(i) / 4.0;
     let d = mapDist(p + n * hr);
     occ = occ + (hr - d) * sca;
@@ -767,7 +856,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // Strange attractors aren't distance fields — they're rasterized as line
   // geometry by a second pipeline drawn over this pass. Emit only the
   // background here so those lines have something to blend onto.
-  if (u.fractalType > 8.5) {
+  if (u.fractalType > 9.5) {
     let bg = backgroundColor(rd);
     return vec4<f32>(select(vec3<f32>(0.0), bg, u.bgMode >= 0.5), 0.0);
   }
