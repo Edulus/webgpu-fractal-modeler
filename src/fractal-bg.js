@@ -40,20 +40,20 @@ const U = {
   qualityScale: 36,
   bgMode: 37,
   reducedMotion: 38,
-  performanceTier: 39,
+  _pad: 39,
   viewProj: 40, // mat4 -> slots 40..55 (byte 160, 16-byte aligned)
 };
 const UNIFORM_FLOATS = 56;
 const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 224
 
-// Distance-estimated fractals occupy ids 0..9; the line-rendered
-// attractors follow at 10+. The shader keys off that split (see the
-// `fractalType > 9.5` test in fractal.wgsl.js), so keep DE types contiguous at
+// Distance-estimated fractals occupy ids 0..8; the volumetric/line-rendered
+// attractors follow at 9+. The shader keys off that split (see the
+// `fractalType > 8.5` test in fractal.wgsl.js), so keep DE types contiguous at
 // the front when adding new ones and move the attractors up to match.
 const FRACTAL_IDS = {
   mandelbulb: 0, mandelbox: 1, menger: 2, julia: 3, apollonian: 4,
   spherepack: 5, encrusted: 6, surfacepack: 7, penrose: 8,
-  'penrose-sponge': 9, attractor: 10, lorenz: 11,
+  attractor: 9, lorenz: 10,
 };
 
 // Quality tiers -> internal-resolution scale factor.
@@ -63,10 +63,10 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 // world scale, so a single radius would sit inside the larger ones.
 // Indexed by fractal id (see FRACTAL_IDS).
 // mandelbulb, mandelbox, menger, julia, apollonian, spherepack, encrusted,
-// surfacepack, Penrose relief, Penrose sponge, attractor(Aizawa), lorenz
-// The relief disc needs extra room edge-on; the volumetric sponge uses framing
-// similar to the other roughly spherical distance-estimated models.
-const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.1, 3.0, 3.5, 3.25, 3.2, 3.0];
+// surfacepack, penrose, attractor(Aizawa), lorenz
+// The Penrose disc is wide and flat, so it needs a little more room than the
+// roughly ball-shaped estimators to sit inside the frame edge-on.
+const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.1, 3.0, 3.5, 3.2, 3.0];
 
 // Number of integrated trajectory samples drawn as a line strip per attractor.
 // These are exact float positions (vector geometry), so the curve stays crisp
@@ -160,15 +160,12 @@ export async function initFractalBackground(canvas, options = {}) {
     transparent: !!opts.transparent,
     qualityMode: opts.quality, // 'low'|'medium'|'high'|'auto'
     qualityScale: 1.0,
-    deviceTier: 1,       // detected hardware class: 0 low, 1 medium, 2 high
-    performanceTier: 1,  // live Penrose complexity tier; may downgrade on slow FPS
     // runtime
     running: false,
     disposed: false,
     rafId: 0,
     startTime: 0,
     lastFrameTime: 0,
-    lastRenderTime: 0,
     animTime: 0, // accumulated animation clock (respects reduced motion)
     dpr: 1,
     cssW: 1,
@@ -205,45 +202,9 @@ export async function initFractalBackground(canvas, options = {}) {
 
   const reducedMotionMQ = window.matchMedia('(prefers-reduced-motion: reduce)');
   const coarsePointer = window.matchMedia('(pointer: coarse)').matches;
-  const hardwareThreads = Number(navigator.hardwareConcurrency) || 4;
-  const deviceMemory = Number(navigator.deviceMemory) || 8;
 
   function reducedMotion() {
     return reducedMotionMQ.matches;
-  }
-
-  function isPenroseSponge() {
-    return state.fractalType === FRACTAL_IDS['penrose-sponge'];
-  }
-
-  // A deliberately conservative hardware heuristic. Pointer type catches
-  // phones/tablets, while memory, logical cores, and physical pixel count
-  // separate modest laptops from desktop-class GPUs. Live FPS feedback can
-  // only lower this tier, preventing an optimistic guess from wedging a GPU.
-  function detectDeviceTier() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const pixels = window.innerWidth * window.innerHeight * dpr * dpr;
-    if (coarsePointer || deviceMemory <= 4 || hardwareThreads <= 4 || pixels > 3200000) return 0;
-    if (deviceMemory <= 8 || hardwareThreads <= 8 || pixels > 1800000) return 1;
-    return 2;
-  }
-
-  function qualityCapForCurrentModel() {
-    if (!isPenroseSponge()) return 1.0;
-    return [0.24, 0.42, 0.72][state.performanceTier] ?? 0.24;
-  }
-
-  function requestedQualityScale() {
-    return state.qualityMode === 'auto'
-      ? pickAutoQuality()
-      : (QUALITY_SCALE[state.qualityMode] ?? 1.0);
-  }
-
-  function applyModelQuality(resizeTargets = true) {
-    const next = Math.min(requestedQualityScale(), qualityCapForCurrentModel());
-    const changed = Math.abs(next - state.qualityScale) > 0.001;
-    state.qualityScale = next;
-    if (changed && resizeTargets && state.device) resize();
   }
 
   // ---- Device acquisition ----
@@ -650,14 +611,14 @@ export async function initFractalBackground(canvas, options = {}) {
     d[U.paletteC] = p.c[0]; d[U.paletteC + 1] = p.c[1]; d[U.paletteC + 2] = p.c[2]; d[U.paletteC + 3] = 0;
     d[U.paletteD] = p.d[0]; d[U.paletteD + 1] = p.d[1]; d[U.paletteD + 2] = p.d[2]; d[U.paletteD + 3] = 0;
 
-    d[U.glowStrength] = isPenroseSponge() && state.performanceTier === 0 ? 0.55 : 1.0;
+    d[U.glowStrength] = 1.0;
     d[U.fogDensity] = 0.5;
     d[U.shadowSoftness] = 12.0;
     d[U.aoStrength] = 0.85;
     d[U.qualityScale] = state.qualityScale;
     d[U.bgMode] = state.transparent ? 0.0 : 1.0;
     d[U.reducedMotion] = rm ? 1.0 : 0.0;
-    d[U.performanceTier] = state.performanceTier;
+    d[U._pad] = 0.0;
 
     // View-projection for the attractor line pass (matches the raymarcher's
     // camera: same eye, target, and vertical FOV).
@@ -747,20 +708,17 @@ export async function initFractalBackground(canvas, options = {}) {
     device.queue.submit([encoder.finish()]);
   }
 
-  // ---- Adaptive quality and Penrose complexity ----------------------------
+  // ---- Adaptive quality (auto mode only) ----
   function adaptQuality(dtMs) {
-    const sponge = isPenroseSponge();
-    if (state.qualityMode !== 'auto' && !sponge) return;
-
+    if (state.qualityMode !== 'auto') return;
     const fps = 1000 / Math.max(dtMs, 1);
+    // EMA smoothing.
     state.fpsEMA = state.fpsEMA * 0.9 + fps * 0.1;
 
-    const slowThreshold = sponge ? 28 : 50;
-    const fastThreshold = sponge ? 46 : 58;
-    if (state.fpsEMA < slowThreshold) {
+    if (state.fpsEMA < 50) {
       state.slowFrames++;
       state.fastFrames = 0;
-    } else if (state.fpsEMA > fastThreshold) {
+    } else if (state.fpsEMA > 58) {
       state.fastFrames++;
       state.slowFrames = 0;
     } else {
@@ -768,28 +726,16 @@ export async function initFractalBackground(canvas, options = {}) {
       state.fastFrames = 0;
     }
 
-    const minScale = sponge ? 0.20 : 0.4;
-    const maxScale = sponge ? qualityCapForCurrentModel() : 1.0;
-    const slowLimit = sponge ? 10 : 45;
-    const fastLimit = sponge ? 240 : 120;
+    const MIN_SCALE = 0.4;
+    const MAX_SCALE = 1.0;
 
-    // Penrose first drops geometric complexity, then resolution. This reacts
-    // quickly enough to avoid mobile GPU timeouts. Recovery is intentionally
-    // conservative: resolution may rise, while complexity never rises during
-    // the session without the user reselecting the model.
-    if (state.slowFrames > slowLimit) {
-      if (sponge && state.performanceTier > 0) {
-        state.performanceTier--;
-        state.qualityScale = Math.min(state.qualityScale, qualityCapForCurrentModel());
-        resize();
-      } else if (state.qualityMode === 'auto' && state.qualityScale > minScale) {
-        state.qualityScale = Math.max(minScale, state.qualityScale - (sponge ? 0.06 : 0.15));
-        resize();
-      }
+    // Hysteresis: require sustained slow/fast before changing.
+    if (state.slowFrames > 45 && state.qualityScale > MIN_SCALE) {
+      state.qualityScale = Math.max(MIN_SCALE, state.qualityScale - 0.15);
       state.slowFrames = 0;
-    } else if (state.qualityMode === 'auto' &&
-               state.fastFrames > fastLimit && state.qualityScale < maxScale) {
-      state.qualityScale = Math.min(maxScale, state.qualityScale + (sponge ? 0.04 : 0.1));
+      resize();
+    } else if (state.fastFrames > 120 && state.qualityScale < MAX_SCALE) {
+      state.qualityScale = Math.min(MAX_SCALE, state.qualityScale + 0.1);
       state.fastFrames = 0;
       resize();
     }
@@ -802,14 +748,6 @@ export async function initFractalBackground(canvas, options = {}) {
     const dt = state.lastFrameTime ? nowMs - state.lastFrameTime : 16.7;
     state.lastFrameTime = nowMs;
 
-    // Low-tier Penrose deliberately targets about 20 fps. Fewer submitted
-    // frames reduces sustained mobile GPU load without affecting controls.
-    if (isPenroseSponge() && state.performanceTier === 0 &&
-        nowMs - state.lastRenderTime < 50) {
-      state.rafId = requestAnimationFrame(loop);
-      return;
-    }
-
     if (!reducedMotion()) {
       state.animTime += dt / 1000;
       // Ease parallax toward target.
@@ -818,7 +756,6 @@ export async function initFractalBackground(canvas, options = {}) {
     }
 
     renderFrame(nowMs, false);
-    state.lastRenderTime = nowMs;
     adaptQuality(dt);
 
     state.rafId = requestAnimationFrame(loop);
@@ -986,14 +923,6 @@ export async function initFractalBackground(canvas, options = {}) {
   async function init(isReinit) {
     const device = await acquireDevice();
     state.device = device;
-    const detectedTier = detectDeviceTier();
-    if (!isReinit) {
-      state.deviceTier = detectedTier;
-      state.performanceTier = detectedTier;
-    } else {
-      state.deviceTier = Math.min(state.deviceTier, detectedTier);
-      state.performanceTier = Math.min(state.performanceTier, state.deviceTier);
-    }
 
     // Device-lost handling: try one re-init, then fall back.
     device.lost.then((info) => {
@@ -1001,10 +930,6 @@ export async function initFractalBackground(canvas, options = {}) {
       // 'destroyed' reason means we tore it down intentionally.
       if (info.reason === 'destroyed') return;
       console.warn('[fractal-bg] device lost:', info.message);
-      if (isPenroseSponge()) {
-        state.performanceTier = 0;
-        state.qualityScale = Math.min(state.qualityScale, 0.20);
-      }
       if (!state._reinitAttempted) {
         state._reinitAttempted = true;
         reinit();
@@ -1022,8 +947,12 @@ export async function initFractalBackground(canvas, options = {}) {
       alphaMode: state.transparent ? 'premultiplied' : 'opaque',
     });
 
-    // Pick starting quality, then apply the active model's safe cap.
-    applyModelQuality(false);
+    // Pick starting quality tier.
+    if (state.qualityMode === 'auto') {
+      state.qualityScale = pickAutoQuality();
+    } else {
+      state.qualityScale = QUALITY_SCALE[state.qualityMode] ?? 1.0;
+    }
 
     createStaticResources();
     resize();
@@ -1149,11 +1078,6 @@ export async function initFractalBackground(canvas, options = {}) {
     setFractal(name) {
       if (name in FRACTAL_IDS) {
         state.fractalType = FRACTAL_IDS[name];
-        state.performanceTier = state.deviceTier;
-        state.slowFrames = 0;
-        state.fastFrames = 0;
-        state.lastRenderTime = 0;
-        applyModelQuality();
         // The attractor family needs its trajectory buffer built before use.
         if (state.fractalType >= FRACTAL_IDS.attractor) ensureAttractorTrajectory();
         if (!state.running) renderFrame(performance.now(), true);
@@ -1165,7 +1089,9 @@ export async function initFractalBackground(canvas, options = {}) {
     },
     setQuality(mode) {
       state.qualityMode = mode;
-      applyModelQuality();
+      if (mode === 'auto') state.qualityScale = pickAutoQuality();
+      else state.qualityScale = QUALITY_SCALE[mode] ?? 1.0;
+      resize();
     },
     setTransparent(v) { applyTransparent(v); },
     // Enable drag/pinch/wheel navigation without the full explorer preset.
@@ -1195,8 +1121,6 @@ export async function initFractalBackground(canvas, options = {}) {
         qualityMode: state.qualityMode,
         qualityScale: +state.qualityScale.toFixed(2),
         fps: Math.round(state.fpsEMA),
-        performanceTier: state.performanceTier,
-        deviceTier: state.deviceTier,
         reducedMotion: reducedMotion(),
         explorer: state.explorer,
         zoom: +state.zoom.toFixed(2),

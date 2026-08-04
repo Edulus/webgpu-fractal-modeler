@@ -18,8 +18,7 @@ export const FRACTAL_WGSL = /* wgsl */ `
 //   32  camTarget  : vec3<f32>   (pad slot -> fractalType)
 //   44  fractalType: f32   (0=mandelbulb, 1=mandelbox, 2=menger, 3=julia,
 //                           4=apollonian, 5=spherepack, 6=encrusted,
-//                           7=surfacepack, 8=penrose relief,
-//                           9=penrose sponge; 10+ are the line-rendered
+//                           7=surfacepack, 8=penrose; 9+ are the line-rendered
 //                           attractors, which this pass only backgrounds)
 //   48  power      : f32
 //   52  mbScale    : f32
@@ -36,7 +35,7 @@ export const FRACTAL_WGSL = /* wgsl */ `
 //   144 qualityScale : f32
 //   148 bgMode       : f32   (0 = transparent, 1 = gradient background)
 //   152 reducedMotion: f32
-//   156 performanceTier: f32 (0=low, 1=medium, 2=high)
+//   156 _pad         : f32
 //   160 viewProj     : mat4x4<f32>  (attractor line rasterization)
 struct Uniforms {
   resolution : vec2<f32>,
@@ -61,7 +60,7 @@ struct Uniforms {
   qualityScale : f32,
   bgMode       : f32,
   reducedMotion: f32,
-  performanceTier: f32,
+  _pad         : f32,
   viewProj     : mat4x4<f32>,
 };
 
@@ -663,101 +662,6 @@ fn dePenrose(pos : vec3<f32>) -> DEResult {
   return res;
 }
 
-// Volumetric Penrose sponge. Three independently phased Penrose edge fields
-// are projected through the XY, YZ, and ZX planes. Pairwise intersections of
-// those extruded edge sheets become branching tunnels inside a spherical host.
-// The construction is repeated at the parent phi^2 scale, so broad passages
-// contain a finer self-similar network rather than a single decorative skin.
-fn penroseTunnelNetwork(exy : f32, eyz : f32, ezx : f32, width : f32) -> f32 {
-  let sxy = exy - width;
-  let syz = eyz - width;
-  let szx = ezx - width;
-  return min(max(sxy, syz), min(max(syz, szx), max(szx, sxy)));
-}
-
-fn dePenroseSponge(pos : vec3<f32>) -> DEResult {
-  const R : f32 = 1.28;
-  const SCALE : f32 = 0.18;
-  const FINE_W : f32 = 0.030;
-  const PARENT_W : f32 = 0.062;
-
-  let host = length(pos) - R;
-  var res : DEResult;
-  if (host > 0.12) {
-    res.dist = host;
-    res.trap = 0.28;
-    return res;
-  }
-
-  let tier = clamp(u.performanceTier, 0.0, 2.0);
-  let animatePhason = tier > 0.5 && u.reducedMotion < 0.5;
-  let tm = select(0.0, u.time, animatePhason);
-  let drift = 0.075 * vec2<f32>(cos(tm * 0.041), sin(tm * 0.037));
-  let phXY = drift;
-  let phYZ = vec2<f32>(drift.y, -drift.x) + vec2<f32>(0.11, -0.07);
-  let phZX = vec2<f32>(-drift.x - drift.y, drift.x) + vec2<f32>(-0.08, 0.13);
-
-  let qXY = vec2<f32>(
-    0.98480775 * pos.x - 0.17364818 * pos.y,
-    0.17364818 * pos.x + 0.98480775 * pos.y) / SCALE;
-  let qYZ = vec2<f32>(
-    0.93232735 * pos.y - 0.36161543 * pos.z,
-    0.36161543 * pos.y + 0.93232735 * pos.z) / SCALE;
-  let qZX = vec2<f32>(
-    0.81915204 * pos.z + 0.57357644 * pos.x,
-   -0.57357644 * pos.z + 0.81915204 * pos.x) / SCALE;
-
-  // Low tier: two Penrose projections form one family of volumetric tunnels.
-  // Medium adds the third projection and its branching pairwise intersections.
-  // High repeats all three at phi^2, restoring the full hierarchy.
-  let childXY = penroseQuery(qXY, phXY);
-  let childYZ = penroseQuery(qYZ, phYZ);
-  let edgeXY = max(-childXY.sdf, 0.0) * SCALE;
-  let edgeYZ = max(-childYZ.sdf, 0.0) * SCALE;
-
-  var fineTunnels = max(edgeXY - FINE_W, edgeYZ - FINE_W);
-  var kindMix = 0.5 * (childXY.kind + childYZ.kind);
-  var perpMix = clamp(
-    (length(childXY.perp) + length(childYZ.perp)) / 6.0, 0.0, 1.0);
-
-  if (tier > 0.5) {
-    let childZX = penroseQuery(qZX, phZX);
-    let edgeZX = max(-childZX.sdf, 0.0) * SCALE;
-    fineTunnels = penroseTunnelNetwork(edgeXY, edgeYZ, edgeZX, FINE_W);
-    kindMix = (childXY.kind + childYZ.kind + childZX.kind) / 3.0;
-    perpMix = clamp(
-      (length(childXY.perp) + length(childYZ.perp) + length(childZX.perp)) / 9.0,
-      0.0, 1.0);
-  }
-
-  var tunnels = fineTunnels;
-  var hierarchy = 0.0;
-  if (tier > 1.5) {
-    let parentXY = penroseQuery(qXY / PHI2, phXY);
-    let parentYZ = penroseQuery(qYZ / PHI2, phYZ);
-    let parentZX = penroseQuery(qZX / PHI2, phZX);
-    let parentEdgeXY = max(-parentXY.sdf, 0.0) * SCALE * PHI2;
-    let parentEdgeYZ = max(-parentYZ.sdf, 0.0) * SCALE * PHI2;
-    let parentEdgeZX = max(-parentZX.sdf, 0.0) * SCALE * PHI2;
-    let parentTunnels = penroseTunnelNetwork(
-      parentEdgeXY, parentEdgeYZ, parentEdgeZX, PARENT_W);
-    tunnels = min(tunnels, parentTunnels);
-    let parentPerp = clamp(
-      (length(parentXY.perp) + length(parentYZ.perp) + length(parentZX.perp)) / 9.0,
-      0.0, 1.0);
-    perpMix = mix(perpMix, parentPerp, 0.65);
-    hierarchy = clamp(
-      1.0 - min(parentEdgeXY, min(parentEdgeYZ, parentEdgeZX)) / PARENT_W,
-      0.0, 1.0);
-  }
-
-  var safety = select(0.31, 0.35, tier > 0.5);
-  if (tier > 1.5) { safety = 0.38; }
-  res.dist = max(host, -tunnels) * safety;
-  res.trap = 0.10 + 0.38 * kindMix + 0.30 * perpMix + 0.22 * hierarchy;
-  return res;
-}
-
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
   let ft = u.fractalType;
@@ -777,10 +681,8 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
     return deEncrusted(pos);
   } else if (ft < 7.5) {
     return deSurfacePack(pos);
-  } else if (ft < 8.5) {
-    return dePenrose(pos);
   }
-  return dePenroseSponge(pos);
+  return dePenrose(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {
@@ -803,13 +705,7 @@ fn softShadow(ro : vec3<f32>, rd : vec3<f32>, kSoft : f32) -> f32 {
   var res = 1.0;
   var t = 0.02;
   const SH_STEPS : i32 = 40;
-  var activeSteps = 40;
-  if (u.fractalType > 8.5 && u.fractalType < 9.5) {
-    activeSteps = select(0, 8, u.performanceTier > 0.5);
-    if (u.performanceTier > 1.5) { activeSteps = 14; }
-  }
   for (var i = 0; i < SH_STEPS; i = i + 1) {
-    if (i >= activeSteps) { break; }
     let h = mapDist(ro + rd * t);
     if (h < 0.0005) { return 0.0; }
     res = min(res, kSoft * h / t);
@@ -824,13 +720,7 @@ fn calcAO(p : vec3<f32>, n : vec3<f32>) -> f32 {
   var occ = 0.0;
   var sca = 1.0;
   const AO_STEPS : i32 = 5;
-  var activeSteps = 5;
-  if (u.fractalType > 8.5 && u.fractalType < 9.5) {
-    activeSteps = select(0, 2, u.performanceTier > 0.5);
-    if (u.performanceTier > 1.5) { activeSteps = 3; }
-  }
   for (var i = 0; i < AO_STEPS; i = i + 1) {
-    if (i >= activeSteps) { break; }
     let hr = 0.01 + 0.14 * f32(i) / 4.0;
     let d = mapDist(p + n * hr);
     occ = occ + (hr - d) * sca;
@@ -877,7 +767,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // Strange attractors aren't distance fields — they're rasterized as line
   // geometry by a second pipeline drawn over this pass. Emit only the
   // background here so those lines have something to blend onto.
-  if (u.fractalType > 9.5) {
+  if (u.fractalType > 8.5) {
     let bg = backgroundColor(rd);
     return vec4<f32>(select(vec3<f32>(0.0), bg, u.bgMode >= 0.5), 0.0);
   }
@@ -885,12 +775,6 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // Adaptive epsilon: coarser when quality is low.
   let epsScale = mix(2.5, 1.0, clamp(u.qualityScale, 0.0, 1.0));
   let hitEps = BASE_EPS * epsScale;
-  let sponge = u.fractalType > 8.5 && u.fractalType < 9.5;
-  var activeMarchSteps = MAX_STEPS;
-  if (sponge) {
-    activeMarchSteps = select(56, 88, u.performanceTier > 0.5);
-    if (u.performanceTier > 1.5) { activeMarchSteps = 128; }
-  }
 
   var t = 0.05;
   var hit = false;
@@ -899,16 +783,13 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
 
   // Sphere tracing with a small relaxation factor and glow from near-misses.
   for (var i = 0; i < MAX_STEPS; i = i + 1) {
-    if (i >= activeMarchSteps) { break; }
     let pos = ro + rd * t;
     let de = mapDE(pos);
     let d = de.dist;
 
-    // Skip the exponential near-miss glow on the lowest mobile tier.
-    if (!sponge || u.performanceTier > 0.5) {
-      let near = exp(-d * 42.0);
-      glow = glow + near / (1.0 + t * t * 0.35);
-    }
+    // Accumulate glow: how close we passed to the surface, weighted by 1/dist.
+    let near = exp(-d * 42.0);
+    glow = glow + near / (1.0 + t * t * 0.35);
 
     let hitThresh = hitEps * t; // scale epsilon with distance for stable hits
     if (d < hitThresh) {
