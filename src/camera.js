@@ -174,6 +174,76 @@ export function travelDistance(clearance, dtSec, mult = 1) {
   return clearance * (1 - Math.exp(-TRAVEL_K * dt));
 }
 
+// ---- Pinch gestures -------------------------------------------------------
+
+// Below this separation (CSS px) the ratio between two readings stops meaning
+// anything: two fingertips cannot really be closer than about this, so a
+// smaller number is a mis-registration, and dividing by it produces an
+// arbitrarily large factor.
+export const PINCH_MIN_SEP = 40;
+
+// Exponent on the separation ratio. 1.0 is raw direct manipulation, where the
+// camera distance tracks finger separation exactly; on a phone that is far too
+// hot, because the usable spread runs from roughly 60px to the width of the
+// screen and hands that whole range onto one gesture. Halving the exponent
+// halves the rate in log space: the same full spread now closes in by about
+// 2.8x instead of 6.7x, and a second pinch continues smoothly from there.
+export const PINCH_GAIN = 0.55;
+
+// Ceiling on a single move event's factor. This is NOT the rate limiter — the
+// factors telescope, so the total zoom depends only on where the fingers
+// started and finished, not on how many events arrived. It is a guard against
+// one discontinuous reading: a third finger landing, a fingertip lost and
+// re-acquired, or a coalesced batch after a stall, any of which can make the
+// separation jump by hundreds of pixels between consecutive events.
+//
+// So it has to sit above anything a hand can actually do, or it silently
+// becomes a rate limiter and makes the gesture under-zoom on slow event
+// streams. The worst honest case is a fast finger leaving the tightest usable
+// pinch — separation off the floor, where relative change is largest. At this
+// value the guard engages only past about 2.5x separation growth in a single
+// event, which no pair of fingers produces.
+export const PINCH_MAX_STEP = 1.7;
+
+// Finger spread, in px, that corresponds to one full approach step in fly mode.
+export const PINCH_DOLLY_PX = 260;
+
+/**
+ * Zoom factor for one pinch move event, from the previous and current finger
+ * separations in CSS px. Fingers apart returns < 1 (closer in), together > 1.
+ *
+ * Deliberately incremental rather than anchored to the separation at gesture
+ * start. An anchored form has to be evaluated against the distance the gesture
+ * began with, which stops being the right frame of reference the moment the
+ * pivot is re-pinned onto a surface mid-gesture; the incremental form composes
+ * with re-pinning because each step is relative to wherever the camera now is.
+ * The two agree exactly when nothing re-pins, since the ratios telescope.
+ */
+export function pinchZoomFactor(prevSep, curSep, gain = PINCH_GAIN) {
+  if (!Number.isFinite(prevSep) || !Number.isFinite(curSep)) return 1;
+  const a = Math.max(prevSep, PINCH_MIN_SEP);
+  const b = Math.max(curSep, PINCH_MIN_SEP);
+  if (!(a > 0) || !(b > 0)) return 1;
+  return clamp(Math.pow(a / b, gain), 1 / PINCH_MAX_STEP, PINCH_MAX_STEP);
+}
+
+/**
+ * World distance to dolly for one pinch move event in fly mode, given the
+ * change in finger separation.
+ *
+ * Uses the same law as travelDistance for the same reason: a fixed number of
+ * world units per pixel of spread is only correct at one scale. Hovering a
+ * hundredth of a radius from a wall, a fixed step is many multiples of the
+ * clearance and puts the camera straight through it, which is exactly the
+ * "moves at light speed when zoomed in" complaint. A fraction of the remaining
+ * gap approaches the surface without ever crossing it.
+ */
+export function pinchDollyDistance(clearance, deltaPx) {
+  if (!Number.isFinite(deltaPx) || deltaPx === 0) return 0;
+  const f = clamp(deltaPx / PINCH_DOLLY_PX, -1, 1);
+  return Math.sign(f) * clearance * (1 - Math.exp(-Math.abs(f)));
+}
+
 export const DRAG_MIN = 0.06;
 export const DRAG_MAX = 3.0;
 

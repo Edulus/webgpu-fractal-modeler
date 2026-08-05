@@ -11,7 +11,9 @@ import {
   makeFlyCamera, stepFlyCamera, aimFlyCamera, dollyFlyCamera, scaleFlySpeed,
   flyBasis, aimAtOrigin, MAX_PITCH, FLY_SPEED_MIN, FLY_SPEED_MAX,
   usableClearance, travelDistance, orbitDragScale,
+  pinchZoomFactor, pinchDollyDistance,
   CLEAR_MIN, CLEAR_MAX, TRAVEL_K, DRAG_MIN, DRAG_MAX,
+  PINCH_MIN_SEP, PINCH_MAX_STEP, PINCH_GAIN, PINCH_DOLLY_PX,
 } from '../src/camera.js';
 
 let passed = 0;
@@ -236,6 +238,110 @@ console.log('\nrate scaling: orbit drag vs zoom');
     check(`pinned pivot needs no damping (zoom ${z})`, orbitDragScale(z, true) === 1);
   }
   check('unpinned still damps', orbitDragScale(0.2, false) < 0.1);
+}
+
+console.log('\npinch to zoom');
+{
+  check('no movement is no zoom', near(pinchZoomFactor(200, 200), 1));
+  check('fingers apart zooms in', pinchZoomFactor(200, 260) < 1);
+  check('fingers together zooms out', pinchZoomFactor(260, 200) > 1);
+  check('the two directions are exact inverses',
+        near(pinchZoomFactor(200, 260) * pinchZoomFactor(260, 200), 1, 1e-12));
+
+  // The property that makes the gesture frame-rate independent: the factors
+  // telescope, so the total zoom depends only on where the fingers started and
+  // finished, never on how many move events the browser chose to deliver.
+  const total = (steps) => {
+    let f = 1, prev = 60;
+    for (let i = 1; i <= steps; i++) {
+      const cur = 60 + (380 - 60) * (i / steps);
+      f *= pinchZoomFactor(prev, cur);
+      prev = cur;
+    }
+    return f;
+  };
+  // The yardstick is the analytic total, not a single call spanning the whole
+  // spread: one 60px-to-380px event would trip the discontinuity guard, which
+  // no real gesture ever delivers in one go.
+  const analytic = Math.pow(60 / 380, PINCH_GAIN);
+  for (const n of [10, 40, 120, 400]) {
+    check(`${n} events give the same total zoom`, near(total(n), analytic, 1e-9),
+          `${total(n).toFixed(6)} vs ${analytic.toFixed(6)}`);
+  }
+
+  // Rate. A raw ratio hands the whole 60px-to-screen-width spread to a single
+  // gesture, which is the "light speed" complaint; the gain tames it without
+  // making a deliberate spread feel inert.
+  check('a full spread is gentler than the raw ratio', analytic > 60 / 380);
+  check('a full spread still does real work', analytic < 0.5 && analytic > 0.2,
+        `${analytic.toFixed(3)}`);
+  check('gain 1 is the raw ratio',
+        near(pinchZoomFactor(200, 260, 1), 200 / 260, 1e-12));
+  check('the shipped gain is below 1 (that is the whole point)', PINCH_GAIN < 1);
+
+  // A single event must never be able to jump the camera, whatever the pointer
+  // stream does — a third finger landing, or a coalesced batch after a stall.
+  check('one absurd event is capped in',
+        near(pinchZoomFactor(20, 4000), 1 / PINCH_MAX_STEP));
+  check('one absurd event is capped out',
+        near(pinchZoomFactor(4000, 20), PINCH_MAX_STEP));
+
+  // ...but the cap must sit above anything a hand can do, or it stops being a
+  // guard and starts quietly eating the gesture. 50px of separation change in
+  // one event is a fast finger at 60Hz; from the tightest usable pinch, that is
+  // still the largest honest step there is.
+  check('a fast finger from a tight pinch is not capped',
+        pinchZoomFactor(PINCH_MIN_SEP, PINCH_MIN_SEP + 50) > 1 / PINCH_MAX_STEP);
+  check('the cap needs the separation to roughly triple',
+        pinchZoomFactor(100, 250) > 1 / PINCH_MAX_STEP &&
+        near(pinchZoomFactor(100, 400), 1 / PINCH_MAX_STEP));
+
+  // Degenerate separations: two fingertips cannot really be 2px apart, so a
+  // reading like that is mis-registration, and dividing by it explodes.
+  check('below the floor, both sides clamp to no zoom',
+        near(pinchZoomFactor(1, 3), 1));
+  check('the floor is one-sided', pinchZoomFactor(1, 400) < 1);
+  check('floored ratio matches an explicit floor',
+        near(pinchZoomFactor(5, 400), pinchZoomFactor(PINCH_MIN_SEP, 400)));
+  for (const [a, b] of [[0, 100], [100, 0], [-5, 100], [NaN, 100],
+                        [100, NaN], [Infinity, 100], [100, Infinity]]) {
+    const f = pinchZoomFactor(a, b);
+    check(`degenerate (${a}, ${b}) stays finite and bounded`,
+          Number.isFinite(f) && f >= 1 / PINCH_MAX_STEP && f <= PINCH_MAX_STEP);
+  }
+}
+
+console.log('\npinch to dolly (fly mode)');
+{
+  check('no spread is no travel', pinchDollyDistance(1, 0) === 0);
+  check('spreading moves forward', pinchDollyDistance(1, 100) > 0);
+  check('pinching moves back', pinchDollyDistance(1, -100) < 0);
+  check('symmetric in direction',
+        near(pinchDollyDistance(1, 80), -pinchDollyDistance(1, -80)));
+
+  // The reason this exists: a fixed number of world units per pixel is only
+  // correct at one scale. Scaling by the gap makes the same gesture cover the
+  // same FRACTION of it whether the camera is a radius away or a thousandth.
+  const frac = (c) => pinchDollyDistance(c, 120) / c;
+  check('the same gesture covers the same fraction at every scale',
+        near(frac(10), frac(0.001), 1e-12));
+
+  // Never crosses the surface in one step, at any spread the screen allows.
+  let crosses = false;
+  for (let px = 1; px <= 4000; px += 7) {
+    if (pinchDollyDistance(1, px) >= 1) crosses = true;
+  }
+  check('no single event covers the whole gap', !crosses);
+  check('a full-screen spread is capped like a full one',
+        near(pinchDollyDistance(1, PINCH_DOLLY_PX * 4),
+             pinchDollyDistance(1, PINCH_DOLLY_PX)));
+  check('a full step covers most of the gap, not all',
+        pinchDollyDistance(1, PINCH_DOLLY_PX) > 0.5 &&
+        pinchDollyDistance(1, PINCH_DOLLY_PX) < 0.7);
+  for (const bad of [NaN, Infinity, -Infinity]) {
+    check(`degenerate delta ${bad} travels nothing`,
+          pinchDollyDistance(1, bad) === 0);
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -19,7 +19,8 @@ import { getPalette } from './palettes.js';
 import { clampStops, averageColor, MAX_STOPS } from './palette-io.js';
 import {
   makeFlyCamera, stepFlyCamera, aimFlyCamera, dollyFlyCamera, scaleFlySpeed,
-  usableClearance, orbitDragScale, FLY_SPEED_MIN, FLY_SPEED_MAX,
+  usableClearance, orbitDragScale, pinchZoomFactor, pinchDollyDistance,
+  FLY_SPEED_MIN, FLY_SPEED_MAX,
 } from './camera.js';
 
 // ---- Uniform buffer layout (mirror of the WGSL Uniforms struct) -----------
@@ -255,8 +256,7 @@ export async function initFractalBackground(canvas, options = {}) {
     accumOn: true,
     // active pointers for drag / pinch tracking
     pointers: new Map(),
-    pinchDist0: 0,
-    pinchZoom0: 1,
+    pinchDist0: 0,       // finger separation at the previous move event
     lastInteract: 0,
     // tap vs. drag/pinch discrimination (for double-tap-to-reset)
     gestureMoved: false,
@@ -1207,10 +1207,12 @@ export async function initFractalBackground(canvas, options = {}) {
       state.tapStart = { x: e.clientX, y: e.clientY };
     }
     if (state.pointers.size >= 2) {
-      // A second finger means this is a pinch, never a tap.
+      // A second finger means this is a pinch, never a tap. Re-baseline the
+      // separation on every touch down: which two pointers pinchDistance()
+      // measures can change as fingers land, and carrying a stale baseline
+      // across that would read as one enormous spread.
       state.gestureMulti = true;
       state.pinchDist0 = pinchDistance();
-      state.pinchZoom0 = state.orbit.dist;
     }
   }
 
@@ -1226,24 +1228,24 @@ export async function initFractalBackground(canvas, options = {}) {
     const k = 3.2 / Math.max(300, Math.min(window.innerWidth, window.innerHeight));
 
     if (state.pointers.size >= 2) {
-      if (state.fly) {
-        // Two fingers: spread to move forward, pinch to back up. Zoom is
-        // meaningless when the camera is already free to travel.
-        const dist = pinchDistance();
-        if (state.pinchDist0 > 0 && dist > 0) {
-          dollyFlyCamera(state.flyCam,
-            (dist - state.pinchDist0) * 0.0025 * (CAM_RADIUS[state.fractalType] ?? 2.55));
-          state.pinchDist0 = dist;
-        }
-      } else {
-        // Pinch: fingers apart -> zoom in (smaller radius).
-        const dist = pinchDistance();
-        if (state.pinchDist0 > 0 && dist > 0) {
-          const want = state.pinchZoom0 * (state.pinchDist0 / dist);
-          if (want < state.orbit.dist) repinOrbitTarget();
-          state.orbit.dist = clampDist(want);
+      // Both gestures are integrated from the CHANGE in finger separation since
+      // the previous event, not from the separation the gesture started at.
+      // Each step is then relative to where the camera actually is, which is
+      // what makes them compose with re-pinning and with proximity scaling.
+      const sep = pinchDistance();
+      const baseR = CAM_RADIUS[state.fractalType] ?? 2.55;
+      if (state.pinchDist0 > 0 && sep > 0) {
+        if (state.fly) {
+          // Two fingers: spread to move forward, pinch to back up. Zoom is
+          // meaningless when the camera is already free to travel.
+          dollyFlyCamera(state.flyCam, pinchDollyDistance(
+            usableClearance(state.probeDist, baseR), sep - state.pinchDist0));
+        } else {
+          // Pinch: fingers apart -> zoom in (smaller radius).
+          applyZoom(pinchZoomFactor(state.pinchDist0, sep));
         }
       }
+      if (sep > 0) state.pinchDist0 = sep;
     } else if (state.fly) {
       // Single-pointer drag: aim. Drag right looks right, drag down looks down.
       aimFlyCamera(state.flyCam, dx * k, -dy * k);
@@ -1275,7 +1277,12 @@ export async function initFractalBackground(canvas, options = {}) {
     state.pointers.delete(e.pointerId);
     state.lastInteract = performance.now();
 
-    if (state.pointers.size === 1) {
+    if (state.pointers.size >= 2) {
+      // Still a pinch, but on a different pair of fingers. Same reason as on
+      // pointer down: re-baseline rather than measure against the pair that
+      // just changed.
+      state.pinchDist0 = pinchDistance();
+    } else if (state.pointers.size === 1) {
       // Dropped from a pinch to one finger: continuing as a drag, not a tap.
       state.gestureMoved = true;
       const remaining = [...state.pointers.values()][0];
