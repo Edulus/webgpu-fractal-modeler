@@ -82,7 +82,7 @@ handle.setExplorer(true);
 
 Explorer mode provides:
 
-- Mouse or one-finger drag to orbit, at a rate that scales with zoom
+- Mouse or one-finger drag to orbit around the pinned pivot
 - Pinch or mouse-wheel zoom
 - Double-tap, double-click, or `resetView()` to recenter
 - An opaque presentation background
@@ -109,9 +109,17 @@ Every other camera in the project orbits a bounded object at a fixed radius from
 
 Vertical travel uses world up rather than camera up, so `E` still rises while looking straight down. The frame delta is clamped so a stalled tab cannot teleport the camera through a wall.
 
-**Travel speed scales with clearance.** These fractals have no characteristic size, so a fixed number of world units per second is only correct at one distance: a hair from a gyroid wall, the nominal rate crosses seventy wall-thicknesses a second. Each frame a one-thread compute pass evaluates the distance estimator at the camera and writes a single float, which the renderer maps back asynchronously and uses to scale movement. Only the GPU can evaluate the estimators, so there is no way to get this number on the CPU. The reading is a frame or two stale, which is immaterial for a speed control.
+**Travel covers a fraction of the gap, not a fixed distance.** These fractals have no characteristic size, so a fixed number of world units per second is only correct at one distance: a hair from a gyroid wall, a nominal rate crosses seventy wall-thicknesses a second. Movement is instead integrated as
 
-Absolute value is used deliberately: in fly mode the camera can be *inside* solid material, where the estimate goes negative, and scaling by `|d|` keeps it possible to travel back out. The scale is floored so you are never frozen and capped so you never run away in open space.
+```text
+step = clearance × (1 − exp(−k · dt))
+```
+
+which buys two things over the `speed × dt` form it replaced. It is exactly frame-rate independent — the linear form makes a 30fps machine cover different ground than a 60fps one for the same held key — and the approach is asymptotic, so no speed and no frame length can cross the remaining gap in a single step. Closing on a surface slows smoothly and never arrives.
+
+The clearance comes from the GPU: a one-thread compute pass evaluates the distance estimator at the camera each frame and reports it alongside the centre-ray hit that the orbit camera uses for pinning. Only the GPU can evaluate the estimators, so there is no way to obtain this on the CPU. The reading is a frame or two stale, which is immaterial for a rate control — and the feedback loop of re-reading it every frame is precisely what makes the approach asymptotic.
+
+Absolute value is used deliberately: in fly mode the camera can be *inside* solid material, where the estimate goes negative, and using `|d|` keeps it possible to travel back out. Clearance is floored so you are never frozen and capped so you never bolt in open space.
 
 Two models change shape in this mode. The gyroid drops its bounding ball entirely — it is genuinely infinite and periodic, and the ball existed only to give the orbit camera something to circle. The Kleinian limit set widens its ball rather than removing it, since an unbounded version would let rays march forever through the gaps instead of terminating on the background.
 
@@ -171,12 +179,12 @@ Recommended canvas CSS:
 | `setFlySpeed(n)` | Set the travel speed multiplier. |
 | `setControls(bool)` | Enable orbit and zoom controls independently. |
 | `setAutoOrbit(bool)` | Toggle time-driven camera movement. |
-| `setZoom(n)` / `zoomBy(f)` | Set or multiply camera distance. |
+| `setZoom(n)` / `zoomBy(f)` | Set or multiply camera distance; zooming in re-pins the pivot onto the surface. |
 | `resetView()` | Recenter the orbit and reset zoom. |
 | `pause()` | Stop the render loop. |
 | `resume()` | Resume rendering while respecting visibility gating. |
 | `destroy()` | Tear down observers, listeners, textures, and the WebGPU device. |
-| `info` | Returns model, quality, FPS, reduced-motion, explorer, fly, speed, position, and zoom state. |
+| `info` | Model, quality, FPS, reduced-motion, explorer, fly, speed, position, zoom, whether the orbit pivot is pinned, camera clearance, and accumulated sample count. |
 
 ## Progressive accumulation
 
@@ -318,3 +326,12 @@ Requires `navigator.gpu`:
 - Firefox with WebGPU enabled
 
 When WebGPU is unavailable, the caller receives `onUnsupported` and can display a CSS, image, or video fallback.
+
+## Acknowledgements
+
+Two navigation techniques here were adopted after reading [fractbox-engine](https://github.com/fractbox/fractbox-engine) (MIT, © 2026 Vladimir Weinstein), a composable WebGPU distance-estimated fractal engine:
+
+- **Zoom to surface.** Its `zoomsurface.js` identifies why plain zoom fails on a distance-estimated fractal — the eye slides towards the model's centroid and eventually passes through the surface — and re-pins the orbit pivot onto the surface ahead instead. That diagnosis replaced an earlier workaround here that damped the drag rate, treating the symptom rather than the cause.
+- **Exponential travel integration.** Its `cruise.js` expresses camera motion as a fixed fraction of the remaining gap per second, which is frame-rate exact and makes approach asymptotic.
+
+No code was copied; both were reimplemented against this renderer's architecture. The engine is worth reading for its operator IR, which treats a formula as data and has each primitive declare how it affects the running distance-estimate derivative.
