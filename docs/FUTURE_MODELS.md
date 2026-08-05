@@ -92,6 +92,15 @@ Three things were needed beyond the camera itself, and they are worth rememberin
 - **The marcher must tolerate starting inside solid material,** which an orbit camera can never do. The ray origin is walked forward into free space before tracing, and the step has a floor so a negative estimate cannot drive the ray backwards.
 - **The camera maths belongs outside the render loop.** Movement integrates per frame, so with the maths inline it could only be exercised on a machine holding a live WebGPU device. Pulled out into `src/camera.js` as pure functions, it is covered by `tools/camera.test.js` in plain Node.
 
+### Navigation rates
+
+Settled. Both cameras now express motion as a fraction of the *available space* rather than as a fixed number of world units or radians, because these fractals have no characteristic size and any fixed constant is right at exactly one distance.
+
+- Fly travel is integrated exponentially, `gap * (1 - exp(-k*dt))`. That is exactly frame-rate independent, where the linear `speed * dt` form makes a 30fps machine cover different ground than a 60fps one, and it makes approach asymptotic — no speed and no frame length can cross the remaining gap in one step.
+- Orbit zoom re-pins its pivot onto the surface under the crosshair before closing in, so the eye dollies towards what is being looked at. The earlier drag-rate damping was a workaround for orbiting the centroid; it survives only as the fallback for an unpinned pivot.
+
+Both rely on the GPU clearance probe, since only the GPU can evaluate the estimators.
+
 ### Lipschitz normalisation for implicit fields
 
 An implicit field `f(p) = 0` is not a distance field. Sphere tracing on a raw `f` overshoots wherever the gradient exceeds one, which punches holes through thin structure.

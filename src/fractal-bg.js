@@ -18,7 +18,7 @@ import { ATTRACTOR_WGSL } from './shaders/attractor.wgsl.js';
 import { getPalette } from './palettes.js';
 import {
   makeFlyCamera, stepFlyCamera, aimFlyCamera, dollyFlyCamera, scaleFlySpeed,
-  proximitySpeedScale, orbitDragScale, FLY_SPEED_MIN, FLY_SPEED_MAX,
+  usableClearance, orbitDragScale, FLY_SPEED_MIN, FLY_SPEED_MAX,
 } from './camera.js';
 
 // ---- Uniform buffer layout (mirror of the WGSL Uniforms struct) -----------
@@ -186,8 +186,17 @@ export async function initFractalBackground(canvas, options = {}) {
     autoOrbit: true,      // time-driven camera drift (background feel)
     controls: false,      // drag/pinch/wheel interaction enabled
     explorer: false,      // model-explorer preset (opaque, no auto-drift)
-    zoom: 1.0,            // camera distance multiplier (pinch/wheel)
-    orbit: { yaw: 0.6, pitch: 0.35, tyaw: 0.6, tpitch: 0.35, vyaw: 0, vpitch: 0 },
+    // The orbit camera keeps an explicit target and distance rather than a
+    // multiplier on a fixed radius about the origin. Zooming re-pins the target
+    // onto the surface ahead, so the eye dollies towards what is being looked
+    // at instead of towards the model's centroid -- which is what used to drive
+    // it through the surface and into the interior at deep zoom.
+    orbit: {
+      yaw: 0.6, pitch: 0.35, tyaw: 0.6, tpitch: 0.35, vyaw: 0, vpitch: 0,
+      target: [0, 0, 0],
+      dist: 2.55,
+      pinned: false,     // has the target been placed on a surface?
+    },
     // Fly-through: a free position with a look direction decoupled from the
     // origin. The orbit camera cannot enter a model; this one can.
     fly: false,
@@ -202,6 +211,7 @@ export async function initFractalBackground(canvas, options = {}) {
     probeStaging: null,
     probeBusy: false,
     probeDist: Infinity,
+    probeHit: -1,        // centre-ray surface distance, -1 = miss
     // active pointers for drag / pinch tracking
     pointers: new Map(),
     pinchDist0: 0,
@@ -409,12 +419,13 @@ export async function initFractalBackground(canvas, options = {}) {
       layout: state._bgl.raymarchBGL,
       entries: [{ binding: 0, resource: ub }],
     });
+    // Two floats: clearance at the camera, and the centre-ray surface distance.
     state.probeBuffer = device.createBuffer({
-      size: 4,
+      size: 8,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
     });
     state.probeStaging = device.createBuffer({
-      size: 4,
+      size: 8,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
     state.probeBusy = false;
@@ -598,7 +609,9 @@ export async function initFractalBackground(canvas, options = {}) {
     // Base distance scales with the fractal's world size; zoom (pinch/wheel)
     // multiplies it. Always looking near origin.
     const baseR = CAM_RADIUS[state.fractalType] ?? 2.55;
-    const radius = baseR * state.zoom;
+    // Background drift keeps the old framing; the interactive modes carry their
+    // own distance state.
+    const radius = baseR;
 
     let camX, camY, camZ;
     let tgtX = 0, tgtY = rm ? 0.0 : Math.sin(t * 0.05) * 0.05, tgtZ = 0;
@@ -609,10 +622,10 @@ export async function initFractalBackground(canvas, options = {}) {
       // circling it. The maths lives in camera.js so it can be tested
       // without a GPU (see tools/camera.test.js).
       const cam = state.flyCam;
-      // Scale travel by the clearance the GPU last reported, so a metre from a
-      // wall and a hundred metres out feel the same.
-      const prox = proximitySpeedScale(state.probeDist, baseR);
-      const fwd = stepFlyCamera(cam, state.keys, state.frameDt / 1000, baseR, prox);
+      // Travel covers a fixed fraction of the clearance the GPU last reported,
+      // so a metre from a wall and a hundred metres out feel the same.
+      const gap = usableClearance(state.probeDist, baseR);
+      const fwd = stepFlyCamera(cam, state.keys, state.frameDt / 1000, baseR, gap);
       camX = cam.pos[0]; camY = cam.pos[1]; camZ = cam.pos[2];
       tgtX = camX + fwd[0]; tgtY = camY + fwd[1]; tgtZ = camZ + fwd[2];
     } else if (state.explorer) {
@@ -630,9 +643,12 @@ export async function initFractalBackground(canvas, options = {}) {
       o.vyaw *= 0.9; o.vpitch *= 0.9;
       o.pitch = Math.max(-1.45, Math.min(1.45, o.pitch));
       const cp = Math.cos(o.pitch);
-      camX = Math.cos(o.yaw) * cp * radius;
-      camY = Math.sin(o.pitch) * radius;
-      camZ = Math.sin(o.yaw) * cp * radius;
+      // dir points target -> eye, so the eye rides a sphere about the pivot.
+      const dir = orbitDir(o);
+      camX = o.target[0] + dir[0] * o.dist;
+      camY = o.target[1] + dir[1] * o.dist;
+      camZ = o.target[2] + dir[2] * o.dist;
+      tgtX = o.target[0]; tgtY = o.target[1]; tgtZ = o.target[2];
     } else {
       // Background: hypnotic Lissajous drift.
       const ax = rm ? 0.9 : t * 0.09;
@@ -739,15 +755,17 @@ export async function initFractalBackground(canvas, options = {}) {
     // Clearance probe: one thread, evaluating the estimator at the camera.
     // Skipped unless flying, and skipped while a previous read is still in
     // flight -- copying into a mapped buffer is invalid.
-    const doProbe = state.fly && state.pipelines.probe && !state.probeBusy
-                    && state.fractalType <= FRACTAL_IDS.kleinian;
+    // Runs for both camera modes now: fly scales travel by the clearance, and
+    // orbit re-pins its pivot using the centre-ray hit.
+    const doProbe = (state.fly || state.explorer) && state.pipelines.probe
+                    && !state.probeBusy && state.fractalType <= FRACTAL_IDS.kleinian;
     if (doProbe) {
       const cpass = encoder.beginComputePass();
       cpass.setPipeline(state.pipelines.probe);
       cpass.setBindGroup(0, state.bindGroups.probe);
       cpass.dispatchWorkgroups(1);
       cpass.end();
-      encoder.copyBufferToBuffer(state.probeBuffer, 0, state.probeStaging, 0, 4);
+      encoder.copyBufferToBuffer(state.probeBuffer, 0, state.probeStaging, 0, 8);
     }
 
     // Pass 2: bloom horizontal -> bloomA
@@ -794,7 +812,9 @@ export async function initFractalBackground(canvas, options = {}) {
       // speed control. Failures (device lost mid-flight) just clear the flag.
       state.probeBusy = true;
       state.probeStaging.mapAsync(GPUMapMode.READ).then(() => {
-        state.probeDist = new Float32Array(state.probeStaging.getMappedRange())[0];
+        const v = new Float32Array(state.probeStaging.getMappedRange());
+        state.probeDist = v[0];
+        state.probeHit = v[1];
         state.probeStaging.unmap();
         state.probeBusy = false;
       }).catch(() => { state.probeBusy = false; });
@@ -919,10 +939,56 @@ export async function initFractalBackground(canvas, options = {}) {
   }
 
   // ---- Navigation: drag to orbit, pinch / wheel to zoom ----
-  const ZOOM_MIN = 0.2;
-  const ZOOM_MAX = 14.0;   // large so you can pull fully outside any fractal
+  // Distance bounds are relative to the model's framing radius. The inner bound
+  // is a numerical floor rather than a usability one: with the target pinned to
+  // a surface, closing in stays crisp all the way down, and the approach is
+  // asymptotic so it never actually arrives.
+  const DIST_MIN_F = 1e-4;
+  const DIST_MAX_F = 14.0;
   const TAP_MOVE = 10;     // px of movement that disqualifies a tap
-  const clampZoom = (z) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+
+  function clampDist(d) {
+    const baseR = CAM_RADIUS[state.fractalType] ?? 2.55;
+    return Math.max(baseR * DIST_MIN_F, Math.min(baseR * DIST_MAX_F, d));
+  }
+
+  // Unit vector target -> eye for the current orbit angles.
+  function orbitDir(o) {
+    const cp = Math.cos(o.pitch);
+    return [Math.cos(o.yaw) * cp, Math.sin(o.pitch), Math.sin(o.yaw) * cp];
+  }
+
+  // Move the pivot onto the surface straight ahead, using the distance the GPU
+  // probe last measured along the centre ray.
+  //
+  // Without this, zoom slides the eye towards a target parked at the origin --
+  // the model's centroid -- so closing in far enough pushes the eye through the
+  // surface and into the interior, where the frame washes out. Re-pinning makes
+  // zoom dolly towards whatever is being looked at instead, approaching it
+  // asymptotically and never crossing it.
+  //
+  // The eye does not move: only the pivot slides forward along the view ray to
+  // land on the surface, and the distance shrinks to match.
+  function repinOrbitTarget() {
+    const hit = state.probeHit;
+    if (!(hit > 0) || !Number.isFinite(hit)) return false;
+    const o = state.orbit;
+    const dir = orbitDir(o);
+    const slide = o.dist - hit;
+    o.target[0] += dir[0] * slide;
+    o.target[1] += dir[1] * slide;
+    o.target[2] += dir[2] * slide;
+    o.dist = hit;
+    o.pinned = true;
+    return true;
+  }
+
+  // Zoom by a factor. Closing in re-pins first so the dolly runs towards the
+  // surface; pulling back just grows the distance from the current pivot.
+  function applyZoom(factor) {
+    if (factor < 1) repinOrbitTarget();
+    state.orbit.dist = clampDist(state.orbit.dist * factor);
+  }
 
   function pinchDistance() {
     const pts = [...state.pointers.values()];
@@ -950,7 +1016,7 @@ export async function initFractalBackground(canvas, options = {}) {
       // A second finger means this is a pinch, never a tap.
       state.gestureMulti = true;
       state.pinchDist0 = pinchDistance();
-      state.pinchZoom0 = state.zoom;
+      state.pinchZoom0 = state.orbit.dist;
     }
   }
 
@@ -978,7 +1044,9 @@ export async function initFractalBackground(canvas, options = {}) {
         // Pinch: fingers apart -> zoom in (smaller radius).
         const dist = pinchDistance();
         if (state.pinchDist0 > 0 && dist > 0) {
-          state.zoom = clampZoom(state.pinchZoom0 * (state.pinchDist0 / dist));
+          const want = state.pinchZoom0 * (state.pinchDist0 / dist);
+          if (want < state.orbit.dist) repinOrbitTarget();
+          state.orbit.dist = clampDist(want);
         }
       }
     } else if (state.fly) {
@@ -992,7 +1060,8 @@ export async function initFractalBackground(canvas, options = {}) {
       // Single-pointer drag: orbit. Scaled by viewport so it feels consistent,
       // and by zoom so it stays gentle up close -- a fixed angular rate whips
       // the view once the camera is near the surface.
-      const ok = k * orbitDragScale(state.zoom);
+      const baseR = CAM_RADIUS[state.fractalType] ?? 2.55;
+      const ok = k * orbitDragScale(state.orbit.dist / baseR, state.orbit.pinned);
       state.orbit.tyaw += dx * ok;
       state.orbit.tpitch += dy * ok;
       state.orbit.vyaw = dx * ok * 0.15;
@@ -1035,7 +1104,7 @@ export async function initFractalBackground(canvas, options = {}) {
       // Wheel trims travel speed; there is nothing to zoom towards in flight.
       scaleFlySpeed(state.flyCam, e.deltaY > 0 ? 0.87 : 1.15);
     } else {
-      state.zoom = clampZoom(state.zoom * (e.deltaY > 0 ? 1.1 : 0.9));
+      applyZoom(e.deltaY > 0 ? 1.1 : 0.9);
     }
     state.lastInteract = performance.now();
     nudgeRender();
@@ -1206,9 +1275,12 @@ export async function initFractalBackground(canvas, options = {}) {
   }
 
   function resetView() {
-    state.zoom = 1.0;
     const o = state.orbit;
     o.tyaw = 0.6; o.tpitch = 0.35; o.vyaw = 0; o.vpitch = 0;
+    o.target[0] = 0; o.target[1] = 0; o.target[2] = 0;
+    o.dist = CAM_RADIUS[state.fractalType] ?? 2.55;
+    o.pinned = false;
+    state.probeHit = -1;
     if (state.fly) placeFlyCamera(false);
     state.lastInteract = performance.now();
     nudgeRender();
@@ -1217,7 +1289,7 @@ export async function initFractalBackground(canvas, options = {}) {
   // Drop the free camera at the model's orbit distance, facing the origin, so
   // entering fly mode starts from a framing the viewer already recognises.
   function placeFlyCamera(continueFromCurrent) {
-    const r = (CAM_RADIUS[state.fractalType] ?? 2.55) * state.zoom;
+    const r = state.orbit.dist;
     const c = state.lastCamPos;
     const len = Math.hypot(c[0], c[1], c[2]);
     // Entering fly mode continues from wherever the orbit camera was, so the
@@ -1275,6 +1347,7 @@ export async function initFractalBackground(canvas, options = {}) {
         state.fractalType = FRACTAL_IDS[name];
         // Reframe the free camera for the new model's world scale.
         state.probeDist = Infinity;
+        state.probeHit = -1;
         if (state.fly) placeFlyCamera(false);
         // The attractor family needs its trajectory buffer built before use.
         if (state.fractalType >= FRACTAL_IDS.attractor) ensureAttractorTrajectory();
@@ -1296,8 +1369,12 @@ export async function initFractalBackground(canvas, options = {}) {
     setControls(on) { applyControls(on); },
     setAutoOrbit(on) { state.autoOrbit = !!on; nudgeRender(); },
     // Camera distance multiplier (1 = default framing). Also see resetView().
-    setZoom(z) { state.zoom = clampZoom(z); nudgeRender(); },
-    zoomBy(factor) { state.zoom = clampZoom(state.zoom * factor); nudgeRender(); },
+    setZoom(z) {
+      const baseR = CAM_RADIUS[state.fractalType] ?? 2.55;
+      state.orbit.dist = clampDist(baseR * z);
+      nudgeRender();
+    },
+    zoomBy(factor) { applyZoom(factor); nudgeRender(); },
     resetView,
     // Free fly-through: the camera leaves its orbit and can travel into a
     // model. Interior structures (gyroid, Kleinian) drop their bounding clip
@@ -1312,6 +1389,7 @@ export async function initFractalBackground(canvas, options = {}) {
         // position, which a render in between would overwrite with a stale one.
         state.explorer = false;
         state.probeDist = Infinity;   // stale reading from another model/pose
+        state.probeHit = -1;
         placeFlyCamera(true);
       } else {
         state.keys.clear();
@@ -1353,7 +1431,8 @@ export async function initFractalBackground(canvas, options = {}) {
         flySpeed: +state.flyCam.speed.toFixed(2),
         flyPos: state.fly ? state.flyCam.pos.map((v) => +v.toFixed(2)) : null,
         clearance: Number.isFinite(state.probeDist) ? +state.probeDist.toFixed(4) : null,
-        zoom: +state.zoom.toFixed(2),
+        zoom: +(state.orbit.dist / (CAM_RADIUS[state.fractalType] ?? 2.55)).toFixed(3),
+        pinned: state.orbit.pinned,
       };
     },
   };

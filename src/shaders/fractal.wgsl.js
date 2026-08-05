@@ -844,7 +844,31 @@ fn mapDist(pos : vec3<f32>) -> f32 {
 
 @compute @workgroup_size(1)
 fn cs_probe() {
-  probe[0] = mapDE(u.camPos).dist;
+  // [0] clearance at the camera, scaling fly travel.
+  let d0 = mapDE(u.camPos).dist;
+  probe[0] = d0;
+
+  // [1] distance to the first surface straight ahead, or -1 for a miss. The
+  // orbit camera re-pins its pivot onto this point when zooming, so that zoom
+  // dollies towards the surface being inspected rather than towards the
+  // model's centroid -- which is what drives the eye through the surface and
+  // into the interior.
+  //
+  // Bail when the camera is already at or inside a surface: retargeting from
+  // there would pin the pivot to the wall the camera is buried in.
+  var hit = -1.0;
+  let toTarget = u.camTarget - u.camPos;
+  if (d0 > 1e-4 && length(toTarget) > 1e-9) {
+    let fwd = normalize(toTarget);
+    var t = 1e-3;
+    for (var i = 0; i < 192; i = i + 1) {
+      let d = mapDE(u.camPos + fwd * t).dist;
+      if (d < 1e-3 * t) { hit = t; break; }      // relative eps, as the marcher uses
+      t = t + max(d * 0.7, 1e-6);                // conservative; no zero-step stall
+      if (t > 200.0) { break; }
+    }
+  }
+  probe[1] = hit;
 }
 
 // Tetrahedron (4-sample forward-difference) normal.

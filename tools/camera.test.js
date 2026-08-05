@@ -10,7 +10,8 @@
 import {
   makeFlyCamera, stepFlyCamera, aimFlyCamera, dollyFlyCamera, scaleFlySpeed,
   flyBasis, aimAtOrigin, MAX_PITCH, FLY_SPEED_MIN, FLY_SPEED_MAX,
-  proximitySpeedScale, orbitDragScale, PROX_MIN, PROX_MAX, DRAG_MIN, DRAG_MAX,
+  usableClearance, travelDistance, orbitDragScale,
+  CLEAR_MIN, CLEAR_MAX, TRAVEL_K, DRAG_MIN, DRAG_MAX,
 } from '../src/camera.js';
 
 let passed = 0;
@@ -63,57 +64,69 @@ console.log('\nmovement');
   check('W approaches the origin', len(cam.pos) < before - 0.2,
         `${before.toFixed(3)} -> ${len(cam.pos).toFixed(3)}`);
 
-  // Distance travelled over one second should match FLY_BASE * baseR.
+  // stepFlyCamera is told the clearance; it does not track it. Holding it fixed
+  // is the open-space case, where each frame covers the same slice.
   const c2 = makeFlyCamera([0, 0, 3]);
   const p0 = c2.pos.slice();
-  for (let i = 0; i < 60; i++) stepFlyCamera(c2, new Set(['w']), 1 / 60, 3.0);
+  for (let i = 0; i < 60; i++) stepFlyCamera(c2, new Set(['w']), 1 / 60, 3.0, 1.0);
   const travelled = Math.hypot(c2.pos[0] - p0[0], c2.pos[1] - p0[1], c2.pos[2] - p0[2]);
-  check('one second of travel is FLY_BASE * baseR', near(travelled, 0.22 * 3.0, 1e-6),
-        `travelled ${travelled.toFixed(4)}`);
+  check('constant clearance gives 60 equal slices',
+        near(travelled, 60 * travelDistance(1.0, 1 / 60, 1), 1e-9),
+        `travelled ${travelled.toFixed(6)}`);
 
   // S reverses W exactly.
   const c3 = makeFlyCamera([0, 0, 3]);
   const start = c3.pos.slice();
-  for (let i = 0; i < 30; i++) stepFlyCamera(c3, new Set(['w']), 1 / 60, 3.0);
-  for (let i = 0; i < 30; i++) stepFlyCamera(c3, new Set(['s']), 1 / 60, 3.0);
+  for (let i = 0; i < 30; i++) stepFlyCamera(c3, new Set(['w']), 1 / 60, 3.0, 1.0);
+  for (let i = 0; i < 30; i++) stepFlyCamera(c3, new Set(['s']), 1 / 60, 3.0, 1.0);
   check('S undoes W', near(c3.pos[2], start[2], 1e-9), `z ${c3.pos[2]} vs ${start[2]}`);
 
   // Opposed keys cancel.
   const c4 = makeFlyCamera([0, 0, 3]);
-  for (let i = 0; i < 30; i++) stepFlyCamera(c4, new Set(['w', 's']), 1 / 60, 3.0);
+  for (let i = 0; i < 30; i++) stepFlyCamera(c4, new Set(['w', 's']), 1 / 60, 3.0, 1.0);
   check('W+S cancel', near(c4.pos[2], 3, 1e-9));
 
   // Vertical uses world up, so it works while looking straight down.
   const c5 = makeFlyCamera([0, 0, 3]);
   c5.pitch = -MAX_PITCH; c5.tpitch = -MAX_PITCH;
   const y0 = c5.pos[1];
-  for (let i = 0; i < 30; i++) stepFlyCamera(c5, new Set(['e']), 1 / 60, 3.0);
+  for (let i = 0; i < 30; i++) stepFlyCamera(c5, new Set(['e']), 1 / 60, 3.0, 1.0);
   check('E rises even when looking down', c5.pos[1] > y0 + 0.05);
   const y1 = c5.pos[1];
-  for (let i = 0; i < 30; i++) stepFlyCamera(c5, new Set(['q']), 1 / 60, 3.0);
+  for (let i = 0; i < 30; i++) stepFlyCamera(c5, new Set(['q']), 1 / 60, 3.0, 1.0);
   check('Q descends', c5.pos[1] < y1 - 0.05);
 
   // Strafe is perpendicular to view and horizontal.
   const c6 = makeFlyCamera([0, 0, 3]);
   const s0 = c6.pos.slice();
-  for (let i = 0; i < 30; i++) stepFlyCamera(c6, new Set(['d']), 1 / 60, 3.0);
+  for (let i = 0; i < 30; i++) stepFlyCamera(c6, new Set(['d']), 1 / 60, 3.0, 1.0);
   const delta = [c6.pos[0] - s0[0], c6.pos[1] - s0[1], c6.pos[2] - s0[2]];
   check('D moves sideways only', Math.abs(delta[0]) > 0.05 && near(delta[1], 0) && near(delta[2], 0, 1e-9),
         `delta [${delta.map((v) => v.toFixed(4))}]`);
 
-  // Modifiers scale speed.
-  const base = (keys2) => {
+  // Closing on a wall: the renderer re-reads clearance from the probe every
+  // frame, so the gap shrinks as the camera advances. That feedback is what
+  // makes the approach asymptotic, and the simulation has to model it.
+  const approach = (keys2) => {
     const c = makeFlyCamera([0, 0, 3]);
-    for (let i = 0; i < 60; i++) stepFlyCamera(c, keys2, 1 / 60, 3.0);
+    let gap = 1.0;
+    for (let i = 0; i < 60; i++) {
+      const before = c.pos[2];
+      stepFlyCamera(c, keys2, 1 / 60, 3.0, gap);
+      gap -= before - c.pos[2];
+    }
     return 3 - c.pos[2];
   };
-  check('shift triples speed', near(base(new Set(['w', 'shift'])), base(new Set(['w'])) * 3, 1e-6));
-  check('alt quarters speed', near(base(new Set(['w', 'alt'])), base(new Set(['w'])) * 0.25, 1e-6));
+  check('shift covers more ground', approach(new Set(['w', 'shift'])) > approach(new Set(['w'])));
+  check('alt covers less ground', approach(new Set(['w', 'alt'])) < approach(new Set(['w'])));
+  // The safety property: no speed and no frame length reaches the surface.
+  check('sprinting still never reaches the wall', approach(new Set(['w', 'shift'])) < 1.0,
+        `covered ${approach(new Set(['w', 'shift'])).toFixed(4)} of a 1.0 gap`);
 
   // A stalled frame must not teleport the camera.
   const c7 = makeFlyCamera([0, 0, 3]);
-  stepFlyCamera(c7, new Set(['w']), 30.0, 3.0);   // 30-second frame
-  check('huge dt is clamped', 3 - c7.pos[2] <= 0.22 * 3.0 * 0.1 + 1e-9,
+  stepFlyCamera(c7, new Set(['w']), 30.0, 3.0, 1.0);   // 30-second frame
+  check('huge dt is clamped', 3 - c7.pos[2] <= 1 - Math.exp(-TRAVEL_K * 0.1) + 1e-9,
         `moved ${(3 - c7.pos[2]).toFixed(4)}`);
 }
 
@@ -144,52 +157,58 @@ console.log('\naim and speed');
   check('dolly moves along view', near(c4.pos[2], 2.0, 1e-9), `z ${c4.pos[2]}`);
 }
 
-console.log('\nrate scaling: fly speed vs clearance');
+console.log('\nrate scaling: clearance and exponential travel');
 {
   const baseR = 3.2;
-  // Monotonic in clearance, so closer always means slower.
-  let prev = -1;
-  let monotonic = true;
-  for (const d of [0.001, 0.01, 0.05, 0.1, 0.2, 0.4, 0.48, 1, 3]) {
-    const f = proximitySpeedScale(d, baseR);
-    if (f < prev - 1e-12) monotonic = false;
-    prev = f;
-  }
-  check('speed rises monotonically with clearance', monotonic);
-  check('nominal clearance gives full speed',
-        near(proximitySpeedScale(0.15 * baseR, baseR), 1, 1e-9));
-  check('hard against a wall clamps to the floor',
-        near(proximitySpeedScale(0, baseR), PROX_MIN));
+
+  // Clearance clamps: never zero (you must be able to leave a wall), never
+  // unbounded (open space must not turn into a bolt).
+  check('wall clamps to the floor',
+        near(usableClearance(0, baseR), CLEAR_MIN * baseR));
   check('open space clamps to the ceiling',
-        near(proximitySpeedScale(1e6, baseR), PROX_MAX));
+        near(usableClearance(1e6, baseR), CLEAR_MAX * baseR));
+  check('mid-range passes through', near(usableClearance(0.5, baseR), 0.5));
 
-  // Inside solid material the estimate is negative; travel must still be
-  // possible or the camera would be trapped in a wall.
-  check('inside a wall still moves', proximitySpeedScale(-0.02, baseR) > 0);
-  check('inside is symmetric with outside',
-        near(proximitySpeedScale(-0.3, baseR), proximitySpeedScale(0.3, baseR)));
+  // Inside solid material the estimate is negative; travel must still work or
+  // the camera would be trapped in a wall.
+  check('inside a wall is symmetric with outside',
+        near(usableClearance(-0.3, baseR), usableClearance(0.3, baseR)));
+  check('missing reading falls back to the ceiling, not zero',
+        near(usableClearance(Infinity, baseR), CLEAR_MAX * baseR));
+  check('NaN reading falls back to the ceiling',
+        near(usableClearance(NaN, baseR), CLEAR_MAX * baseR));
 
-  // A missing reading (no probe yet, or an attractor) must not freeze the user.
-  check('missing reading is neutral', near(proximitySpeedScale(Infinity, baseR), 1));
-  check('NaN reading is neutral', near(proximitySpeedScale(NaN, baseR), 1));
+  // The headline property of exponential integration: identical ground covered
+  // regardless of frame rate. The linear form this replaced did not have it.
+  const walk = (steps, dt) => {
+    let gap = 1.0, acc = 0;
+    for (let i = 0; i < steps; i++) {
+      const s2 = travelDistance(gap, dt, 1);
+      acc += s2; gap -= s2;
+    }
+    return acc;
+  };
+  const closed = 1 - Math.exp(-TRAVEL_K);
+  check('60fps and 100fps cover the same ground', near(walk(60, 1 / 60), walk(100, 0.01), 1e-9));
+  check('60fps and 20fps cover the same ground', near(walk(60, 1 / 60), walk(20, 0.05), 1e-9));
+  check('matches the closed form 1-exp(-k*t)', near(walk(60, 1 / 60), closed, 1e-9),
+        `${walk(60, 1 / 60).toFixed(9)} vs ${closed.toFixed(9)}`);
 
-  // The scale must actually reach stepFlyCamera.
-  const near0 = makeFlyCamera([0, 0, 3]);
-  const far0 = makeFlyCamera([0, 0, 3]);
-  for (let i = 0; i < 30; i++) {
-    stepFlyCamera(near0, new Set(['w']), 1 / 60, 3, proximitySpeedScale(0.005, 3));
-    stepFlyCamera(far0, new Set(['w']), 1 / 60, 3, proximitySpeedScale(2.0, 3));
+  // Asymptotic approach: one step never crosses the gap, at any frame length
+  // and across the whole reachable speed range (FLY_SPEED_MAX, times the sprint
+  // modifier). That is what makes crashing into a surface impossible.
+  let crosses = false;
+  for (const dt of [1 / 240, 1 / 60, 0.05, 0.1, 5, 100]) {
+    for (const mult of [1, 3, 12, FLY_SPEED_MAX * 3]) {
+      if (travelDistance(1.0, dt, mult) >= 1.0) crosses = true;
+    }
   }
-  check('near a wall travels much less than in open space',
-        (3 - far0.pos[2]) > (3 - near0.pos[2]) * 10,
-        `near ${(3 - near0.pos[2]).toFixed(4)} vs far ${(3 - far0.pos[2]).toFixed(4)}`);
-  check('default speedScale is 1 (back-compatible)', (() => {
-    const a = makeFlyCamera([0, 0, 3]);
-    const b = makeFlyCamera([0, 0, 3]);
-    stepFlyCamera(a, new Set(['w']), 1 / 60, 3);
-    stepFlyCamera(b, new Set(['w']), 1 / 60, 3, 1);
-    return near(a.pos[2], b.pos[2], 1e-12);
-  })());
+  check('a step never covers the whole gap at any reachable speed', !crosses);
+  check('zero dt travels nothing', near(travelDistance(1.0, 0, 1), 0));
+  check('travel grows with the multiplier',
+        travelDistance(1, 1 / 60, 3) > travelDistance(1, 1 / 60, 1));
+  check('travel grows with the gap',
+        travelDistance(2, 1 / 60, 1) > travelDistance(1, 1 / 60, 1));
 }
 
 console.log('\nrate scaling: orbit drag vs zoom');
@@ -208,6 +227,15 @@ console.log('\nrate scaling: orbit drag vs zoom');
   check('deepest zoom clamps to the floor', near(orbitDragScale(0.2), DRAG_MIN));
   check('far zoom clamps to the ceiling', near(orbitDragScale(14), DRAG_MAX));
   check('never zero (still steerable up close)', orbitDragScale(0.2) > 0);
+
+  // With the pivot pinned onto the surface, the point under the crosshair is
+  // the point being orbited: it does not move at all, and its neighbours move
+  // by the drag angle however close the eye sits. No correction is wanted, and
+  // applying the unpinned curve would make close inspection feel dead.
+  for (const z of [0.001, 0.05, 0.2, 1, 5, 14]) {
+    check(`pinned pivot needs no damping (zoom ${z})`, orbitDragScale(z, true) === 1);
+  }
+  check('unpinned still damps', orbitDragScale(0.2, false) < 0.1);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

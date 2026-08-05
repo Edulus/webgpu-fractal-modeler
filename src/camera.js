@@ -17,9 +17,6 @@
 // radians is only correct at one distance, and feels violent everywhere closer.
 // Both scaling helpers below exist to cancel that.
 
-// Travel speed in world units per second before the user's multiplier. Scaled
-// by the model's orbit radius so one constant suits every world size.
-export const FLY_BASE = 0.22;
 export const FLY_SPEED_MIN = 0.15;
 export const FLY_SPEED_MAX = 12.0;
 
@@ -77,7 +74,7 @@ export function makeFlyCamera(pos) {
  * @param {number} baseR  the model's orbit radius, used to scale speed
  * @param {number} [speedScale=1]  proximity factor, see proximitySpeedScale
  */
-export function stepFlyCamera(cam, keys, dtSec, baseR, speedScale = 1) {
+export function stepFlyCamera(cam, keys, dtSec, baseR, clearance = null) {
   // Easing matches the orbit camera so a flick of the pointer glides rather
   // than snapping.
   cam.pitch += (cam.tpitch - cam.pitch) * 0.25;
@@ -92,12 +89,13 @@ export function stepFlyCamera(cam, keys, dtSec, baseR, speedScale = 1) {
   const mu = held('e', 'q');
 
   if (mf || ms || mu) {
-    let speed = FLY_BASE * baseR * cam.speed * speedScale;
-    if (keys.has('shift')) speed *= 3.0;
-    if (keys.has('alt')) speed *= 0.25;
-    // Clamp dt so a stalled tab or a very slow frame cannot teleport the
+    let mult = cam.speed;
+    if (keys.has('shift')) mult *= 3.0;
+    if (keys.has('alt')) mult *= 0.25;
+    // dt is clamped inside travelDistance, so a stalled tab cannot teleport the
     // camera through a wall in one step.
-    const step = speed * clamp(dtSec, 0.001, 0.1);
+    const gap = clearance === null ? CLEAR_MAX * Math.max(baseR, 1e-3) : clearance;
+    const step = travelDistance(gap, dtSec, mult);
     cam.pos[0] += (forward[0] * mf + right[0] * ms) * step;
     // Vertical travel uses world up, not camera up: holding E while looking
     // down should still rise, which is what a viewer expects.
@@ -131,31 +129,49 @@ export function scaleFlySpeed(cam, factor) {
 
 // ---- Rate scaling ---------------------------------------------------------
 
-/** Clearance, as a fraction of the model's orbit radius, that travels at full
- * speed. Closer than this and the camera slows in proportion. */
-export const PROX_REF = 0.15;
-export const PROX_MIN = 0.05;   // never freeze completely: you must be able to leave a wall
-export const PROX_MAX = 1.5;    // and never run away in open space
+// Clearance bounds, as fractions of the model's orbit radius. The floor keeps a
+// camera buried in a wall able to leave; the ceiling stops open space turning
+// into a bolt.
+export const CLEAR_MIN = 0.004;
+export const CLEAR_MAX = 0.45;
+
+// Fraction of the remaining gap covered per second at full speed. 0.7 halves the
+// distance to a surface roughly every second.
+export const TRAVEL_K = 0.7;
 
 /**
- * Fly speed factor from the distance estimate at the camera.
- *
- * Travel should cover a constant fraction of the *available space* per second,
- * not a constant number of world units: a metre from a gyroid wall, the fixed
- * rate crossed seventy wall-thicknesses a second. Scaling by clearance makes
- * near and far feel the same.
+ * Usable clearance at the camera, clamped into the band above.
  *
  * The absolute value matters — in fly mode the camera can be inside solid
  * material, where the estimate goes negative. Using |d| there still scales by
- * the distance to the nearest surface, so it is possible to travel back out.
- *
- * @param {number} dist   distance estimate at the camera, may be negative
- * @param {number} baseR  the model's orbit radius
+ * the distance to the nearest surface, so it stays possible to travel back out.
+ * A missing reading (no probe yet, or a model with no estimator) falls back to
+ * the ceiling rather than to zero, so navigation never simply freezes.
  */
-export function proximitySpeedScale(dist, baseR) {
-  if (!Number.isFinite(dist)) return 1;
-  const ref = PROX_REF * Math.max(baseR, 1e-3);
-  return clamp(Math.abs(dist) / ref, PROX_MIN, PROX_MAX);
+export function usableClearance(dist, baseR) {
+  const r = Math.max(baseR, 1e-3);
+  if (!Number.isFinite(dist)) return CLEAR_MAX * r;
+  return clamp(Math.abs(dist), CLEAR_MIN * r, CLEAR_MAX * r);
+}
+
+/**
+ * Distance to travel this frame, integrated exponentially.
+ *
+ * Movement covers a fixed FRACTION of the available gap per second rather than
+ * a fixed number of world units, so it feels identical at every scale. Writing
+ * it as `gap * (1 - exp(-k*dt))` rather than `speed * dt` buys two things: it is
+ * exactly frame-rate independent, where the linear form makes a 30fps machine
+ * travel a different distance than a 60fps one for the same held key; and the
+ * approach is asymptotic, so closing on a surface slows without ever crossing it
+ * in a single step.
+ *
+ * @param {number} clearance  usable clearance (see usableClearance)
+ * @param {number} dtSec      seconds since the last frame
+ * @param {number} mult       user speed multiplier
+ */
+export function travelDistance(clearance, dtSec, mult = 1) {
+  const dt = clamp(dtSec, 0, 0.1) * Math.max(mult, 0);
+  return clearance * (1 - Math.exp(-TRAVEL_K * dt));
 }
 
 export const DRAG_MIN = 0.06;
@@ -178,6 +194,15 @@ export const DRAG_MAX = 3.0;
  * is comfort rather than theory: the law keeps growing as you pull away, but
  * beyond a few multiples the model is a speck and a drag would spin it wildly.
  */
-export function orbitDragScale(zoom) {
+export function orbitDragScale(zoom, pinned = false) {
+  // A target pinned onto the surface is already the right pivot: the point under
+  // the crosshair does not move at all as you orbit it, and its neighbours move
+  // by the drag angle regardless of how close the eye sits. No correction is
+  // needed, and applying one would make close inspection feel dead.
+  //
+  // The curve below is the fallback for an unpinned target — still parked at the
+  // origin, so the camera is orbiting the centroid rather than the surface, and
+  // a fixed angular step whips the view once it closes in.
+  if (pinned) return 1;
   return clamp((zoom - 0.45) / 0.55, DRAG_MIN, DRAG_MAX);
 }

@@ -88,7 +88,9 @@ Explorer mode provides:
 - An opaque presentation background
 - A gentle idle rotation when the viewer is untouched
 
-Orbiting by a fixed angle sweeps a surface feature across the screen by roughly `dθ · R / (r − R)`, where `r` is the orbit radius and `R` the model's half-size — so the same drag that feels calm from a distance whips the view once the camera is close. The drag rate is therefore scaled by clearance, which tracks zoom. It is exactly `1.0×` at the default zoom, floored near the innermost zoom (where the camera is actually inside the model's bounding volume and the linear relation stops meaning anything) and capped far out.
+**Zoom dollies towards the surface, not the centroid.** The orbit camera keeps an explicit pivot and distance. Zooming in first re-pins the pivot onto whatever the centre of the view is pointing at, using a distance measured by the GPU probe along the view ray; the eye does not move, the pivot slides forward onto the surface and the distance shrinks to match. Closing in then approaches that surface asymptotically instead of sliding towards the model's centroid — which is what used to push the eye through the surface into the interior, where the frame washes out.
+
+Pinning the pivot also fixes the drag rate for free: the point under the crosshair is the point being orbited, so it does not move at all and its neighbours move by the drag angle however close the eye sits. When no pivot has been placed — nothing under the crosshair, or the view has just been reset — the rate falls back to a curve that damps with distance, because orbiting the centroid does whip the view once the camera is close.
 
 Navigation remains available under `prefers-reduced-motion`; only automatic animation is frozen.
 
