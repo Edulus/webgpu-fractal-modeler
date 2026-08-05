@@ -672,8 +672,12 @@ export async function initFractalBackground(canvas, options = {}) {
     // Swapchain is full device-pixel resolution; internal raymarch res scales.
     const pxW = Math.max(1, Math.round(cssW * dpr));
     const pxH = Math.max(1, Math.round(cssH * dpr));
-    canvas.width = pxW;
-    canvas.height = pxH;
+    // Only touch the backing store when it actually changes. Assigning
+    // canvas.width resets the WebGPU swapchain and clears the canvas even when
+    // the value is unchanged, which shows as a black frame -- and a quality
+    // change calls resize() without altering the CSS size at all.
+    if (canvas.width !== pxW) canvas.width = pxW;
+    if (canvas.height !== pxH) canvas.height = pxH;
 
     const renderW = Math.max(1, Math.round(pxW * state.qualityScale));
     const renderH = Math.max(1, Math.round(pxH * state.qualityScale));
@@ -994,7 +998,12 @@ export async function initFractalBackground(canvas, options = {}) {
     // view settles and resumes the moment anything is touched.
     if (accumulating(nowMs)) {
       renderFrame(nowMs, false);
-      adaptQuality(dt);
+      // Deliberately not sampled by adaptQuality. A converged frame skips the
+      // raymarch entirely, so its cost says nothing about whether the renderer
+      // can sustain the interactive frame rate. Feeding those frames to the
+      // controller reads as headroom, raises quality, and the resize that
+      // follows resets the average -- which drops the frame rate again and
+      // oscillates, flickering on every change.
       state.rafId = requestAnimationFrame(loop);
       return;
     }
