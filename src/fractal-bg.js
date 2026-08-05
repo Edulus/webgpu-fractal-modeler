@@ -48,9 +48,12 @@ const U = {
   reducedMotion: 38,
   flyMode: 39,
   viewProj: 40, // mat4 -> slots 40..55 (byte 160, 16-byte aligned)
+  jitter: 56,   // vec2 -> 56,57 (byte 224)
+  accumWeight: 58,
+  _pad2: 59,
 };
-const UNIFORM_FLOATS = 56;
-const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 224
+const UNIFORM_FLOATS = 60;
+const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 240
 
 // Distance-estimated fractals occupy ids 0..10; the volumetric/line-rendered
 // attractors follow at 11+. The shader keys off that split (see the
@@ -78,6 +81,27 @@ const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.1, 3.0, 3.5, 3.2, 3.6, 3.2,
 // These are exact float positions (vector geometry), so the curve stays crisp
 // at any zoom — unlike a baked voxel grid, which quantizes it.
 const TRAJECTORY_POINTS = 600000;
+
+// Progressive accumulation. While the view is still, frames are re-rendered
+// with a subpixel offset and averaged, which resolves the aliasing the
+// high-frequency models suffer from and gives the quality of a much higher
+// sample count for free. Capped because the average converges: past this the
+// raymarch is skipped entirely and the converged image is simply re-presented,
+// which also drops idle GPU load to almost nothing.
+const ACCUM_CAP = 96;
+const ACCUM_IDLE_MS = 400;   // stillness required before sampling starts
+
+// R2 (Roberts) low-discrepancy sequence — a 2D golden-ratio analogue. Its
+// samples interleave far more evenly than random jitter, so the average
+// converges in fewer frames and without clumping.
+const R2_A1 = 1 / 1.32471795724474602596;        // 1/plastic number
+const R2_A2 = 1 / (1.32471795724474602596 ** 2);
+function r2jitter(i) {
+  return [
+    ((0.5 + R2_A1 * (i + 1)) % 1) - 0.5,
+    ((0.5 + R2_A2 * (i + 1)) % 1) - 0.5,
+  ];
+}
 
 // ---- Small column-major mat4 helpers (WebGPU depth range [0,1]) ----
 function mat4Perspective(out, fovy, aspect, near, far) {
@@ -212,6 +236,10 @@ export async function initFractalBackground(canvas, options = {}) {
     probeBusy: false,
     probeDist: Infinity,
     probeHit: -1,        // centre-ray surface distance, -1 = miss
+    // Progressive accumulation
+    accumSamples: 0,
+    accumParity: 0,
+    accumOn: true,
     // active pointers for drag / pinch tracking
     pointers: new Map(),
     pinchDist0: 0,
@@ -355,6 +383,18 @@ export async function initFractalBackground(canvas, options = {}) {
       compute: { module: fractalModule, entryPoint: 'cs_probe' },
     });
 
+    // Progressive accumulation: mix(prevHalf, scene, 1/(n+1)) -> other half.
+    state.pipelines.accum = device.createRenderPipeline({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [compositeBGL] }),
+      vertex: { module: compositeModule, entryPoint: 'vs_main' },
+      fragment: {
+        module: compositeModule,
+        entryPoint: 'fs_accum',
+        targets: [{ format: HDR_FORMAT }],
+      },
+      primitive: { topology: 'triangle-list' },
+    });
+
     // Bloom horizontal.
     state.pipelines.bloomH = device.createRenderPipeline({
       layout: device.createPipelineLayout({ bindGroupLayouts: [blurBGL] }),
@@ -387,6 +427,8 @@ export async function initFractalBackground(canvas, options = {}) {
       state.targets.sceneTex.destroy();
       state.targets.bloomA.destroy();
       state.targets.bloomB.destroy();
+      state.targets.accumA.destroy();
+      state.targets.accumB.destroy();
     }
     const bw = Math.max(1, Math.floor(renderW / 2));
     const bh = Math.max(1, Math.floor(renderH / 2));
@@ -401,17 +443,25 @@ export async function initFractalBackground(canvas, options = {}) {
     const sceneTex = mk(renderW, renderH);
     const bloomA = mk(bw, bh);
     const bloomB = mk(bw, bh);
+    // Accumulation ping-pong, full resolution.
+    const accumA = mk(renderW, renderH);
+    const accumB = mk(renderW, renderH);
 
     // Cache views once — reused as render-pass attachments every frame so we
     // don't allocate per-frame.
     const sceneView = sceneTex.createView();
     const bloomAView = bloomA.createView();
     const bloomBView = bloomB.createView();
+    const accumAView = accumA.createView();
+    const accumBView = accumB.createView();
 
     state.targets = {
-      sceneTex, bloomA, bloomB, sceneView, bloomAView, bloomBView,
+      sceneTex, bloomA, bloomB, accumA, accumB,
+      sceneView, bloomAView, bloomBView, accumAView, accumBView,
       w: renderW, h: renderH,
     };
+    // A new size invalidates whatever had been averaged.
+    state.accumSamples = 0;
 
     // (Re)build bind groups that reference these views.
     const ub = { buffer: state.uniformBuffer };
@@ -444,6 +494,30 @@ export async function initFractalBackground(canvas, options = {}) {
         { binding: 2, resource: sceneView },
       ],
     });
+    // Accumulation variants. `accum[k]` reads the scene plus half k and writes
+    // the other half; `bloomHFrom[k]` / `compositeFrom[k]` then read half k as
+    // the source instead of the raw scene.
+    const mkAccum = (prevView) => device.createBindGroup({
+      layout: state._bgl.compositeBGL,
+      entries: [
+        { binding: 0, resource: ub },
+        { binding: 1, resource: state.sampler },
+        { binding: 2, resource: sceneView },
+        { binding: 3, resource: prevView },
+      ],
+    });
+    state.bindGroups.accum = [mkAccum(accumAView), mkAccum(accumBView)];
+
+    const mkBloomH = (srcView) => device.createBindGroup({
+      layout: state._bgl.blurBGL,
+      entries: [
+        { binding: 0, resource: ub },
+        { binding: 1, resource: state.sampler },
+        { binding: 2, resource: srcView },
+      ],
+    });
+    state.bindGroups.bloomHFrom = [mkBloomH(accumBView), mkBloomH(accumAView)];
+
     state.bindGroups.bloomV = device.createBindGroup({
       layout: state._bgl.blurBGL,
       entries: [
@@ -461,6 +535,17 @@ export async function initFractalBackground(canvas, options = {}) {
         { binding: 3, resource: bloomBView },
       ],
     });
+
+    const mkComposite = (srcView) => device.createBindGroup({
+      layout: state._bgl.compositeBGL,
+      entries: [
+        { binding: 0, resource: ub },
+        { binding: 1, resource: state.sampler },
+        { binding: 2, resource: srcView },
+        { binding: 3, resource: bloomBView },
+      ],
+    });
+    state.bindGroups.compositeFrom = [mkComposite(accumBView), mkComposite(accumAView)];
   }
 
   // ---- Strange attractors: integrate the trajectory into line geometry ----
@@ -634,7 +719,10 @@ export async function initFractalBackground(canvas, options = {}) {
       const o = state.orbit;
       // Gentle idle spin after a couple of seconds of no interaction; folded
       // into the target so there's no snap when the user grabs it again.
-      if (!rm && state.pointers.size === 0 && nowMs - state.lastInteract > 2500) {
+      // The idle spin and progressive accumulation are mutually exclusive: a
+      // turning camera can never settle. Sharpening wins for a model viewer.
+      if (!rm && !state.accumOn && state.pointers.size === 0
+          && nowMs - state.lastInteract > 2500) {
         o.tyaw += 0.0016;
       }
       o.tpitch = Math.max(-1.45, Math.min(1.45, o.tpitch));
@@ -701,6 +789,17 @@ export async function initFractalBackground(canvas, options = {}) {
     d[U.bgMode] = state.transparent ? 0.0 : 1.0;
     d[U.reducedMotion] = rm ? 1.0 : 0.0;
     d[U.flyMode] = state.fly ? 1.0 : 0.0;
+
+    // Jitter is zero on a moving frame, so the interactive image is untouched.
+    const accNow = accumulating(nowMs);
+    if (accNow && state.accumSamples < ACCUM_CAP) {
+      const j = r2jitter(state.accumSamples);
+      d[U.jitter] = j[0];
+      d[U.jitter + 1] = j[1];
+      d[U.accumWeight] = 1 / (state.accumSamples + 1);
+    } else {
+      d[U.jitter] = 0; d[U.jitter + 1] = 0; d[U.accumWeight] = 1;
+    }
     d[U._pad] = 0.0;
 
     // View-projection for the attractor line pass (matches the raymarcher's
@@ -725,8 +824,18 @@ export async function initFractalBackground(canvas, options = {}) {
     const encoder = device.createCommandEncoder();
     const T = state.targets;
 
+    // Progressive accumulation state for this frame. Once the average has
+    // converged the raymarch is skipped entirely and the stored image is simply
+    // re-presented, which drops idle GPU load to the post chain alone.
+    const acc = accumulating(nowMs);
+    const converged = acc && state.accumSamples >= ACCUM_CAP;
+    const drawScene = !converged;
+    // Which accumulation half this frame writes; the other holds the average so
+    // far. When idle-converged, keep reading the half last written.
+    const par = acc ? (state.accumParity ^ (converged ? 1 : 0)) : 0;
+
     // Pass 1: raymarch -> sceneTex
-    {
+    if (drawScene) {
       const pass = encoder.beginRenderPass({
         colorAttachments: [
           {
@@ -768,13 +877,26 @@ export async function initFractalBackground(canvas, options = {}) {
       encoder.copyBufferToBuffer(state.probeBuffer, 0, state.probeStaging, 0, 8);
     }
 
-    // Pass 2: bloom horizontal -> bloomA
+    // Pass 1b: fold the jittered frame into the running average.
+    if (acc && drawScene) {
+      const dst = state.accumParity === 0 ? T.accumBView : T.accumAView;
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [{ view: dst, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
+      });
+      pass.setPipeline(state.pipelines.accum);
+      pass.setBindGroup(0, state.bindGroups.accum[state.accumParity]);
+      pass.draw(3);
+      pass.end();
+    }
+
+    // Pass 2: bloom horizontal -> bloomA. Sources the average while
+    // accumulating, the raw scene otherwise.
     {
       const pass = encoder.beginRenderPass({
         colorAttachments: [{ view: T.bloomAView, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
       });
       pass.setPipeline(state.pipelines.bloomH);
-      pass.setBindGroup(0, state.bindGroups.bloomH);
+      pass.setBindGroup(0, acc ? state.bindGroups.bloomHFrom[par] : state.bindGroups.bloomH);
       pass.draw(3);
       pass.end();
     }
@@ -800,12 +922,17 @@ export async function initFractalBackground(canvas, options = {}) {
         colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
       });
       pass.setPipeline(state.pipelines.composite);
-      pass.setBindGroup(0, state.bindGroups.composite);
+      pass.setBindGroup(0, acc ? state.bindGroups.compositeFrom[par] : state.bindGroups.composite);
       pass.draw(3);
       pass.end();
     }
 
     device.queue.submit([encoder.finish()]);
+
+    if (acc && drawScene) {
+      state.accumSamples += 1;
+      state.accumParity ^= 1;
+    }
 
     if (doProbe) {
       // Async map; the value lands a frame or two later, which is fine for a
@@ -862,6 +989,15 @@ export async function initFractalBackground(canvas, options = {}) {
     state.lastFrameTime = nowMs;
 
     state.frameDt = dt;
+
+    // Averaging a moving image smears it, so the animation clock stops once the
+    // view settles and resumes the moment anything is touched.
+    if (accumulating(nowMs)) {
+      renderFrame(nowMs, false);
+      adaptQuality(dt);
+      state.rafId = requestAnimationFrame(loop);
+      return;
+    }
 
     if (!reducedMotion()) {
       state.animTime += dt / 1000;
@@ -996,6 +1132,21 @@ export async function initFractalBackground(canvas, options = {}) {
     return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
   }
 
+  // Accumulate only when the view is genuinely still: interactive modes only,
+  // no input for a moment, no keys held, and animation frozen (the estimators
+  // move over time, and averaging a moving image just smears it).
+  function accumulating(nowMs) {
+    if (!state.accumOn || !state.controls) return false;
+    if (state.keys.size > 0) return false;
+    if (state.pointers.size > 0) return false;
+    return nowMs - state.lastInteract > ACCUM_IDLE_MS;
+  }
+
+  function resetAccum() {
+    state.accumSamples = 0;
+    state.lastInteract = performance.now();
+  }
+
   function nudgeRender() {
     // If the loop isn't spinning (e.g. reduced-motion static), draw one frame.
     if (!state.running) renderFrame(performance.now(), true);
@@ -1006,6 +1157,7 @@ export async function initFractalBackground(canvas, options = {}) {
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     state.lastInteract = performance.now();
+    state.accumSamples = 0;
     if (state.pointers.size === 1) {
       // Begin a fresh gesture; remember where, to distinguish tap from drag.
       state.gestureMoved = false;
@@ -1027,6 +1179,7 @@ export async function initFractalBackground(canvas, options = {}) {
     const dy = e.clientY - prev.y;
     state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     state.lastInteract = performance.now();
+    state.accumSamples = 0;
 
     const k = 3.2 / Math.max(300, Math.min(window.innerWidth, window.innerHeight));
 
@@ -1099,6 +1252,7 @@ export async function initFractalBackground(canvas, options = {}) {
 
   function onWheel(e) {
     if (!state.controls) return;
+    resetAccum();
     e.preventDefault();
     if (state.fly) {
       // Wheel trims travel speed; there is nothing to zoom towards in flight.
@@ -1197,6 +1351,10 @@ export async function initFractalBackground(canvas, options = {}) {
       state.trajBuffer && state.trajBuffer.destroy();
       state.probeBuffer && state.probeBuffer.destroy();
       state.probeStaging && state.probeStaging.destroy();
+      if (state.targets) {
+        state.targets.accumA.destroy();
+        state.targets.accumB.destroy();
+      }
       state.uniformBuffer && state.uniformBuffer.destroy();
       state.device && state.device.destroy();
     } catch (e) {
@@ -1236,6 +1394,7 @@ export async function initFractalBackground(canvas, options = {}) {
     const k = FLY_KEYS[e.code];
     if (k) {
       state.keys.add(k);
+      resetAccum();
       e.preventDefault();     // arrows and PageUp/Down would scroll the page
     }
     if (e.shiftKey) state.keys.add('shift');
@@ -1260,6 +1419,7 @@ export async function initFractalBackground(canvas, options = {}) {
   function applyCameraMode() {
     const interactive = state.fly || state.explorer;
     applyControls(interactive);
+    state.accumSamples = 0;
     applyTransparent(interactive ? false : !!opts.transparent);
     state.autoOrbit = !interactive;
   }
@@ -1281,6 +1441,7 @@ export async function initFractalBackground(canvas, options = {}) {
     o.dist = CAM_RADIUS[state.fractalType] ?? 2.55;
     o.pinned = false;
     state.probeHit = -1;
+    state.accumSamples = 0;
     if (state.fly) placeFlyCamera(false);
     state.lastInteract = performance.now();
     nudgeRender();
@@ -1348,6 +1509,7 @@ export async function initFractalBackground(canvas, options = {}) {
         // Reframe the free camera for the new model's world scale.
         state.probeDist = Infinity;
         state.probeHit = -1;
+        state.accumSamples = 0;
         if (state.fly) placeFlyCamera(false);
         // The attractor family needs its trajectory buffer built before use.
         if (state.fractalType >= FRACTAL_IDS.attractor) ensureAttractorTrajectory();
@@ -1356,10 +1518,12 @@ export async function initFractalBackground(canvas, options = {}) {
     },
     setPalette(name) {
       state.palette = getPalette(name);
+      state.accumSamples = 0;
       if (!state.running) renderFrame(performance.now(), true);
     },
     setQuality(mode) {
       state.qualityMode = mode;
+      state.accumSamples = 0;
       if (mode === 'auto') state.qualityScale = pickAutoQuality();
       else state.qualityScale = QUALITY_SCALE[mode] ?? 1.0;
       resize();
@@ -1399,6 +1563,13 @@ export async function initFractalBackground(canvas, options = {}) {
       nudgeRender();
     },
     // Travel speed multiplier (wheel adjusts this while flying).
+    // Progressive accumulation. On by default in the interactive modes; turning
+    // it off restores the idle spin and continuous animation.
+    setAccumulate(on) {
+      state.accumOn = !!on;
+      state.accumSamples = 0;
+      nudgeRender();
+    },
     setFlySpeed(v) {
       state.flyCam.speed = Math.max(FLY_SPEED_MIN, Math.min(FLY_SPEED_MAX, v));
       nudgeRender();
@@ -1431,6 +1602,7 @@ export async function initFractalBackground(canvas, options = {}) {
         flySpeed: +state.flyCam.speed.toFixed(2),
         flyPos: state.fly ? state.flyCam.pos.map((v) => +v.toFixed(2)) : null,
         clearance: Number.isFinite(state.probeDist) ? +state.probeDist.toFixed(4) : null,
+        samples: state.accumSamples,
         zoom: +(state.orbit.dist / (CAM_RADIUS[state.fractalType] ?? 2.55)).toFixed(3),
         pinned: state.orbit.pinned,
       };

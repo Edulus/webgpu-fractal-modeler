@@ -167,6 +167,7 @@ Recommended canvas CSS:
 | `setTransparent(bool)` | Toggle transparent embedding and opaque presentation modes. |
 | `setExplorer(bool)` | Toggle the full model-viewer preset. |
 | `setFly(bool)` | Toggle free flight; interior models drop their bounding clip. |
+| `setAccumulate(bool)` | Toggle progressive accumulation while the view is still. |
 | `setFlySpeed(n)` | Set the travel speed multiplier. |
 | `setControls(bool)` | Enable orbit and zoom controls independently. |
 | `setAutoOrbit(bool)` | Toggle time-driven camera movement. |
@@ -176,6 +177,18 @@ Recommended canvas CSS:
 | `resume()` | Resume rendering while respecting visibility gating. |
 | `destroy()` | Tear down observers, listeners, textures, and the WebGPU device. |
 | `info` | Returns model, quality, FPS, reduced-motion, explorer, fly, speed, position, and zoom state. |
+
+## Progressive accumulation
+
+While the view is still, frames are re-rendered with a subpixel offset and averaged into a running mean, so the image resolves far past what a single sample can show. The high-frequency models benefit most — Penrose grooves and Kleinian filigree alias badly at one sample per pixel.
+
+Offsets walk an **R2 (Roberts) low-discrepancy sequence**, a two-dimensional golden-ratio analogue whose samples interleave evenly instead of clumping the way random jitter does, so the average converges in fewer frames.
+
+Sampling starts after a short pause in input and stops at a cap; past that the raymarch is skipped entirely and the converged image is re-presented, which drops idle GPU cost to the post-processing chain alone. Any input, or a change of model, palette, quality or size, resets the average.
+
+Two behaviours are suspended while averaging, because a moving image cannot converge: the animation clock stops, and explorer mode's gentle idle rotation is disabled. `handle.setAccumulate(false)` restores both and turns the feature off. The HUD reports the sample count as `48spp`.
+
+Accumulation is confined to the interactive modes — background mode keeps animating.
 
 ## Rendering architecture
 

@@ -34,6 +34,9 @@ struct Uniforms {
   reducedMotion: f32,
   _pad         : f32,
   viewProj     : mat4x4<f32>,
+  jitter       : vec2<f32>,
+  accumWeight  : f32,
+  _pad2        : f32,
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;
@@ -128,6 +131,18 @@ fn hash21(p : vec2<f32>) -> f32 {
   var q = fract(p * vec2<f32>(123.34, 345.45));
   q += dot(q, q + 34.345);
   return fract(q.x * q.y);
+}
+
+// ---- Progressive accumulation ---------------------------------------------
+// Running average of subpixel-jittered frames, taken while the view is still.
+// srcTex is the frame just rendered; bloomTex is bound to the previous
+// accumulation half (ping-pong). Weight is 1/(n+1), so the first sample writes
+// the frame through unchanged and no clear pass is needed.
+@fragment
+fn fs_accum(in : VSOut) -> @location(0) vec4<f32> {
+  let cur = textureSample(srcTex, samp, in.uv);
+  let prev = textureSample(bloomTex, samp, in.uv);
+  return mix(prev, cur, clamp(u.accumWeight, 0.0, 1.0));
 }
 
 @fragment

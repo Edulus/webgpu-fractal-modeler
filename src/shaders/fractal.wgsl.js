@@ -38,6 +38,9 @@ export const FRACTAL_WGSL = /* wgsl */ `
 //   152 reducedMotion: f32
 //   156 flyMode      : f32   (0 = orbit, 1 = free fly-through)
 //   160 viewProj     : mat4x4<f32>  (attractor line rasterization)
+//   224 jitter       : vec2<f32>   (subpixel offset, progressive accumulation)
+//   232 accumWeight  : f32         (1/(n+1) running-average weight)
+//   236 _pad2        : f32
 struct Uniforms {
   resolution : vec2<f32>,
   time       : f32,
@@ -63,6 +66,9 @@ struct Uniforms {
   reducedMotion: f32,
   flyMode      : f32,
   viewProj     : mat4x4<f32>,
+  jitter       : vec2<f32>,
+  accumWeight  : f32,
+  _pad2        : f32,
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;
@@ -940,7 +946,11 @@ fn cameraRay(uv : vec2<f32>, ro : vec3<f32>, ta : vec3<f32>, fov : f32) -> vec3<
 // ---- Fragment: raymarch ---------------------------------------------------
 @fragment
 fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
-  let uv = in.uv;
+  // Subpixel offset for progressive accumulation. Zero on a moving frame, so
+  // the interactive image is unchanged; while the view is still it walks an R2
+  // low-discrepancy sequence and the running average resolves the aliasing that
+  // the high-frequency models (Penrose grooves, Kleinian filigree) suffer from.
+  let uv = in.uv + u.jitter / max(u.resolution, vec2<f32>(1.0));
 
   let ro = u.camPos;
   let ta = u.camTarget;

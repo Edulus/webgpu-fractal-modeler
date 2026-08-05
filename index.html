@@ -439,7 +439,8 @@
         hud.textContent = `${names[i.fractalType]} · q${i.qualityScale} · ${i.fps}fps` +
           (i.fly
             ? ` · fly ${i.flySpeed}×${i.clearance !== null ? ` · gap ${i.clearance}` : ''}`
-            : (i.explorer ? ` · ${i.zoom}×` : '')) +
+            : (i.explorer ? ` · ${i.zoom}×${i.pinned ? ' pin' : ''}` : '')) +
+          (i.samples > 0 ? ` · ${i.samples}spp` : '') +
           (i.reducedMotion ? ' · reduced-motion' : '');
       }, 500);
     }
