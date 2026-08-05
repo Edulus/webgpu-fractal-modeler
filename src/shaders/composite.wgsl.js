@@ -37,6 +37,10 @@ struct Uniforms {
   jitter       : vec2<f32>,
   accumWeight  : f32,
   _pad2        : f32,
+  paletteMode  : f32,
+  rampCount    : f32,
+  _pad3        : vec2<f32>,
+  ramp         : array<vec4<f32>, 8>,
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;

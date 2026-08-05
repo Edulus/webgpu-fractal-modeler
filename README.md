@@ -41,6 +41,7 @@ No Three.js, no Babylon, no build step, and no npm. Just ES modules, WGSL, and H
 ├── src/
 │   ├── fractal-bg.js             device, pipelines, controls, render loop, lifecycle
 │   ├── camera.js                 camera rate maths (pure, no WebGPU)
+│   ├── palette-io.js             palette import and persistence (pure)
 │   ├── palettes.js               Inigo Quilez cosine-palette presets
 │   └── shaders/
 │       ├── fractal.wgsl.js       vertex + fragment raymarcher, inlined as WGSL
@@ -48,7 +49,8 @@ No Three.js, no Babylon, no build step, and no npm. Just ES modules, WGSL, and H
 │       └── attractor.wgsl.js     strange attractors drawn as line geometry
 ├── tools/
 │   ├── shader-check.html         compiles every WGSL module and reports errors
-│   └── camera.test.js            camera unit tests (node tools/camera.test.js)
+│   ├── camera.test.js            camera unit tests (node tools/camera.test.js)
+│   └── palette.test.js           palette import/persistence unit tests
 └── .github/workflows/pages.yml   deploys the demo to GitHub Pages
 ```
 
@@ -171,6 +173,7 @@ Recommended canvas CSS:
 | --- | --- |
 | `setFractal(name)` | Switch the model at runtime without reinitializing WebGPU. |
 | `setPalette(name)` | Switch the cosine palette at runtime. |
+| `setPaletteColors(colors)` | Use an imported palette: `[[r,g,b], …]` in 0..1. `null` returns to the preset. |
 | `setQuality(mode)` | Select low, medium, high, or adaptive rendering quality. |
 | `setTransparent(bool)` | Toggle transparent embedding and opaque presentation modes. |
 | `setExplorer(bool)` | Toggle the full model-viewer preset. |
@@ -185,6 +188,24 @@ Recommended canvas CSS:
 | `resume()` | Resume rendering while respecting visibility gating. |
 | `destroy()` | Tear down observers, listeners, textures, and the WebGPU device. |
 | `info` | Model, quality, FPS, reduced-motion, explorer, fly, speed, position, zoom, whether the orbit pivot is pinned, camera clearance, and accumulated sample count. |
+
+## Loading palettes
+
+The demo's **Load palette…** panel accepts three things, auto-detected:
+
+- a **coolors.co** link — `https://coolors.co/264653-2a9d8f-e9c46a-f4a261-e76f51`, including the `/palette/` and `/visualizer/` forms
+- a **GIMP `.gpl`** file, pasted or picked with **File…** or dropped anywhere on the page
+- a plain **hex list**, comma- or newline-separated
+
+Name it and press **Save** and it persists in `localStorage`, appearing in the palette selector on every later visit. **Delete** removes it.
+
+### Why imported palettes are not fitted to the presets
+
+The built-in palettes are Inigo Quilez cosine palettes: `a + b·cos(2π(c·t + d))`, four coefficient triples producing a smooth, endlessly periodic ramp. An imported palette is a different kind of object — a short list of specific colours somebody chose.
+
+Fitting cosine coefficients to those swatches would reproduce most palettes only loosely and ones with a deliberate hard contrast not at all, so imported palettes are instead kept as what they are. The shader carries a second palette mode that interpolates up to eight stops directly, cyclically so it stays continuous the way the cosine presets are. **The colours that come out are the colours that went in.** Palettes longer than eight stops are resampled evenly across the original rather than truncated, so the overall sweep survives.
+
+Parsing runs on untrusted input — pasted text, dropped files — so every parser returns null rather than throwing, and refuses input it only partly understands rather than importing wrong colours silently. `localStorage` is used over cookies: cookies cap near 4KB and travel with every request. Storage that is unavailable (private browsing, embedded webviews, quota) degrades to "could not save" instead of breaking the page. All of it is covered by `node tools/palette.test.js`.
 
 ## Progressive accumulation
 

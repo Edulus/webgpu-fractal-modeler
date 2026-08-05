@@ -8,6 +8,10 @@
 // 16 bytes; we deliberately pack a trailing scalar into each vec3's pad slot.
 
 export const FRACTAL_WGSL = /* wgsl */ `
+// Stop count carried for an imported palette. Mirrored by MAX_STOPS in
+// palette-io.js, which resamples longer palettes down to it.
+const RAMP_MAX : u32 = 8u;
+
 // ---- Uniforms -------------------------------------------------------------
 // Byte offsets (mirror in JS):
 //   0   resolution : vec2<f32>
@@ -41,6 +45,10 @@ export const FRACTAL_WGSL = /* wgsl */ `
 //   224 jitter       : vec2<f32>   (subpixel offset, progressive accumulation)
 //   232 accumWeight  : f32         (1/(n+1) running-average weight)
 //   236 _pad2        : f32
+//   240 paletteMode  : f32   (0 = cosine preset, 1 = imported stop ramp)
+//   244 rampCount    : f32   (live stops, 2..8)
+//   248 _pad3        : vec2<f32>
+//   256 ramp         : array<vec4<f32>, 8>  (imported palette stops)
 struct Uniforms {
   resolution : vec2<f32>,
   time       : f32,
@@ -69,6 +77,10 @@ struct Uniforms {
   jitter       : vec2<f32>,
   accumWeight  : f32,
   _pad2        : f32,
+  paletteMode  : f32,
+  rampCount    : f32,
+  _pad3        : vec2<f32>,
+  ramp         : array<vec4<f32>, RAMP_MAX>,
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;
@@ -102,8 +114,25 @@ const MAX_DIST  : f32 = 30.0;
 const BASE_EPS  : f32 = 0.00035;
 const DE_ITERS  : i32 = 12;   // fractal iteration count (static bound)
 
-// Cosine palette.
+// Imported palette: linear interpolation across the stops.
+//
+// Cyclic, because the cosine presets it sits alongside are periodic and every
+// caller feeds this an unbounded value (orbit traps, a time phase). Wrapping
+// the last stop back to the first keeps the ramp continuous instead of clamping
+// to a flat band at either end.
+fn rampColor(t : f32) -> vec3<f32> {
+  let n = max(u32(u.rampCount), 2u);
+  let x = fract(t) * f32(n);
+  let i0 = u32(floor(x)) % n;
+  let i1 = (i0 + 1u) % n;
+  return mix(u.ramp[i0].rgb, u.ramp[i1].rgb, fract(x));
+}
+
+// Cosine preset, or an imported stop ramp.
 fn palette(t : f32) -> vec3<f32> {
+  if (u.paletteMode > 0.5) {
+    return rampColor(t);
+  }
   return u.paletteA.rgb + u.paletteB.rgb *
          cos(2.0 * PI * (u.paletteC.rgb * t + u.paletteD.rgb));
 }

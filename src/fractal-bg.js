@@ -16,6 +16,7 @@ import { FRACTAL_WGSL } from './shaders/fractal.wgsl.js';
 import { COMPOSITE_WGSL } from './shaders/composite.wgsl.js';
 import { ATTRACTOR_WGSL } from './shaders/attractor.wgsl.js';
 import { getPalette } from './palettes.js';
+import { clampStops, averageColor, MAX_STOPS } from './palette-io.js';
 import {
   makeFlyCamera, stepFlyCamera, aimFlyCamera, dollyFlyCamera, scaleFlySpeed,
   usableClearance, orbitDragScale, FLY_SPEED_MIN, FLY_SPEED_MAX,
@@ -51,9 +52,13 @@ const U = {
   jitter: 56,   // vec2 -> 56,57 (byte 224)
   accumWeight: 58,
   _pad2: 59,
+  paletteMode: 60,  // 0 = cosine preset, 1 = imported stop ramp
+  rampCount: 61,
+  _pad3: 62,        // 62,63 pad the ramp array to a 16-byte boundary
+  ramp: 64,         // 8 * vec4 -> slots 64..95 (byte 256)
 };
-const UNIFORM_FLOATS = 60;
-const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 240
+const UNIFORM_FLOATS = 96;
+const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 384
 
 // Distance-estimated fractals occupy ids 0..10; the volumetric/line-rendered
 // attractors follow at 11+. The shader keys off that split (see the
@@ -191,6 +196,9 @@ export async function initFractalBackground(canvas, options = {}) {
     // config
     fractalType: FRACTAL_IDS[opts.fractal] ?? 0,
     palette: getPalette(opts.palette),
+    // An imported palette, kept as its own stops rather than fitted to cosine
+    // coefficients. Null means the cosine preset above is in use.
+    paletteRamp: null,
     transparent: !!opts.transparent,
     qualityMode: opts.quality, // 'low'|'medium'|'high'|'auto'
     qualityScale: 1.0,
@@ -785,6 +793,20 @@ export async function initFractalBackground(canvas, options = {}) {
     d[U.mbFixedRadius] = 1.0;
 
     const p = state.palette;
+    const ramp = state.paletteRamp;
+    d[U.paletteMode] = ramp ? 1 : 0;
+    d[U.rampCount] = ramp ? ramp.length : 0;
+    if (ramp) {
+      for (let i = 0; i < MAX_STOPS; i++) {
+        const c = ramp[Math.min(i, ramp.length - 1)];
+        d[U.ramp + i * 4] = c[0];
+        d[U.ramp + i * 4 + 1] = c[1];
+        d[U.ramp + i * 4 + 2] = c[2];
+        d[U.ramp + i * 4 + 3] = 0;
+      }
+    }
+    // paletteA doubles as the background tint, which backgroundColor() reads
+    // directly in both modes — so an imported ramp writes its mean here.
     d[U.paletteA] = p.a[0]; d[U.paletteA + 1] = p.a[1]; d[U.paletteA + 2] = p.a[2]; d[U.paletteA + 3] = 0;
     d[U.paletteB] = p.b[0]; d[U.paletteB + 1] = p.b[1]; d[U.paletteB + 2] = p.b[2]; d[U.paletteB + 3] = 0;
     d[U.paletteC] = p.c[0]; d[U.paletteC + 1] = p.c[1]; d[U.paletteC + 2] = p.c[2]; d[U.paletteC + 3] = 0;
@@ -1538,6 +1560,7 @@ export async function initFractalBackground(canvas, options = {}) {
     },
     setPalette(name) {
       state.palette = getPalette(name);
+      state.paletteRamp = null;
       state.accumSamples = 0;
       if (!state.running) renderFrame(performance.now(), true);
     },
@@ -1583,6 +1606,25 @@ export async function initFractalBackground(canvas, options = {}) {
       nudgeRender();
     },
     // Travel speed multiplier (wheel adjusts this while flying).
+    // Use an imported palette: a list of [r,g,b] triples in 0..1, kept exactly
+    // rather than fitted to cosine coefficients. Pass null to return to the
+    // cosine preset selected by setPalette.
+    setPaletteColors(colors) {
+      if (!colors) {
+        state.paletteRamp = null;
+      } else {
+        const stops = clampStops(colors);
+        if (stops.length < 2) return false;
+        state.paletteRamp = stops;
+        // Keep the background tint in step with the imported colours.
+        const mean = averageColor(stops);
+        state.palette = { ...state.palette, a: mean };
+      }
+      state.accumSamples = 0;
+      nudgeRender();
+      return true;
+    },
+
     // Progressive accumulation. On by default in the interactive modes; turning
     // it off restores the idle spin and continuous animation.
     setAccumulate(on) {

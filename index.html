@@ -134,6 +134,28 @@
       cursor: pointer;
     }
     #panel .row { display: flex; gap: 8px; }
+
+    /* Palette loader */
+    #pal-io { color: var(--muted); font-size: 12px; }
+    #pal-io summary { cursor: pointer; padding: 2px 0; color: var(--muted); }
+    #pal-io > *:not(summary) { margin-top: 7px; }
+    #pal-io textarea, #pal-io input[type="text"] {
+      width: 100%;
+      background: rgba(6, 8, 16, 0.7);
+      color: var(--fg);
+      border: 1px solid var(--panel-border);
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-size: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      resize: vertical;
+    }
+    #pal-swatches { display: flex; gap: 3px; height: 0; transition: height 0.2s ease; }
+    #pal-swatches.show { height: 18px; }
+    #pal-swatches i { flex: 1; border-radius: 3px; }
+    #pal-msg { font-size: 11px; min-height: 1.2em; }
+    #pal-msg.err { color: #ffb0b0; }
+    #pal-msg.ok { color: var(--accent); }
     #panel .row button { flex: 1; }
     #hud {
       font-variant-numeric: tabular-nums;
@@ -289,6 +311,22 @@
         <option value="iridescence">Iridescence</option>
       </select>
     </label>
+    <details id="pal-io">
+      <summary>Load palette…</summary>
+      <textarea id="pal-input" rows="2" placeholder="Paste a coolors.co link, hex list, or .gpl contents"></textarea>
+      <div class="row">
+        <button id="pal-load">Load</button>
+        <button id="pal-file-btn">File…</button>
+      </div>
+      <input type="file" id="pal-file" accept=".gpl,.txt,text/plain" hidden />
+      <div class="row">
+        <input type="text" id="pal-name" placeholder="Name to save as" />
+        <button id="pal-save">Save</button>
+        <button id="pal-del" hidden>Delete</button>
+      </div>
+      <div id="pal-swatches"></div>
+      <div id="pal-msg"></div>
+    </details>
     <label>Quality
       <select id="sel-quality">
         <option value="auto">Auto</option>
@@ -351,6 +389,7 @@
 
   <script type="module">
     import { initFractalBackground } from './src/fractal-bg.js';
+    import * as PaletteIO from './src/palette-io.js';
 
     const canvas = document.getElementById('bg');
     const hud = document.getElementById('hud');
@@ -385,13 +424,141 @@
 
     if (handle) {
       // Wire up the control panel.
+      // ---- Palette loading ------------------------------------------------
+      const palInput = document.getElementById('pal-input');
+      const palName = document.getElementById('pal-name');
+      const palMsg = document.getElementById('pal-msg');
+      const palSwatches = document.getElementById('pal-swatches');
+      const palFile = document.getElementById('pal-file');
+      const selPalette = document.getElementById('sel-palette');
+      let loaded = null;   // the colours currently previewed, awaiting a name
+
+      function say(text, kind) {
+        palMsg.textContent = text;
+        palMsg.className = kind || '';
+      }
+
+      function showSwatches(colors) {
+        palSwatches.innerHTML = '';
+        for (const c of colors) {
+          const i = document.createElement('i');
+          i.style.background = PaletteIO.toHex(c);
+          palSwatches.appendChild(i);
+        }
+        palSwatches.classList.toggle('show', colors.length > 0);
+      }
+
+      const palDel = document.getElementById('pal-del');
+
+      function applyColors(colors, label, alreadySaved) {
+        if (!handle.setPaletteColors(colors)) { say('Needs at least two colours.', 'err'); return; }
+        loaded = colors;
+        showSwatches(colors);
+        palDel.hidden = !alreadySaved;
+        say(alreadySaved
+          ? `${label} — ${colors.length} colours.`
+          : `${label} — ${colors.length} colours. Name it and Save to keep.`, 'ok');
+      }
+
+      palDel.addEventListener('click', () => {
+        const v = selPalette.value;
+        if (!v.startsWith('saved:')) return;
+        const name = v.slice(6);
+        PaletteIO.deletePalette(name);
+        refreshSaved();
+        selPalette.value = 'aurora';
+        handle.setPalette('aurora');
+        loaded = null;
+        showSwatches([]);
+        palDel.hidden = true;
+        say(`Deleted "${name}".`, 'ok');
+      });
+
+      function refreshSaved() {
+        const saved = PaletteIO.listSavedPalettes();
+        // Rebuild only the saved-palette group, leaving the built-ins alone.
+        [...selPalette.querySelectorAll('option[data-saved]')].forEach((o) => o.remove());
+        for (const name of Object.keys(saved)) {
+          const o = document.createElement('option');
+          o.value = 'saved:' + name;
+          o.textContent = name + ' (saved)';
+          o.dataset.saved = '1';
+          selPalette.appendChild(o);
+        }
+        return saved;
+      }
+
+      function loadFromText(text, label) {
+        const parsed = PaletteIO.parsePalette(text);
+        if (!parsed) {
+          say('Could not read that. Expected a coolors.co link, hex list, or .gpl file.', 'err');
+          return;
+        }
+        if (!palName.value.trim() && parsed.name && parsed.name !== 'Imported') {
+          palName.value = parsed.name;
+        }
+        applyColors(parsed.colors, label || parsed.source);
+      }
+
+      document.getElementById('pal-load').addEventListener('click',
+        () => loadFromText(palInput.value));
+      document.getElementById('pal-file-btn').addEventListener('click', () => palFile.click());
+      palFile.addEventListener('change', async () => {
+        const f = palFile.files && palFile.files[0];
+        if (!f) return;
+        try {
+          loadFromText(await f.text(), f.name);
+        } catch (_) {
+          say('Could not read that file.', 'err');
+        }
+        palFile.value = '';
+      });
+
+      document.getElementById('pal-save').addEventListener('click', () => {
+        if (!loaded) { say('Load a palette first.', 'err'); return; }
+        const name = palName.value.trim();
+        if (!name) { say('Give it a name first.', 'err'); return; }
+        if (!PaletteIO.savePalette(name, loaded)) {
+          say('Could not save — browser storage is unavailable or full.', 'err');
+          return;
+        }
+        refreshSaved();
+        selPalette.value = 'saved:' + name;
+        palDel.hidden = false;
+        say(`Saved as "${name}". It will be here next time.`, 'ok');
+      });
+
+      // Drop a .gpl straight onto the page.
+      document.addEventListener('dragover', (e) => e.preventDefault());
+      document.addEventListener('drop', async (e) => {
+        const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        if (!f) return;
+        e.preventDefault();
+        document.getElementById('pal-io').open = true;
+        try { loadFromText(await f.text(), f.name); } catch (_) { say('Could not read that file.', 'err'); }
+      });
+
+      const savedAtBoot = refreshSaved();
+      selPalette.addEventListener('change', (e) => {
+        const v = e.target.value;
+        if (v.startsWith('saved:')) {
+          const colors = PaletteIO.listSavedPalettes()[v.slice(6)];
+          if (colors) applyColors(colors, v.slice(6), true);
+        } else {
+          handle.setPalette(v);
+          loaded = null;
+          showSwatches([]);
+          palDel.hidden = true;
+          say('');
+        }
+      });
+
       document.getElementById('sel-fractal').addEventListener('change', (e) => {
         handle.setFractal(e.target.value);
         // A focused <select> swallows W/A/S/D and the arrow keys, so hand focus
         // back to the page while flying.
         if (handle.info.fly) e.target.blur();
       });
-      document.getElementById('sel-palette').addEventListener('change', (e) => handle.setPalette(e.target.value));
       document.getElementById('sel-quality').addEventListener('change', (e) => handle.setQuality(e.target.value));
       document.getElementById('btn-pause').addEventListener('click', () => handle.pause());
       document.getElementById('btn-resume').addEventListener('click', () => handle.resume());
