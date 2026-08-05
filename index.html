@@ -385,7 +385,12 @@
 
     if (handle) {
       // Wire up the control panel.
-      document.getElementById('sel-fractal').addEventListener('change', (e) => handle.setFractal(e.target.value));
+      document.getElementById('sel-fractal').addEventListener('change', (e) => {
+        handle.setFractal(e.target.value);
+        // A focused <select> swallows W/A/S/D and the arrow keys, so hand focus
+        // back to the page while flying.
+        if (handle.info.fly) e.target.blur();
+      });
       document.getElementById('sel-palette').addEventListener('change', (e) => handle.setPalette(e.target.value));
       document.getElementById('sel-quality').addEventListener('change', (e) => handle.setQuality(e.target.value));
       document.getElementById('btn-pause').addEventListener('click', () => handle.pause());
@@ -395,31 +400,32 @@
       const btnExplorer = document.getElementById('btn-explorer');
       const btnReset = document.getElementById('btn-reset');
       const btnFly = document.getElementById('btn-fly');
-      let flyOn = false;
-      let explorerOn = false;
+      // The library owns which camera mode is active and keeps the two mutually
+      // exclusive, so the page reads that state back rather than tracking its
+      // own copy. Keeping a duplicate here is what broke fly mode once already.
+      function syncModeUI() {
+        const i = handle.info;
+        document.body.classList.toggle('explorer', i.explorer);
+        document.body.classList.toggle('flying', i.fly);
+        btnExplorer.textContent = i.explorer ? 'Exit explorer mode' : 'Enter explorer mode';
+        btnFly.textContent = i.fly ? 'Exit fly-through' : 'Fly through';
+        btnFly.classList.toggle('on', i.fly);
+        btnReset.classList.toggle('hidden', !(i.explorer || i.fly));
+      }
       function toggleExplorer(on) {
-        explorerOn = on;
         handle.setExplorer(on);
-        document.body.classList.toggle('explorer', on);
-        btnExplorer.textContent = on ? 'Exit explorer mode' : 'Enter explorer mode';
-        btnReset.classList.toggle('hidden', !on);
+        syncModeUI();
       }
-      function toggleFly(on) {
-        flyOn = on;
-        handle.setFly(on);
-        document.body.classList.toggle('flying', on);
-        btnFly.classList.toggle('on', on);
-        btnFly.textContent = on ? 'Exit fly-through' : 'Fly through';
-        btnReset.classList.toggle('hidden', !on && !explorerOn);
-        // Flying needs key focus, and the two camera modes are exclusive.
-        if (on && explorerOn) toggleExplorer(false);
-        if (on) document.body.focus();
-      }
-      btnExplorer.addEventListener('click', () => {
-        if (flyOn) toggleFly(false);
-        toggleExplorer(!explorerOn);
+      btnExplorer.addEventListener('click', () => toggleExplorer(!handle.info.explorer));
+      btnFly.addEventListener('click', () => {
+        handle.setFly(!handle.info.fly);
+        syncModeUI();
+        // Drop focus so the keyboard reaches the flight controls rather than
+        // the button or the model dropdown.
+        if (document.activeElement && document.activeElement.blur) {
+          document.activeElement.blur();
+        }
       });
-      btnFly.addEventListener('click', () => toggleFly(!flyOn));
       btnReset.addEventListener('click', () => handle.resetView());
       // (Double-tap / double-click to reset is handled inside the library so it
       // can tell a real tap from the end of a pinch.)

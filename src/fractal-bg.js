@@ -1114,6 +1114,17 @@ export async function initFractalBackground(canvas, options = {}) {
   // Held keys would otherwise stick down while the tab is in the background.
   function onBlur() { state.keys.clear(); }
 
+  // Both camera modes need the same things switched on, and they are mutually
+  // exclusive. Deriving that from the flags in one place means callers cannot
+  // get the ordering wrong -- an earlier version had setFly enable navigation
+  // and a following setExplorer(false) immediately turn it back off.
+  function applyCameraMode() {
+    const interactive = state.fly || state.explorer;
+    applyControls(interactive);
+    applyTransparent(interactive ? false : !!opts.transparent);
+    state.autoOrbit = !interactive;
+  }
+
   // Enable/disable drag/pinch/wheel navigation.
   function applyControls(on) {
     state.controls = !!on;
@@ -1225,15 +1236,15 @@ export async function initFractalBackground(canvas, options = {}) {
       if (want === state.fly) return;
       state.fly = want;
       if (want) {
-        applyControls(true);
-        applyTransparent(false);
-        state.autoOrbit = false;
+        // Leaving explorer first, and placing the camera before anything can
+        // trigger a frame: placeFlyCamera reads the last rendered camera
+        // position, which a render in between would overwrite with a stale one.
+        state.explorer = false;
         placeFlyCamera(true);
       } else {
         state.keys.clear();
-        applyControls(state.explorer);
-        applyTransparent(state.explorer ? false : !!opts.transparent);
       }
+      applyCameraMode();
       updateRunning();
       nudgeRender();
     },
@@ -1246,9 +1257,11 @@ export async function initFractalBackground(canvas, options = {}) {
     // Turning it off restores the original (background) configuration.
     setExplorer(on) {
       state.explorer = !!on;
-      state.autoOrbit = !on;
-      applyControls(!!on);
-      applyTransparent(on ? false : !!opts.transparent);
+      if (state.explorer && state.fly) {
+        state.fly = false;
+        state.keys.clear();
+      }
+      applyCameraMode();
       resetView();
       nudgeRender();
     },
