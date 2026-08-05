@@ -174,6 +174,43 @@ export function travelDistance(clearance, dtSec, mult = 1) {
   return clearance * (1 - Math.exp(-TRAVEL_K * dt));
 }
 
+// ---- Orbit momentum -------------------------------------------------------
+
+// The angular rate a drifting view settles at and never falls below, in radians
+// per second. About two degrees a second: a full turn takes three minutes, so
+// it reads as the model being alive rather than as motion going somewhere.
+export const DRIFT_RATE = 0.035;
+
+// Seconds for a flick to shed half its excess speed on the way down to the
+// drift rate.
+export const MOMENTUM_HALFLIFE = 0.4;
+
+/**
+ * The floor a drifting velocity settles onto: the direction of the last
+ * movement, at `rate`. A zero direction means nothing has been thrown yet, and
+ * the floor is zero — a view that has never been dragged has no last movement
+ * to retain, and stands still.
+ */
+export function driftFloor(vyaw, vpitch, rate = DRIFT_RATE) {
+  const m = Math.hypot(vyaw, vpitch);
+  if (!(m > 1e-12) || !Number.isFinite(m) || !Number.isFinite(rate)) return [0, 0];
+  return [(vyaw / m) * rate, (vpitch / m) * rate];
+}
+
+/**
+ * Decay a velocity towards `floor` rather than towards zero.
+ *
+ * Same exponential form as travelDistance and for the same reason: written as a
+ * per-frame multiplier, a flick dies in a fixed number of FRAMES, so it lasts
+ * twice as long on a 120Hz phone as on a 60Hz laptop. Anchored to a half-life in
+ * seconds, a throw feels the same everywhere.
+ */
+export function decayMomentum(v, floor, dtSec) {
+  if (!Number.isFinite(v)) return floor;
+  const dt = clamp(dtSec, 0, 0.25);
+  return floor + (v - floor) * Math.pow(0.5, dt / MOMENTUM_HALFLIFE);
+}
+
 // ---- Pinch gestures -------------------------------------------------------
 
 // Below this separation (CSS px) the ratio between two readings stops meaning

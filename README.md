@@ -86,11 +86,23 @@ Explorer mode provides:
 
 - Mouse or one-finger drag to orbit around the pinned pivot
 - Pinch or mouse-wheel zoom
-- Double-tap, double-click, or `resetView()` to recenter
+- Momentum: a throw slows into a slow drift and keeps turning
+- Double-tap, double-click, or `resetView()` to stop it and recenter
 - An opaque presentation background
-- A gentle idle rotation when the viewer is untouched
 
 **Zoom dollies towards the surface, not the centroid.** The orbit camera keeps an explicit pivot and distance. Zooming in first re-pins the pivot onto whatever the centre of the view is pointing at, using a distance measured by the GPU probe along the view ray; the eye does not move, the pivot slides forward onto the surface and the distance shrinks to match. Closing in then approaches that surface asymptotically instead of sliding towards the model's centroid — which is what used to push the eye through the surface into the interior, where the frame washes out.
+
+**The view keeps its momentum.** Angular velocity decays towards a floor rather than towards zero: a throw sheds its speed over a few seconds and settles into a drift of about two degrees a second — a full turn in three minutes — which it then holds indefinitely. The floor points wherever the last movement went, so the model carries on the way you left it going. A view that has never been dragged has no last movement to retain and stands still.
+
+Double-tap, double-click, or `resetView()` clears the direction, and with nothing to settle onto the momentum decays to a genuine halt. That is the only full stop.
+
+Three details make it work rather than merely exist. The drift is integrated into the *target* angles, not the eased ones — added to the eased angle it would fight the easing spring, which pulls back towards the target, and the two would balance at a fixed offset with the drift silently stalled. The decay is anchored to a half-life in seconds rather than a per-frame multiplier, so a flick lasts the same time on a 120Hz phone as on a 60Hz laptop; only the spring's one-off settling transient differs, by about two degrees, and it does not accumulate. And a drift with a vertical component bounces off the pitch limits instead of parking against them, since coming to rest at the pole is exactly the full stop the drift exists to avoid.
+
+The floor is scaled by the same curve as the drag rate, so a drift that is barely perceptible framing the whole model does not become a sweep once the camera is close to an unpinned centroid.
+
+This supersedes the old idle auto-rotation, which was mutually exclusive with progressive accumulation — a turning camera can never settle — and so was switched off by default. The exclusivity is still real, but it now falls the right way round: the view drifts until you stop it, and stopping it is what lets the image converge. Double-tap therefore both settles the view and sharpens it. The cost of drifting is that the renderer never reaches its cheap converged state, where the raymarch is skipped entirely; on a phone that is the difference between a full raymarch every frame and the post chain alone.
+
+Drift is suppressed under `prefers-reduced-motion`, and applies to the orbit camera only — in fly-through, a look direction that would not hold still is disorienting rather than alive.
 
 **Pinch is integrated, not anchored.** A pinch is read as the *change* in finger separation since the previous move event, and each step is applied relative to wherever the camera now is — the same path the mouse wheel takes. The obvious alternative, anchoring to the separation and distance the gesture started at, is subtly wrong here: that distance is measured against the pivot the gesture began with, and re-pinning moves the pivot mid-gesture. Assigning an anchored distance into a frame that has since shifted displaces the eye by the whole difference, on every move event, sixty to a hundred and twenty times a second. The incremental form composes with re-pinning, and the two agree exactly when nothing re-pins, because the ratios telescope. Telescoping also makes the gesture frame-rate independent: the total zoom depends only on where the fingers started and finished, never on how many events the browser delivered.
 

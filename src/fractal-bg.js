@@ -20,7 +20,7 @@ import { clampStops, averageColor, MAX_STOPS } from './palette-io.js';
 import {
   makeFlyCamera, stepFlyCamera, aimFlyCamera, dollyFlyCamera, scaleFlySpeed,
   usableClearance, orbitDragScale, pinchZoomFactor, pinchDollyDistance,
-  FLY_SPEED_MIN, FLY_SPEED_MAX,
+  driftFloor, decayMomentum, DRIFT_RATE, FLY_SPEED_MIN, FLY_SPEED_MAX,
 } from './camera.js';
 
 // ---- Uniform buffer layout (mirror of the WGSL Uniforms struct) -----------
@@ -229,7 +229,12 @@ export async function initFractalBackground(canvas, options = {}) {
     // at instead of towards the model's centroid -- which is what used to drive
     // it through the surface and into the interior at deep zoom.
     orbit: {
-      yaw: 0.6, pitch: 0.35, tyaw: 0.6, tpitch: 0.35, vyaw: 0, vpitch: 0,
+      yaw: 0.6, pitch: 0.35, tyaw: 0.6, tpitch: 0.35,
+      // Angular velocity in rad/s, and the direction the last movement left
+      // behind. Velocity decays towards that direction at DRIFT_RATE rather
+      // than towards zero, so a view that has been moved keeps drifting; a
+      // zero direction (never dragged, or reset) means it settles to a stop.
+      vyaw: 0, vpitch: 0, dyaw: 0, dpitch: 0,
       target: [0, 0, 0],
       dist: 2.55,
       pinned: false,     // has the target been placed on a surface?
@@ -731,21 +736,43 @@ export async function initFractalBackground(canvas, options = {}) {
       camX = cam.pos[0]; camY = cam.pos[1]; camZ = cam.pos[2];
       tgtX = camX + fwd[0]; tgtY = camY + fwd[1]; tgtZ = camZ + fwd[2];
     } else if (state.explorer) {
-      // Model-explorer: spherical orbit driven by drag (with easing/inertia)
-      // plus a gentle idle spin when the user isn't touching it.
+      // Model-explorer: spherical orbit driven by drag, eased, and carrying
+      // momentum that settles into a drift rather than dying.
       const o = state.orbit;
-      // Gentle idle spin after a couple of seconds of no interaction; folded
-      // into the target so there's no snap when the user grabs it again.
-      // The idle spin and progressive accumulation are mutually exclusive: a
-      // turning camera can never settle. Sharpening wins for a model viewer.
-      if (!rm && !state.accumOn && state.pointers.size === 0
-          && nowMs - state.lastInteract > 2500) {
-        o.tyaw += 0.0016;
+      // Momentum. Velocity decays towards the drift floor rather than towards
+      // zero, so a throw slows to a subtle turn and stays there instead of
+      // dying: the view never fully settles once it has been moved. Only
+      // resetView -- double-tap, double-click -- clears the direction and lets
+      // it come to a genuine stop.
+      //
+      // It is integrated into the TARGET angles, not the eased ones. Adding it
+      // to the eased angle instead would put it in tension with the easing
+      // spring, which pulls back towards the target: the two balance at a fixed
+      // offset and the drift silently stalls.
+      if (!rm) {
+        const dt = Math.min(state.frameDt / 1000, 0.1);
+        // The floor is scaled the same way a drag is, so a drift that is barely
+        // perceptible framing the whole model does not become a sweep once the
+        // camera is close to an unpinned centroid.
+        const scale = orbitDragScale(o.dist / baseR, o.pinned);
+        const [fy, fp] = driftFloor(o.dyaw, o.dpitch, DRIFT_RATE * scale);
+        o.vyaw = decayMomentum(o.vyaw, fy, dt);
+        o.vpitch = decayMomentum(o.vpitch, fp, dt);
+        o.tyaw += o.vyaw * dt;
+        o.tpitch += o.vpitch * dt;
+        // Bounce off the poles. Without this a drift with any vertical
+        // component parks against the pitch clamp and dies there, which is
+        // exactly the full stop the drift exists to avoid.
+        if (o.tpitch > 1.45 || o.tpitch < -1.45) {
+          o.dpitch = -o.dpitch;
+          o.vpitch = -o.vpitch;
+        }
+      } else {
+        o.vyaw = 0; o.vpitch = 0;
       }
       o.tpitch = Math.max(-1.45, Math.min(1.45, o.tpitch));
-      o.yaw += (o.tyaw - o.yaw) * 0.18 + o.vyaw;
-      o.pitch += (o.tpitch - o.pitch) * 0.18 + o.vpitch;
-      o.vyaw *= 0.9; o.vpitch *= 0.9;
+      o.yaw += (o.tyaw - o.yaw) * 0.18;
+      o.pitch += (o.tpitch - o.pitch) * 0.18;
       o.pitch = Math.max(-1.45, Math.min(1.45, o.pitch));
       const cp = Math.cos(o.pitch);
       // dir points target -> eye, so the eye rides a sphere about the pivot.
@@ -1177,10 +1204,20 @@ export async function initFractalBackground(canvas, options = {}) {
   // Accumulate only when the view is genuinely still: interactive modes only,
   // no input for a moment, no keys held, and animation frozen (the estimators
   // move over time, and averaging a moving image just smears it).
+  // Is the orbit view still drifting from its last movement?
+  function orbitDrifting() {
+    return state.explorer && !state.fly && !reducedMotion()
+           && (state.orbit.dyaw !== 0 || state.orbit.dpitch !== 0);
+  }
+
   function accumulating(nowMs) {
     if (!state.accumOn || !state.controls) return false;
     if (state.keys.size > 0) return false;
     if (state.pointers.size > 0) return false;
+    // A drifting camera can never settle, and averaging a moving image just
+    // smears it. So the two are exclusive by construction: the view drifts
+    // until it is stopped, and stopping it is what lets the image converge.
+    if (orbitDrifting()) return false;
     return nowMs - state.lastInteract > ACCUM_IDLE_MS;
   }
 
@@ -1261,8 +1298,17 @@ export async function initFractalBackground(canvas, options = {}) {
       const ok = k * orbitDragScale(state.orbit.dist / baseR, state.orbit.pinned);
       state.orbit.tyaw += dx * ok;
       state.orbit.tpitch += dy * ok;
-      state.orbit.vyaw = dx * ok * 0.15;
-      state.orbit.vpitch = dy * ok * 0.15;
+      // Throw velocity, in rad/s (the 9 is the old per-frame 0.15 restated at
+      // 60fps). A zero-delta event deliberately zeroes the velocity but leaves
+      // the DIRECTION alone: stopping the finger before lifting should kill the
+      // throw, not the drift, and the last few events of a gesture are often
+      // jitter about a standstill.
+      state.orbit.vyaw = dx * ok * 9;
+      state.orbit.vpitch = dy * ok * 9;
+      if (dx || dy) {
+        state.orbit.dyaw = state.orbit.vyaw;
+        state.orbit.dpitch = state.orbit.vpitch;
+      }
       if (state.tapStart &&
           Math.hypot(e.clientX - state.tapStart.x, e.clientY - state.tapStart.y) > TAP_MOVE) {
         state.gestureMoved = true;
@@ -1485,7 +1531,11 @@ export async function initFractalBackground(canvas, options = {}) {
 
   function resetView() {
     const o = state.orbit;
-    o.tyaw = 0.6; o.tpitch = 0.35; o.vyaw = 0; o.vpitch = 0;
+    // Clearing the drift direction as well as the velocity is what makes this
+    // the only full stop: with no direction to settle onto, momentum decays to
+    // nothing and the view holds still (and can then converge).
+    o.tyaw = 0.6; o.tpitch = 0.35;
+    o.vyaw = 0; o.vpitch = 0; o.dyaw = 0; o.dpitch = 0;
     o.target[0] = 0; o.target[1] = 0; o.target[2] = 0;
     o.dist = CAM_RADIUS[state.fractalType] ?? 2.55;
     o.pinned = false;
@@ -1674,6 +1724,7 @@ export async function initFractalBackground(canvas, options = {}) {
         samples: state.accumSamples,
         zoom: +(state.orbit.dist / (CAM_RADIUS[state.fractalType] ?? 2.55)).toFixed(3),
         pinned: state.orbit.pinned,
+        drifting: orbitDrifting(),
       };
     },
   };

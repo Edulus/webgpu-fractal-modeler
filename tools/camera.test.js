@@ -11,9 +11,10 @@ import {
   makeFlyCamera, stepFlyCamera, aimFlyCamera, dollyFlyCamera, scaleFlySpeed,
   flyBasis, aimAtOrigin, MAX_PITCH, FLY_SPEED_MIN, FLY_SPEED_MAX,
   usableClearance, travelDistance, orbitDragScale,
-  pinchZoomFactor, pinchDollyDistance,
+  pinchZoomFactor, pinchDollyDistance, driftFloor, decayMomentum,
   CLEAR_MIN, CLEAR_MAX, TRAVEL_K, DRAG_MIN, DRAG_MAX,
   PINCH_MIN_SEP, PINCH_MAX_STEP, PINCH_GAIN, PINCH_DOLLY_PX,
+  DRIFT_RATE, MOMENTUM_HALFLIFE,
 } from '../src/camera.js';
 
 let passed = 0;
@@ -342,6 +343,75 @@ console.log('\npinch to dolly (fly mode)');
     check(`degenerate delta ${bad} travels nothing`,
           pinchDollyDistance(1, bad) === 0);
   }
+}
+
+console.log('\norbit momentum: a throw that never quite dies');
+{
+  const mag = (a, b) => Math.hypot(a, b);
+
+  check('a floor points where the movement went',
+        near(mag(...driftFloor(3, 0)), DRIFT_RATE) && driftFloor(3, 0)[0] > 0);
+  check('direction is preserved, magnitude is not',
+        near(driftFloor(1, 1)[0], driftFloor(9, 9)[0]));
+  check('sign is preserved both ways', driftFloor(-2, 0)[0] < 0);
+  check('a diagonal throw drifts diagonally',
+        near(driftFloor(1, 1)[0], driftFloor(1, 1)[1]));
+
+  // Nothing thrown yet: there is no last movement to retain, so no drift.
+  check('never dragged means no drift', driftFloor(0, 0).every((v) => v === 0));
+  for (const bad of [[NaN, 0], [0, NaN], [Infinity, 1], [1e-300, 0]]) {
+    check(`degenerate direction (${bad}) yields no drift`,
+          driftFloor(...bad).every((v) => v === 0));
+  }
+
+  check('decay moves towards the floor, not past it',
+        decayMomentum(1, DRIFT_RATE, 0.1) > DRIFT_RATE);
+  // Two half-half-lives, because a single dt of MOMENTUM_HALFLIFE would be
+  // clamped as an implausibly long frame.
+  check('one half-life sheds half the excess',
+        near(decayMomentum(decayMomentum(1, 0.2, MOMENTUM_HALFLIFE / 2),
+                           0.2, MOMENTUM_HALFLIFE / 2), 0.6, 1e-9));
+  check('dt of zero changes nothing', near(decayMomentum(0.5, 0, 0), 0.5));
+  check('a stalled tab cannot skip the whole decay',
+        near(decayMomentum(1, 0, 1e6), decayMomentum(1, 0, 0.25)));
+  check('and one long frame cannot kill a throw outright',
+        decayMomentum(1, 0, 20) > 0.5);
+
+  // The property the feature is named for: after any finite time, a view that
+  // was thrown is still moving — and at a rate that has stopped changing.
+  let v = 2.4;                                  // a hard flick
+  const floor = driftFloor(1, 0)[0];
+  const dt = 1 / 60;
+  const at = {};
+  for (let i = 1; i <= 60 * 600; i++) {         // ten minutes of frames
+    v = decayMomentum(v, floor, dt);
+    if (i === 60 || i === 60 * 5 || i === 60 * 60) at[i / 60] = v;
+  }
+  check('a flick has calmed within a second', at[1] < 0.5 * 2.4);
+  check('it has settled by five seconds', near(at[5], floor, 1e-3));
+  check('ten minutes later it is still turning', v >= floor - 1e-12);
+  check('and turning at exactly the drift rate', near(v, floor, 1e-12));
+
+  // Frame rate must not change how long a throw lasts, or the same flick
+  // decays twice as fast on a 120Hz phone as on a 60Hz laptop.
+  const after = (hz, secs) => {
+    let x = 2.4;
+    for (let i = 0; i < hz * secs; i++) x = decayMomentum(x, floor, 1 / hz);
+    return x;
+  };
+  check('60Hz and 120Hz agree after a second', near(after(60, 1), after(120, 1), 1e-6));
+  check('30Hz agrees too', near(after(30, 1), after(60, 1), 1e-6));
+
+  // Clearing the direction is the full stop. This is what double-tap does.
+  let stopping = 1.0;
+  for (let i = 0; i < 60 * 10; i++) stopping = decayMomentum(stopping, 0, dt);
+  check('clearing the direction brings it to a genuine halt', stopping < 1e-6);
+
+  // Scaling the floor by the drag scale keeps a close-in unpinned view calm.
+  const closeFloor = driftFloor(1, 0, DRIFT_RATE * orbitDragScale(0.3, false))[0];
+  check('drift is damped close in, unpinned', closeFloor < DRIFT_RATE * 0.2);
+  check('drift is undamped on a pinned pivot',
+        near(driftFloor(1, 0, DRIFT_RATE * orbitDragScale(0.3, true))[0], DRIFT_RATE));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
