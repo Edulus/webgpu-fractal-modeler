@@ -18,8 +18,8 @@ import { ATTRACTOR_WGSL } from './shaders/attractor.wgsl.js';
 import { getPalette } from './palettes.js';
 import {
   makeFlyCamera, stepFlyCamera, aimFlyCamera, dollyFlyCamera, scaleFlySpeed,
-  FLY_SPEED_MIN, FLY_SPEED_MAX,
-} from './fly-camera.js';
+  proximitySpeedScale, orbitDragScale, FLY_SPEED_MIN, FLY_SPEED_MAX,
+} from './camera.js';
 
 // ---- Uniform buffer layout (mirror of the WGSL Uniforms struct) -----------
 // 56 f32 slots = 224 bytes. Byte offset = slot * 4.
@@ -195,6 +195,13 @@ export async function initFractalBackground(canvas, options = {}) {
     keys: new Set(),
     frameDt: 16,
     lastCamPos: [0, 0, 3.2],
+    // Clearance at the camera, read back from the GPU one frame late. Only the
+    // GPU can evaluate the distance estimators, and fly speed scales by this so
+    // travel feels the same close up as in open space.
+    probeBuffer: null,
+    probeStaging: null,
+    probeBusy: false,
+    probeDist: Infinity,
     // active pointers for drag / pinch tracking
     pointers: new Map(),
     pinchDist0: 0,
@@ -267,6 +274,13 @@ export async function initFractalBackground(canvas, options = {}) {
         { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
       ],
     });
+    // The probe compute pass reads the same uniforms and writes one float.
+    const probeBGL = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      ],
+    });
     const blurBGL = device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
@@ -283,7 +297,7 @@ export async function initFractalBackground(canvas, options = {}) {
       ],
     });
 
-    state._bgl = { raymarchBGL, blurBGL, compositeBGL };
+    state._bgl = { raymarchBGL, probeBGL, blurBGL, compositeBGL };
 
     // Attractor line pipeline: additively blended trajectory over the HDR
     // target, so overlapping filaments accumulate brightness and then bloom.
@@ -323,6 +337,12 @@ export async function initFractalBackground(canvas, options = {}) {
         targets: [{ format: HDR_FORMAT }],
       },
       primitive: { topology: 'triangle-list' },
+    });
+
+    // Camera clearance probe: one workgroup, one float out.
+    state.pipelines.probe = device.createComputePipeline({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [probeBGL] }),
+      compute: { module: fractalModule, entryPoint: 'cs_probe' },
     });
 
     // Bloom horizontal.
@@ -388,6 +408,22 @@ export async function initFractalBackground(canvas, options = {}) {
     state.bindGroups.raymarch = device.createBindGroup({
       layout: state._bgl.raymarchBGL,
       entries: [{ binding: 0, resource: ub }],
+    });
+    state.probeBuffer = device.createBuffer({
+      size: 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    });
+    state.probeStaging = device.createBuffer({
+      size: 4,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
+    state.probeBusy = false;
+    state.bindGroups.probe = device.createBindGroup({
+      layout: state._bgl.probeBGL,
+      entries: [
+        { binding: 0, resource: ub },
+        { binding: 1, resource: { buffer: state.probeBuffer } },
+      ],
     });
     state.bindGroups.bloomH = device.createBindGroup({
       layout: state._bgl.blurBGL,
@@ -570,10 +606,13 @@ export async function initFractalBackground(canvas, options = {}) {
     if (state.fly) {
       // Free flight: position is state and the look direction is independent of
       // the origin, so the camera can travel into a structure instead of
-      // circling it. The maths lives in fly-camera.js so it can be tested
-      // without a GPU (see tools/fly-camera.test.js).
+      // circling it. The maths lives in camera.js so it can be tested
+      // without a GPU (see tools/camera.test.js).
       const cam = state.flyCam;
-      const fwd = stepFlyCamera(cam, state.keys, state.frameDt / 1000, baseR);
+      // Scale travel by the clearance the GPU last reported, so a metre from a
+      // wall and a hundred metres out feel the same.
+      const prox = proximitySpeedScale(state.probeDist, baseR);
+      const fwd = stepFlyCamera(cam, state.keys, state.frameDt / 1000, baseR, prox);
       camX = cam.pos[0]; camY = cam.pos[1]; camZ = cam.pos[2];
       tgtX = camX + fwd[0]; tgtY = camY + fwd[1]; tgtZ = camZ + fwd[2];
     } else if (state.explorer) {
@@ -696,6 +735,21 @@ export async function initFractalBackground(canvas, options = {}) {
       }
       pass.end();
     }
+
+    // Clearance probe: one thread, evaluating the estimator at the camera.
+    // Skipped unless flying, and skipped while a previous read is still in
+    // flight -- copying into a mapped buffer is invalid.
+    const doProbe = state.fly && state.pipelines.probe && !state.probeBusy
+                    && state.fractalType <= FRACTAL_IDS.kleinian;
+    if (doProbe) {
+      const cpass = encoder.beginComputePass();
+      cpass.setPipeline(state.pipelines.probe);
+      cpass.setBindGroup(0, state.bindGroups.probe);
+      cpass.dispatchWorkgroups(1);
+      cpass.end();
+      encoder.copyBufferToBuffer(state.probeBuffer, 0, state.probeStaging, 0, 4);
+    }
+
     // Pass 2: bloom horizontal -> bloomA
     {
       const pass = encoder.beginRenderPass({
@@ -734,6 +788,17 @@ export async function initFractalBackground(canvas, options = {}) {
     }
 
     device.queue.submit([encoder.finish()]);
+
+    if (doProbe) {
+      // Async map; the value lands a frame or two later, which is fine for a
+      // speed control. Failures (device lost mid-flight) just clear the flag.
+      state.probeBusy = true;
+      state.probeStaging.mapAsync(GPUMapMode.READ).then(() => {
+        state.probeDist = new Float32Array(state.probeStaging.getMappedRange())[0];
+        state.probeStaging.unmap();
+        state.probeBusy = false;
+      }).catch(() => { state.probeBusy = false; });
+    }
   }
 
   // ---- Adaptive quality (auto mode only) ----
@@ -924,11 +989,14 @@ export async function initFractalBackground(canvas, options = {}) {
         state.gestureMoved = true;
       }
     } else {
-      // Single-pointer drag: orbit. Scale by viewport so it feels consistent.
-      state.orbit.tyaw += dx * k;
-      state.orbit.tpitch += dy * k;
-      state.orbit.vyaw = dx * k * 0.15;
-      state.orbit.vpitch = dy * k * 0.15;
+      // Single-pointer drag: orbit. Scaled by viewport so it feels consistent,
+      // and by zoom so it stays gentle up close -- a fixed angular rate whips
+      // the view once the camera is near the surface.
+      const ok = k * orbitDragScale(state.zoom);
+      state.orbit.tyaw += dx * ok;
+      state.orbit.tpitch += dy * ok;
+      state.orbit.vyaw = dx * ok * 0.15;
+      state.orbit.vpitch = dy * ok * 0.15;
       if (state.tapStart &&
           Math.hypot(e.clientX - state.tapStart.x, e.clientY - state.tapStart.y) > TAP_MOVE) {
         state.gestureMoved = true;
@@ -1058,6 +1126,8 @@ export async function initFractalBackground(canvas, options = {}) {
         state.targets.bloomB.destroy();
       }
       state.trajBuffer && state.trajBuffer.destroy();
+      state.probeBuffer && state.probeBuffer.destroy();
+      state.probeStaging && state.probeStaging.destroy();
       state.uniformBuffer && state.uniformBuffer.destroy();
       state.device && state.device.destroy();
     } catch (e) {
@@ -1204,6 +1274,7 @@ export async function initFractalBackground(canvas, options = {}) {
       if (name in FRACTAL_IDS) {
         state.fractalType = FRACTAL_IDS[name];
         // Reframe the free camera for the new model's world scale.
+        state.probeDist = Infinity;
         if (state.fly) placeFlyCamera(false);
         // The attractor family needs its trajectory buffer built before use.
         if (state.fractalType >= FRACTAL_IDS.attractor) ensureAttractorTrajectory();
@@ -1240,6 +1311,7 @@ export async function initFractalBackground(canvas, options = {}) {
         // trigger a frame: placeFlyCamera reads the last rendered camera
         // position, which a render in between would overwrite with a stale one.
         state.explorer = false;
+        state.probeDist = Infinity;   // stale reading from another model/pose
         placeFlyCamera(true);
       } else {
         state.keys.clear();
@@ -1280,6 +1352,7 @@ export async function initFractalBackground(canvas, options = {}) {
         fly: state.fly,
         flySpeed: +state.flyCam.speed.toFixed(2),
         flyPos: state.fly ? state.flyCam.pos.map((v) => +v.toFixed(2)) : null,
+        clearance: Number.isFinite(state.probeDist) ? +state.probeDist.toFixed(4) : null,
         zoom: +state.zoom.toFixed(2),
       };
     },

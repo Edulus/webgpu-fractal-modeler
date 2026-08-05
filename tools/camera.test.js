@@ -1,16 +1,17 @@
-// Unit tests for the fly-through camera. Plain Node, no GPU and no DOM:
+// Unit tests for the camera rate maths. Plain Node, no GPU and no DOM:
 //
-//   node tools/fly-camera.test.js
+//   node tools/camera.test.js
 //
 // The renderer only integrates movement inside its frame callback, so on any
 // machine that cannot hold a WebGPU device the camera is otherwise impossible
-// to exercise. Keeping the maths pure in src/fly-camera.js is what makes these
+// to exercise. Keeping the maths pure in src/camera.js is what makes these
 // checks possible.
 
 import {
   makeFlyCamera, stepFlyCamera, aimFlyCamera, dollyFlyCamera, scaleFlySpeed,
   flyBasis, aimAtOrigin, MAX_PITCH, FLY_SPEED_MIN, FLY_SPEED_MAX,
-} from '../src/fly-camera.js';
+  proximitySpeedScale, orbitDragScale, PROX_MIN, PROX_MAX, DRAG_MIN, DRAG_MAX,
+} from '../src/camera.js';
 
 let passed = 0;
 let failed = 0;
@@ -141,6 +142,72 @@ console.log('\naim and speed');
   const c4 = makeFlyCamera([0, 0, 3]);
   dollyFlyCamera(c4, 1.0);
   check('dolly moves along view', near(c4.pos[2], 2.0, 1e-9), `z ${c4.pos[2]}`);
+}
+
+console.log('\nrate scaling: fly speed vs clearance');
+{
+  const baseR = 3.2;
+  // Monotonic in clearance, so closer always means slower.
+  let prev = -1;
+  let monotonic = true;
+  for (const d of [0.001, 0.01, 0.05, 0.1, 0.2, 0.4, 0.48, 1, 3]) {
+    const f = proximitySpeedScale(d, baseR);
+    if (f < prev - 1e-12) monotonic = false;
+    prev = f;
+  }
+  check('speed rises monotonically with clearance', monotonic);
+  check('nominal clearance gives full speed',
+        near(proximitySpeedScale(0.15 * baseR, baseR), 1, 1e-9));
+  check('hard against a wall clamps to the floor',
+        near(proximitySpeedScale(0, baseR), PROX_MIN));
+  check('open space clamps to the ceiling',
+        near(proximitySpeedScale(1e6, baseR), PROX_MAX));
+
+  // Inside solid material the estimate is negative; travel must still be
+  // possible or the camera would be trapped in a wall.
+  check('inside a wall still moves', proximitySpeedScale(-0.02, baseR) > 0);
+  check('inside is symmetric with outside',
+        near(proximitySpeedScale(-0.3, baseR), proximitySpeedScale(0.3, baseR)));
+
+  // A missing reading (no probe yet, or an attractor) must not freeze the user.
+  check('missing reading is neutral', near(proximitySpeedScale(Infinity, baseR), 1));
+  check('NaN reading is neutral', near(proximitySpeedScale(NaN, baseR), 1));
+
+  // The scale must actually reach stepFlyCamera.
+  const near0 = makeFlyCamera([0, 0, 3]);
+  const far0 = makeFlyCamera([0, 0, 3]);
+  for (let i = 0; i < 30; i++) {
+    stepFlyCamera(near0, new Set(['w']), 1 / 60, 3, proximitySpeedScale(0.005, 3));
+    stepFlyCamera(far0, new Set(['w']), 1 / 60, 3, proximitySpeedScale(2.0, 3));
+  }
+  check('near a wall travels much less than in open space',
+        (3 - far0.pos[2]) > (3 - near0.pos[2]) * 10,
+        `near ${(3 - near0.pos[2]).toFixed(4)} vs far ${(3 - far0.pos[2]).toFixed(4)}`);
+  check('default speedScale is 1 (back-compatible)', (() => {
+    const a = makeFlyCamera([0, 0, 3]);
+    const b = makeFlyCamera([0, 0, 3]);
+    stepFlyCamera(a, new Set(['w']), 1 / 60, 3);
+    stepFlyCamera(b, new Set(['w']), 1 / 60, 3, 1);
+    return near(a.pos[2], b.pos[2], 1e-12);
+  })());
+}
+
+console.log('\nrate scaling: orbit drag vs zoom');
+{
+  let prev = -1;
+  let monotonic = true;
+  for (const z of [0.2, 0.4, 0.6, 0.8, 1.0, 1.5, 2, 3, 8, 14]) {
+    const f = orbitDragScale(z);
+    if (f < prev - 1e-12) monotonic = false;
+    prev = f;
+  }
+  check('drag rate rises monotonically with zoom', monotonic);
+  check('default zoom is unchanged (1.0x)', near(orbitDragScale(1), 1, 1e-12));
+  check('zoomed in is much slower', orbitDragScale(0.3) < 0.15,
+        `${orbitDragScale(0.3).toFixed(3)}`);
+  check('deepest zoom clamps to the floor', near(orbitDragScale(0.2), DRAG_MIN));
+  check('far zoom clamps to the ceiling', near(orbitDragScale(14), DRAG_MAX));
+  check('never zero (still steerable up close)', orbitDragScale(0.2) > 0);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

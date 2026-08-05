@@ -827,6 +827,26 @@ fn mapDist(pos : vec3<f32>) -> f32 {
   return mapDE(pos).dist;
 }
 
+// ---- Camera clearance probe ------------------------------------------------
+//
+// One float per frame: how far the camera is from the nearest surface. The CPU
+// reads it back to scale fly-through speed, so travel covers a constant
+// fraction of the available space rather than a constant number of world units.
+//
+// It has to happen here because the distance estimators only exist on the GPU.
+// The value is a frame or two stale by the time JavaScript sees it, which is
+// irrelevant for a speed control.
+//
+// Declared as a separate entry point rather than folded into the fragment
+// shader. Bindings are validated per entry point, so the raymarch pipeline's
+// layout stays as it was -- it never reaches this storage buffer.
+@group(0) @binding(1) var<storage, read_write> probe : array<f32>;
+
+@compute @workgroup_size(1)
+fn cs_probe() {
+  probe[0] = mapDE(u.camPos).dist;
+}
+
 // Tetrahedron (4-sample forward-difference) normal.
 fn calcNormal(p : vec3<f32>, eps : f32) -> vec3<f32> {
   let k = vec2<f32>(1.0, -1.0);

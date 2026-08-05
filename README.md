@@ -40,7 +40,7 @@ No Three.js, no Babylon, no build step, and no npm. Just ES modules, WGSL, and H
 ├── index.html                    interactive model-viewer and background demo
 ├── src/
 │   ├── fractal-bg.js             device, pipelines, controls, render loop, lifecycle
-│   ├── fly-camera.js             free-flight camera maths (pure, no WebGPU)
+│   ├── camera.js                 camera rate maths (pure, no WebGPU)
 │   ├── palettes.js               Inigo Quilez cosine-palette presets
 │   └── shaders/
 │       ├── fractal.wgsl.js       vertex + fragment raymarcher, inlined as WGSL
@@ -48,7 +48,7 @@ No Three.js, no Babylon, no build step, and no npm. Just ES modules, WGSL, and H
 │       └── attractor.wgsl.js     strange attractors drawn as line geometry
 ├── tools/
 │   ├── shader-check.html         compiles every WGSL module and reports errors
-│   └── fly-camera.test.js        camera unit tests (node tools/fly-camera.test.js)
+│   └── camera.test.js            camera unit tests (node tools/camera.test.js)
 └── .github/workflows/pages.yml   deploys the demo to GitHub Pages
 ```
 
@@ -82,11 +82,13 @@ handle.setExplorer(true);
 
 Explorer mode provides:
 
-- Mouse or one-finger drag to orbit
+- Mouse or one-finger drag to orbit, at a rate that scales with zoom
 - Pinch or mouse-wheel zoom
 - Double-tap, double-click, or `resetView()` to recenter
 - An opaque presentation background
 - A gentle idle rotation when the viewer is untouched
+
+Orbiting by a fixed angle sweeps a surface feature across the screen by roughly `dθ · R / (r − R)`, where `r` is the orbit radius and `R` the model's half-size — so the same drag that feels calm from a distance whips the view once the camera is close. The drag rate is therefore scaled by clearance, which tracks zoom. It is exactly `1.0×` at the default zoom, floored near the innermost zoom (where the camera is actually inside the model's bounding volume and the linear relation stops meaning anything) and capped far out.
 
 Navigation remains available under `prefers-reduced-motion`; only automatic animation is frozen.
 
@@ -103,16 +105,20 @@ Every other camera in the project orbits a bounded object at a fixed radius from
 - Drag to look; scroll to trim travel speed
 - On touch, drag to look and pinch to move along the view direction
 
-Vertical travel uses world up rather than camera up, so `E` still rises while looking straight down. Speed scales with each model's world size, and the frame delta is clamped so a stalled tab cannot teleport the camera through a wall.
+Vertical travel uses world up rather than camera up, so `E` still rises while looking straight down. The frame delta is clamped so a stalled tab cannot teleport the camera through a wall.
+
+**Travel speed scales with clearance.** These fractals have no characteristic size, so a fixed number of world units per second is only correct at one distance: a hair from a gyroid wall, the nominal rate crosses seventy wall-thicknesses a second. Each frame a one-thread compute pass evaluates the distance estimator at the camera and writes a single float, which the renderer maps back asynchronously and uses to scale movement. Only the GPU can evaluate the estimators, so there is no way to get this number on the CPU. The reading is a frame or two stale, which is immaterial for a speed control.
+
+Absolute value is used deliberately: in fly mode the camera can be *inside* solid material, where the estimate goes negative, and scaling by `|d|` keeps it possible to travel back out. The scale is floored so you are never frozen and capped so you never run away in open space.
 
 Two models change shape in this mode. The gyroid drops its bounding ball entirely — it is genuinely infinite and periodic, and the ball existed only to give the orbit camera something to circle. The Kleinian limit set widens its ball rather than removing it, since an unbounded version would let rays march forever through the gaps instead of terminating on the background.
 
 Because the camera can end up inside solid material, the raymarcher walks the ray origin forward into free space before tracing, and the marching step has a floor so a negative distance estimate can never drive the ray backwards.
 
-The camera maths lives in `src/fly-camera.js` as pure functions and is covered by `tools/fly-camera.test.js`, which runs in plain Node without a GPU:
+The camera maths lives in `src/camera.js` as pure functions and is covered by `tools/camera.test.js`, which runs in plain Node without a GPU:
 
 ```sh
-node tools/fly-camera.test.js
+node tools/camera.test.js
 ```
 
 ### Background mode

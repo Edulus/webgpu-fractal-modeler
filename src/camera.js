@@ -1,4 +1,5 @@
-// fly-camera.js — free-flight camera maths, kept pure and dependency-free.
+// camera.js — camera rate maths for both navigation modes, kept pure and
+// dependency-free.
 //
 // The orbit camera in fractal-bg.js derives its position from an angle and a
 // fixed radius about the origin, which is fine for a bounded object but cannot
@@ -10,6 +11,11 @@
 // so the navigation can be tested without a GPU. That matters: the renderer
 // only integrates movement inside its frame callback, which makes the camera
 // untestable in any environment that cannot hold a WebGPU device.
+//
+// The recurring problem both modes share is that these fractals have no
+// characteristic size. Any rate written as a fixed number of world units or
+// radians is only correct at one distance, and feels violent everywhere closer.
+// Both scaling helpers below exist to cancel that.
 
 // Travel speed in world units per second before the user's multiplier. Scaled
 // by the model's orbit radius so one constant suits every world size.
@@ -69,8 +75,9 @@ export function makeFlyCamera(pos) {
  * @param {Set<string>} keys  held keys: w a s d q e, plus shift / alt
  * @param {number} dtSec  seconds since the last frame
  * @param {number} baseR  the model's orbit radius, used to scale speed
+ * @param {number} [speedScale=1]  proximity factor, see proximitySpeedScale
  */
-export function stepFlyCamera(cam, keys, dtSec, baseR) {
+export function stepFlyCamera(cam, keys, dtSec, baseR, speedScale = 1) {
   // Easing matches the orbit camera so a flick of the pointer glides rather
   // than snapping.
   cam.pitch += (cam.tpitch - cam.pitch) * 0.25;
@@ -85,7 +92,7 @@ export function stepFlyCamera(cam, keys, dtSec, baseR) {
   const mu = held('e', 'q');
 
   if (mf || ms || mu) {
-    let speed = FLY_BASE * baseR * cam.speed;
+    let speed = FLY_BASE * baseR * cam.speed * speedScale;
     if (keys.has('shift')) speed *= 3.0;
     if (keys.has('alt')) speed *= 0.25;
     // Clamp dt so a stalled tab or a very slow frame cannot teleport the
@@ -120,4 +127,57 @@ export function aimFlyCamera(cam, dYaw, dPitch) {
 /** Multiply travel speed, clamped to the usable range. */
 export function scaleFlySpeed(cam, factor) {
   cam.speed = clamp(cam.speed * factor, FLY_SPEED_MIN, FLY_SPEED_MAX);
+}
+
+// ---- Rate scaling ---------------------------------------------------------
+
+/** Clearance, as a fraction of the model's orbit radius, that travels at full
+ * speed. Closer than this and the camera slows in proportion. */
+export const PROX_REF = 0.15;
+export const PROX_MIN = 0.05;   // never freeze completely: you must be able to leave a wall
+export const PROX_MAX = 1.5;    // and never run away in open space
+
+/**
+ * Fly speed factor from the distance estimate at the camera.
+ *
+ * Travel should cover a constant fraction of the *available space* per second,
+ * not a constant number of world units: a metre from a gyroid wall, the fixed
+ * rate crossed seventy wall-thicknesses a second. Scaling by clearance makes
+ * near and far feel the same.
+ *
+ * The absolute value matters — in fly mode the camera can be inside solid
+ * material, where the estimate goes negative. Using |d| there still scales by
+ * the distance to the nearest surface, so it is possible to travel back out.
+ *
+ * @param {number} dist   distance estimate at the camera, may be negative
+ * @param {number} baseR  the model's orbit radius
+ */
+export function proximitySpeedScale(dist, baseR) {
+  if (!Number.isFinite(dist)) return 1;
+  const ref = PROX_REF * Math.max(baseR, 1e-3);
+  return clamp(Math.abs(dist) / ref, PROX_MIN, PROX_MAX);
+}
+
+export const DRAG_MIN = 0.06;
+export const DRAG_MAX = 3.0;
+
+/**
+ * Orbit drag-rate factor for a given zoom.
+ *
+ * Orbiting by a fixed angle moves a surface feature across the screen by
+ * roughly dtheta * R / (r - R), where r is the orbit radius and R the model's
+ * half-size: the closer the camera, the more violent the same angular step.
+ * Cancelling that means scaling the rate by the clearance (r - R).
+ *
+ * Orbit radius is baseR * zoom, and each model's baseR is chosen so the model
+ * roughly fills the frame, which puts R near half of it. So clearance tracks
+ * (zoom - 0.5), normalised here to give exactly 1.0 at the default zoom of 1.
+ *
+ * The floor matters because ZOOM_MIN lets the camera inside the model, where
+ * clearance is negative and the linear law stops meaning anything. The ceiling
+ * is comfort rather than theory: the law keeps growing as you pull away, but
+ * beyond a few multiples the model is a speck and a drag would spin it wildly.
+ */
+export function orbitDragScale(zoom) {
+  return clamp((zoom - 0.45) / 0.55, DRAG_MIN, DRAG_MAX);
 }

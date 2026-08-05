@@ -90,7 +90,7 @@ Three things were needed beyond the camera itself, and they are worth rememberin
 
 - **The clip has to be a per-model decision, not a global one.** The gyroid can lose its ball completely because it is periodic and fills space. The Kleinian cannot: without a bound, rays escaping through the gaps march to the far plane instead of terminating, so its ball is widened rather than removed.
 - **The marcher must tolerate starting inside solid material,** which an orbit camera can never do. The ray origin is walked forward into free space before tracing, and the step has a floor so a negative estimate cannot drive the ray backwards.
-- **The camera maths belongs outside the render loop.** Movement integrates per frame, so with the maths inline it could only be exercised on a machine holding a live WebGPU device. Pulled out into `src/fly-camera.js` as pure functions, it is covered by `tools/fly-camera.test.js` in plain Node.
+- **The camera maths belongs outside the render loop.** Movement integrates per frame, so with the maths inline it could only be exercised on a machine holding a live WebGPU device. Pulled out into `src/camera.js` as pure functions, it is covered by `tools/camera.test.js` in plain Node.
 
 ### Lipschitz normalisation for implicit fields
 
