@@ -87,14 +87,17 @@ Explorer mode provides:
 - Mouse or one-finger drag to orbit around the pinned pivot
 - Pinch or mouse-wheel zoom
 - Momentum: a throw slows into a slow drift and keeps turning
-- Double-tap, double-click, or `resetView()` to stop it and recenter
+- Double-tap, double-click, or `freezeView()` to stop the drift where it is
+- `resetView()` to recenter
 - An opaque presentation background
 
 **Zoom dollies towards the surface, not the centroid.** The orbit camera keeps an explicit pivot and distance. Zooming in first re-pins the pivot onto whatever the centre of the view is pointing at, using a distance measured by the GPU probe along the view ray; the eye does not move, the pivot slides forward onto the surface and the distance shrinks to match. Closing in then approaches that surface asymptotically instead of sliding towards the model's centroid — which is what used to push the eye through the surface into the interior, where the frame washes out.
 
 **The view keeps its momentum.** Angular velocity decays towards a floor rather than towards zero: a throw sheds its speed over a few seconds and settles into a drift of about two degrees a second — a full turn in three minutes — which it then holds indefinitely. The floor points wherever the last movement went, so the model carries on the way you left it going. A view that has never been dragged has no last movement to retain and stands still.
 
-Double-tap, double-click, or `resetView()` clears the direction, and with nothing to settle onto the momentum decays to a genuine halt. That is the only full stop.
+Double-tap, double-click, or `freezeView()` clears the direction, and with nothing to settle onto the momentum decays to a genuine halt. That is the only full stop.
+
+Freezing keeps the angles, pivot and distance exactly as they are — it stops the view, it does not recentre it. Stopping on something worth looking at should not throw it away, so recentring is a separate action (`resetView()`, or the demo's **Reset view** button). Freezing also pulls the target angles onto the eased ones, because the easing spring is mid-flight towards a target the drift has been advancing. Leaving that gap in place would let the view coast about a sixth of a degree over the following half second — small, but the difference between a stop and a settle. With the snap, the frozen angles do not change at all: not at the instant of freezing, and not five seconds later.
 
 Three details make it work rather than merely exist. The drift is integrated into the *target* angles, not the eased ones — added to the eased angle it would fight the easing spring, which pulls back towards the target, and the two would balance at a fixed offset with the drift silently stalled. The decay is anchored to a half-life in seconds rather than a per-frame multiplier, so a flick lasts the same time on a 120Hz phone as on a 60Hz laptop; only the spring's one-off settling transient differs, by about two degrees, and it does not accumulate. And a drift with a vertical component bounces off the pitch limits instead of parking against them, since coming to rest at the pole is exactly the full stop the drift exists to avoid.
 

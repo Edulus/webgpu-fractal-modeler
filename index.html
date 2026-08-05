@@ -346,7 +346,7 @@
   </div>
 
   <!-- Navigation hint (shown only in explorer mode) -->
-  <div id="nav-hint">Drag to rotate · pinch or scroll to zoom · double-tap to stop and reset</div>
+  <div id="nav-hint">Drag to rotate · pinch or scroll to zoom · double-tap to freeze the view</div>
   <div id="fly-hint">WASD to move · Q/E down·up · drag to look · shift to sprint · scroll for speed</div>
 
   <!-- Fallback banner (shown if WebGPU is unavailable) -->
@@ -594,8 +594,10 @@
         }
       });
       btnReset.addEventListener('click', () => handle.resetView());
-      // (Double-tap / double-click to reset is handled inside the library so it
-      // can tell a real tap from the end of a pinch.)
+      // (Double-tap / double-click freezes the view; handled inside the library
+      // so it can tell a real tap from the end of a pinch. Recentring is this
+      // button, deliberately kept apart from freezing -- stopping on something
+      // worth looking at should not throw it away.)
 
       // HUD: show live fractal/quality/fps (+ zoom while exploring).
       const names = ['mandelbulb', 'mandelbox', 'menger', 'julia', 'apollonian',

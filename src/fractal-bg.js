@@ -263,7 +263,7 @@ export async function initFractalBackground(canvas, options = {}) {
     pointers: new Map(),
     pinchDist0: 0,       // finger separation at the previous move event
     lastInteract: 0,
-    // tap vs. drag/pinch discrimination (for double-tap-to-reset)
+    // tap vs. drag/pinch discrimination (for double-tap-to-freeze)
     gestureMoved: false,
     gestureMulti: false,
     tapStart: null,
@@ -742,8 +742,8 @@ export async function initFractalBackground(canvas, options = {}) {
       // Momentum. Velocity decays towards the drift floor rather than towards
       // zero, so a throw slows to a subtle turn and stays there instead of
       // dying: the view never fully settles once it has been moved. Only
-      // resetView -- double-tap, double-click -- clears the direction and lets
-      // it come to a genuine stop.
+      // freezeView -- double-tap, double-click -- clears the direction and
+      // lets it come to a genuine stop, without moving the view.
       //
       // It is integrated into the TARGET angles, not the eased ones. Adding it
       // to the eased angle instead would put it in tension with the easing
@@ -1335,11 +1335,19 @@ export async function initFractalBackground(canvas, options = {}) {
       state.tapStart = { x: remaining.x, y: remaining.y };
     } else if (state.pointers.size === 0) {
       // Gesture fully ended. A clean single-finger tap (no movement, no pinch)
-      // counts toward double-tap-to-reset — a pinch release never does.
+      // counts toward the double-tap — a pinch release never does.
       if (state.controls && !state.gestureMoved && !state.gestureMulti) {
         const now = performance.now();
-        if (now - state.tapTime < 320) { resetView(); state.tapTime = 0; }
-        else { state.tapTime = now; }
+        if (now - state.tapTime < 320) {
+          // Freeze where you are, rather than recentre. The point of the
+          // gesture is to hold the view you have found; recentring throws it
+          // away, which is the opposite of what stopping is for. Reset stays
+          // available as resetView() and as the demo's Reset view button.
+          //
+          // Fly mode has no drift to stop, so there the gesture still recentres.
+          if (state.fly) resetView(); else freezeView();
+          state.tapTime = 0;
+        } else { state.tapTime = now; }
       }
       state.gestureMulti = false;
     }
@@ -1529,6 +1537,24 @@ export async function initFractalBackground(canvas, options = {}) {
     nudgeRender();
   }
 
+  /**
+   * Stop the view exactly where it is, keeping the angles, pivot and distance.
+   *
+   * Clearing the drift direction leaves the momentum with nothing to settle
+   * onto, so it decays to a genuine halt. The target angles are pulled onto the
+   * eased ones in the same move: the easing spring is mid-flight towards a
+   * target the drift has been advancing, and leaving that gap in place would
+   * let the view glide on for another half second after being told to stop.
+   */
+  function freezeView() {
+    const o = state.orbit;
+    o.tyaw = o.yaw; o.tpitch = o.pitch;
+    o.vyaw = 0; o.vpitch = 0; o.dyaw = 0; o.dpitch = 0;
+    state.accumSamples = 0;
+    state.lastInteract = performance.now();
+    nudgeRender();
+  }
+
   function resetView() {
     const o = state.orbit;
     // Clearing the drift direction as well as the velocity is what makes this
@@ -1640,6 +1666,8 @@ export async function initFractalBackground(canvas, options = {}) {
     },
     zoomBy(factor) { applyZoom(factor); nudgeRender(); },
     resetView,
+    // Stop the drift without moving the view. What double-tap does.
+    freezeView,
     // Free fly-through: the camera leaves its orbit and can travel into a
     // model. Interior structures (gyroid, Kleinian) drop their bounding clip
     // while this is on, so there is something to travel through.
