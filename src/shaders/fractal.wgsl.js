@@ -866,12 +866,15 @@ fn cs_probe() {
   let toTarget = u.camTarget - u.camPos;
   if (d0 > 1e-4 && length(toTarget) > 1e-9) {
     let fwd = normalize(toTarget);
+    // Kept short deliberately: this is one thread, so every step here stalls
+    // the whole GPU. The models all live well inside the far bound, and a miss
+    // simply means no re-pin this tick -- the next probe tries again.
     var t = 1e-3;
-    for (var i = 0; i < 192; i = i + 1) {
+    for (var i = 0; i < 96; i = i + 1) {
       let d = mapDE(u.camPos + fwd * t).dist;
       if (d < 1e-3 * t) { hit = t; break; }      // relative eps, as the marcher uses
-      t = t + max(d * 0.7, 1e-6);                // conservative; no zero-step stall
-      if (t > 200.0) { break; }
+      t = t + max(d * 0.8, 1e-5);                // no zero-step stall
+      if (t > 60.0) { break; }
     }
   }
   probe[1] = hit;

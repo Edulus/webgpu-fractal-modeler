@@ -89,6 +89,10 @@ const TRAJECTORY_POINTS = 600000;
 // raymarch is skipped entirely and the converged image is simply re-presented,
 // which also drops idle GPU load to almost nothing.
 const ACCUM_CAP = 96;
+
+// The clearance probe is one thread marching the estimator, so it serialises
+// against the whole GPU. 20Hz is ample for what consumes it.
+const PROBE_INTERVAL_MS = 50;
 const ACCUM_IDLE_MS = 400;   // stillness required before sampling starts
 
 // R2 (Roberts) low-discrepancy sequence — a 2D golden-ratio analogue. Its
@@ -236,6 +240,7 @@ export async function initFractalBackground(canvas, options = {}) {
     probeBusy: false,
     probeDist: Infinity,
     probeHit: -1,        // centre-ray surface distance, -1 = miss
+    probeAt: 0,          // last probe dispatch, for throttling
     // Progressive accumulation
     accumSamples: 0,
     accumParity: 0,
@@ -838,6 +843,28 @@ export async function initFractalBackground(canvas, options = {}) {
     // far. When idle-converged, keep reading the half last written.
     const par = acc ? (state.accumParity ^ (converged ? 1 : 0)) : 0;
 
+    // Clearance probe. Runs BEFORE any render pass: a compute pass sandwiched
+    // between render passes forces a tile-memory resolve and reload on the
+    // tile-based GPUs phones use, which costs far more than the probe itself.
+    //
+    // Also throttled rather than run every frame. It is a single thread marching
+    // the estimator, so the rest of the GPU waits on it; at 20Hz it is
+    // imperceptible for a speed control and for zoom re-pinning, both of which
+    // tolerate a stale reading by design.
+    const probeDue = nowMs - state.probeAt >= PROBE_INTERVAL_MS;
+    const doProbe = (state.fly || state.explorer) && state.pipelines.probe
+                    && !state.probeBusy && probeDue
+                    && state.fractalType <= FRACTAL_IDS.kleinian;
+    if (doProbe) {
+      state.probeAt = nowMs;
+      const cpass = encoder.beginComputePass();
+      cpass.setPipeline(state.pipelines.probe);
+      cpass.setBindGroup(0, state.bindGroups.probe);
+      cpass.dispatchWorkgroups(1);
+      cpass.end();
+      encoder.copyBufferToBuffer(state.probeBuffer, 0, state.probeStaging, 0, 8);
+    }
+
     // Pass 1: raymarch -> sceneTex
     if (drawScene) {
       const pass = encoder.beginRenderPass({
@@ -863,22 +890,6 @@ export async function initFractalBackground(canvas, options = {}) {
         pass.draw(state.trajCount);
       }
       pass.end();
-    }
-
-    // Clearance probe: one thread, evaluating the estimator at the camera.
-    // Skipped unless flying, and skipped while a previous read is still in
-    // flight -- copying into a mapped buffer is invalid.
-    // Runs for both camera modes now: fly scales travel by the clearance, and
-    // orbit re-pins its pivot using the centre-ray hit.
-    const doProbe = (state.fly || state.explorer) && state.pipelines.probe
-                    && !state.probeBusy && state.fractalType <= FRACTAL_IDS.kleinian;
-    if (doProbe) {
-      const cpass = encoder.beginComputePass();
-      cpass.setPipeline(state.pipelines.probe);
-      cpass.setBindGroup(0, state.bindGroups.probe);
-      cpass.dispatchWorkgroups(1);
-      cpass.end();
-      encoder.copyBufferToBuffer(state.probeBuffer, 0, state.probeStaging, 0, 8);
     }
 
     // Pass 1b: fold the jittered frame into the running average.
