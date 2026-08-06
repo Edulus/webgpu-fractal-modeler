@@ -31,6 +31,7 @@ No Three.js, no Babylon, no build step, and no npm. Just ES modules, WGSL, and H
 - Penrose quasicrystal tiling
 - Gyroid minimal surface
 - Kleinian limit set
+- Barth sextic
 - Aizawa strange attractor
 - Lorenz strange attractor
 
@@ -92,6 +93,8 @@ Explorer mode provides:
 - An opaque presentation background
 
 **Zoom dollies towards the surface, not the centroid.** The orbit camera keeps an explicit pivot and distance. Zooming in first re-pins the pivot onto whatever the centre of the view is pointing at, using a distance measured by the GPU probe along the view ray; the eye does not move, the pivot slides forward onto the surface and the distance shrinks to match. Closing in then approaches that surface asymptotically instead of sliding towards the model's centroid — which is what used to push the eye through the surface into the interior, where the frame washes out.
+
+**Switching models carries the zoom as a ratio.** Each estimator lives at a different world scale, which is what the per-model orbit radius is for, so keeping the raw distance across a switch means arriving at a model framed by the previous one's size. The distance is rescaled by the ratio of the two radii and the pivot returns to the origin, since it described a surface that no longer exists.
 
 **The view keeps its momentum.** Angular velocity decays towards a floor rather than towards zero: a throw sheds its speed over a few seconds and settles into a drift of about two degrees a second — a full turn in three minutes — which it then holds indefinitely. The floor points wherever the last movement went, so the model carries on the way you left it going. A view that has never been dragged has no last movement to retain and stands still.
 
@@ -275,6 +278,7 @@ Uniforms occupy one 160-byte, 16-byte-aligned buffer. The byte offsets are mirro
 - **Penrose quasicrystal:** a true P3 rhombus tiling engraved into a disc at two levels of its inflation hierarchy
 - **Gyroid:** Schoen's triply periodic minimal surface, clipped to a ball
 - **Kleinian limit set:** box fold and conditional sphere inversion generating a discrete group's accumulation set
+- **Barth sextic:** a degree-6 algebraic surface carrying the maximum number of nodes a sextic can have
 
 All shader loops are statically bounded for WGSL portability, with guarded logarithm, power, radius, and inversion domains.
 
@@ -285,6 +289,23 @@ A Kleinian group is a discrete group of Möbius transformations, and its limit s
 The smooth caps in the result are not an artefact: they are the group's tangent spheres, with recursive filigree running along the ridges where they meet. Slowly drifting the inversion radius walks the construction through a family of nearby Kleinian groups, morphing the limit set within a narrow band — the structure degenerates quickly outside it.
 
 Parameters came from rendering candidates rather than from a reference. The construction is sharply sensitive to them: of the first four published-looking parameter sets tried, three collapsed into featureless lobes, and swapping the final primitive alone was enough to turn the surface from tangent spheres into granular noise.
+
+#### Barth sextic
+
+The first algebraic surface here, and the first model whose defining feature is its singularities:
+
+```text
+f = 4(φ²x² − y²)(φ²y² − z²)(φ²z² − x²) − (1 + 2φ)(x² + y² + z² − w²)² w² = 0
+```
+
+At `w = 1` this degree-6 surface has 65 ordinary double points — the maximum a sextic can have, a bound proved by Jaffe and Ruberman — arranged with icosahedral symmetry. Fifty are finite and were located exactly while building the estimator: **20 at the vertices of a dodecahedron at radius √3, and 30 at an icosidodecahedron at radius exactly 1.** The other 15 lie at infinity. Both finite shells sit inside the clipping ball, so what you orbit is the entire singular structure. `w` is the pencil parameter; sliding it off 1 dissolves the nodes into a smooth surface, so the animation keeps a small amplitude around the distinguished member and reduced motion pins it exactly at `w = 1`.
+
+**It inverts the lesson the gyroid taught, and that is the interesting part.** For the gyroid, dividing by the analytic gradient is wrong and a constant divisor is right. Here it is the other way round, for two measured reasons:
+
+- *A constant divisor is useless for a polynomial.* Over the clipping ball `|∇f|` reaches 749, while its median **on the surface** is 9.3 — so a rigorous constant would step eighty times finer than necessary everywhere. Making the bound radius-dependent, `max(7, 25r⁵)` (verified against 2.4M samples), narrows the gap but still costs 2.5× the marching steps.
+- *The gradient is well behaved exactly where it looked dangerous.* The obvious worry is that `|∇f|` vanishes at every node, making `|f|/|∇f|` a `0/0`. But at an ordinary double point `f` vanishes quadratically while `|∇f|` vanishes linearly, so the ratio tends to a multiple of the distance rather than diverging. Measured against a dense reference march with bisection, the first-order estimator lands on the correct sheet for **99.4% of rays and skips none at all** at the marcher's step scale, averaging 22 steps. The gradient floor in the code never binds — results are identical at 0.1, 0.6 and 2.0 — and exists only so a point landing exactly on a node cannot evaluate `0/0`.
+
+The estimator is also cheap in a way the step count hides: it is one degree-6 polynomial and its gradient, sharing sub-expressions, with no transcendentals and no iteration loop at all — unlike every other surface here.
 
 #### Gyroid
 

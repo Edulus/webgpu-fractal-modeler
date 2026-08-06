@@ -33,10 +33,11 @@ The renderer already includes, in menu order, matching `FRACTAL_IDS` in `src/fra
 - Penrose quasicrystal relief
 - Gyroid (Schoen's triply periodic minimal surface)
 - Kleinian limit set
+- Barth sextic
 - Aizawa attractor
 - Lorenz attractor
 
-All thirteen are reachable from the demo's model selector. The first eleven are
+All fourteen are reachable from the demo's model selector. The first twelve are
 distance-estimated surfaces sharing the raymarch pass; the two attractors are
 line geometry drawn by a second pipeline.
 
@@ -67,8 +68,8 @@ The ordering below applies three tie-breakers, in this order:
 | 2 | **Rössler attractor** | Chaotic system | An iconic folded spiral that contrasts clearly with Lorenz and Aizawa | Existing trajectory pipeline, unchanged | Low |
 | 3 | **Thomas attractor** | Chaotic system | Cyclic symmetry produces an unusually balanced, woven trajectory — the most visually distinct of the attractor candidates | Existing trajectory pipeline, unchanged | Low |
 | 4 | **Sierpiński tetrahedron / octahedral IFS** | Recursive solid | A tetrahedral symmetry group genuinely unlike the cube-based Menger sponge, for roughly ten lines of fold-and-scale | Fold-and-scale distance estimator | Low |
-| 5 | **Barth sextic** | Algebraic surface | Icosahedral symmetry and a large singular set make it immediately recognizable | Bounded polynomial implicit, Lipschitz-normalised | Medium |
-| 6 | **Kummer quartic** | Algebraic surface | Sixteen singular points, the maximum for a quartic; reuses the Barth path | Same implicit path as the Barth sextic | Medium |
+| — | ~~Barth sextic~~ | Algebraic surface | **Shipped.** Icosahedral symmetry and 65 nodes, the maximum for a sextic | Polynomial implicit, gradient-normalised | — |
+| 5 | **Kummer quartic** | Algebraic surface | Sixteen singular points, the maximum for a quartic; reuses the Barth path, now built | Same implicit path as the Barth sextic | Low |
 | 7 | **Ammann rhombohedral / icosahedral quasicrystal** | 6D cut-and-project structure | The mathematically appropriate 3D relative of the Penrose relief, and the construction that retires the "extruded 2D pattern" objection | de Bruijn cut-and-project lifted 6D→3D, generalising `dePenrose` | Medium–high |
 | 8 | **Hopf fibration** | Topology / 4D geometry | Interlocking circles filling space by a deep geometric construction | Instanced or indexed line geometry — needs a new pipeline | Medium |
 | 9 | **Quaternion Mandelbrot set** | Hypercomplex fractal | Complements the existing Quaternion Julia set with the connected parameter-space family | Distance estimation or sliced membership field | High |
@@ -107,7 +108,16 @@ An implicit field `f(p) = 0` is not a distance field. Sphere tracing on a raw `f
 
 The gyroid settles the question of which remedy to prefer. Dividing by the analytic gradient is the textbook answer and is wrong here: `|∇f|` bottoms out at `0.035` at the field's critical points, and dividing by that inflates a step roughly fiftyfold. Dividing by a **global bound on the gradient** is safe, needs no empirical safety factor, and is cheaper — no gradient, no square root. For the gyroid that bound is exactly √3, confirmed by sampling a full period at 729,000 points, and it costs only 1.26× more marching steps than an exact gradient would need at the surface.
 
-So the reusable helper should take a per-model Lipschitz constant rather than compute a gradient. Each new implicit surface needs that constant established by measurement — sample a full period or a bounding region, take the maximum gradient magnitude, and confirm nothing exceeds it. The algebraic surfaces will need the same treatment, with the added wrinkle that polynomials are unbounded, so the constant must be derived over the clipping region rather than globally.
+So the reusable helper should take a per-model Lipschitz constant rather than compute a gradient. Each new implicit surface needs that constant established by measurement — sample a full period or a bounding region, take the maximum gradient magnitude, and confirm nothing exceeds it.
+
+**The Barth sextic settles the algebraic case, and it goes the other way.** This section previously predicted that polynomials would need the same constant-divisor treatment with the constant derived over the clipping region. Measurement says otherwise, and the rule now has two branches:
+
+- *Bounded trigonometric fields (the gyroid):* use a global constant. The gradient bottoms out near the surface, so dividing by it inflates the step; the constant costs 1.26× the marching steps and needs no safety factor.
+- *Polynomials (the Barth sextic):* use the analytic gradient. A constant divisor fails badly — `|∇f|` reaches 749 over the clip ball while its median on the surface is 9.3, an eightyfold penalty. Deriving the constant over the clipping region, exactly as this section proposed, only narrows that to 2.5× when written as the radius-dependent bound `max(7, 25r⁵)`. Meanwhile the gradient that was expected to misbehave at the nodes does not: at an ordinary double point `f` vanishes quadratically and `|∇f|` linearly, so the quotient tends to a multiple of the distance. Verified against a dense reference march, it skips no rays at all at the marcher's step scale.
+
+The distinguishing question is not "implicit or algebraic" but **where the field's small gradients sit relative to its zero set.** The gyroid's critical points lie near its surface, which poisons the quotient; the Barth's lie at nodes *on* the surface, where the numerator vanishes faster than the denominator. Any future implicit surface should be measured on that axis before an estimator is chosen.
+
+One practical corollary: a polynomial estimator is cheap per step — no transcendentals, no iteration loop — so a higher step count buys correctness at far less cost than the raw number suggests.
 
 ### Line and instanced geometry
 
@@ -163,7 +173,7 @@ These objects are defined by polynomial or transcendental equations. They can be
 | Candidate | Mathematical interest |
 | --- | --- |
 | **Kummer quartic** | Sixteen singular points, the maximum possible for a quartic surface |
-| **Barth sextic** | Icosahedral symmetry and a large singular set |
+| ~~**Barth sextic**~~ | **Shipped.** Icosahedral symmetry, 65 nodes — the maximum for a sextic |
 | **Cayley cubic** | Four conical singularities and tetrahedral organization |
 | **Clebsch diagonal cubic** | Twenty-seven real lines on a cubic surface |
 | **Chmutov surface family** | High numbers of singular points generated through Chebyshev polynomials |
@@ -308,7 +318,10 @@ It also produced a reusable lesson recorded below — parameter sets for inversi
 
 ### Phase 4 — Algebraic surfaces
 
-1. Barth sextic
+The path is built: the Barth sextic shipped, and with it the finding that these
+want the analytic gradient rather than a constant divisor. The rest reuse it.
+
+1. ~~Barth sextic~~ — shipped
 2. Kummer quartic
 3. Cayley cubic
 

@@ -61,14 +61,14 @@ const U = {
 const UNIFORM_FLOATS = 96;
 const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 384
 
-// Distance-estimated fractals occupy ids 0..10; the volumetric/line-rendered
-// attractors follow at 11+. The shader keys off that split (see the
-// `fractalType > 10.5` test in fractal.wgsl.js), so keep DE types contiguous at
+// Distance-estimated fractals occupy ids 0..11; the volumetric/line-rendered
+// attractors follow at 12+. The shader keys off that split (see the
+// `fractalType > 11.5` test in fractal.wgsl.js), so keep DE types contiguous at
 // the front when adding new ones and move the attractors up to match.
 const FRACTAL_IDS = {
   mandelbulb: 0, mandelbox: 1, menger: 2, julia: 3, apollonian: 4,
   spherepack: 5, encrusted: 6, surfacepack: 7, penrose: 8, gyroid: 9,
-  kleinian: 10, attractor: 11, lorenz: 12,
+  kleinian: 10, barth: 11, attractor: 12, lorenz: 13,
 };
 
 // Quality tiers -> internal-resolution scale factor.
@@ -78,10 +78,12 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 // world scale, so a single radius would sit inside the larger ones.
 // Indexed by fractal id (see FRACTAL_IDS).
 // mandelbulb, mandelbox, menger, julia, apollonian, spherepack, encrusted,
-// surfacepack, penrose, gyroid, kleinian, attractor(Aizawa), lorenz
+// surfacepack, penrose, gyroid, kleinian, barth, attractor(Aizawa), lorenz
 // The Penrose disc is wide and flat, so it needs a little more room than the
-// roughly ball-shaped estimators to sit inside the frame edge-on.
-const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.1, 3.0, 3.5, 3.2, 3.6, 3.2, 3.0];
+// roughly ball-shaped estimators to sit inside the frame edge-on. The Barth
+// sextic clips at radius 2.0, the largest here, and its 4.6 keeps the same
+// fraction of the frame the others use at this field of view.
+const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.1, 3.0, 3.5, 3.2, 3.6, 4.6, 3.2, 3.0];
 
 // Number of integrated trajectory samples drawn as a line strip per attractor.
 // These are exact float positions (vector geometry), so the curve stays crisp
@@ -903,7 +905,10 @@ export async function initFractalBackground(canvas, options = {}) {
     const probeDue = nowMs - state.probeAt >= PROBE_INTERVAL_MS;
     const doProbe = (state.fly || state.explorer) && state.pipelines.probe
                     && !state.probeBusy && probeDue
-                    && state.fractalType <= FRACTAL_IDS.kleinian;
+                    // Every distance-estimated surface, which is all ids up to
+                    // and including the last one before the attractors. The
+                    // attractors are line geometry with no field to probe.
+                    && state.fractalType <= FRACTAL_IDS.barth;
     if (doProbe) {
       state.probeAt = nowMs;
       const cpass = encoder.beginComputePass();
@@ -1630,7 +1635,21 @@ export async function initFractalBackground(canvas, options = {}) {
   return {
     setFractal(name) {
       if (name in FRACTAL_IDS) {
+        const prevR = CAM_RADIUS[state.fractalType] ?? 2.55;
         state.fractalType = FRACTAL_IDS[name];
+        // Carry the viewer's zoom across as a RATIO, not as an absolute
+        // distance. Each estimator lives at a different world scale -- that is
+        // what CAM_RADIUS is for -- so keeping the raw distance means arriving
+        // at a model framed by the previous one's size. Switching to the Barth
+        // sextic, the largest here at clip radius 2.0, from the default 2.55
+        // used to land the camera among its spikes.
+        const nextR = CAM_RADIUS[state.fractalType] ?? 2.55;
+        state.orbit.dist = clampDist(state.orbit.dist * (nextR / prevR));
+        // The pivot described a surface that no longer exists.
+        state.orbit.target[0] = 0;
+        state.orbit.target[1] = 0;
+        state.orbit.target[2] = 0;
+        state.orbit.pinned = false;
         // Reframe the free camera for the new model's world scale.
         state.probeDist = Infinity;
         state.probeHit = -1;
