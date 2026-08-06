@@ -31,6 +31,7 @@ No Three.js, no Babylon, no build step, and no npm. Just ES modules, WGSL, and H
 - Penrose quasicrystal tiling
 - Gyroid minimal surface
 - Kleinian limit set
+- Apollonian bubble shell
 - Aizawa strange attractor
 - Lorenz strange attractor
 
@@ -275,6 +276,7 @@ Uniforms occupy one 160-byte, 16-byte-aligned buffer. The byte offsets are mirro
 - **Penrose quasicrystal:** a true P3 rhombus tiling engraved into a disc at two levels of its inflation hierarchy
 - **Gyroid:** Schoen's triply periodic minimal surface, clipped to a ball
 - **Kleinian limit set:** box fold and conditional sphere inversion generating a discrete group's accumulation set
+- **Apollonian bubble shell:** six cascaded cellular octaves with rotated lattices, kiss-capped radii, and gap-filling culling — discrete tangent-looking bubbles packed over a spherical shell
 
 All shader loops are statically bounded for WGSL portability, with guarded logarithm, power, radius, and inversion domains.
 

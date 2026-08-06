@@ -22,9 +22,9 @@ const RAMP_MAX : u32 = 8u;
 //   32  camTarget  : vec3<f32>   (pad slot -> fractalType)
 //   44  fractalType: f32   (0=mandelbulb, 1=mandelbox, 2=menger, 3=julia,
 //                           4=apollonian, 5=spherepack, 6=encrusted,
-//                           7=surfacepack, 8=penrose, 9=gyroid, 10=kleinian;
-//                           11+ are the line-rendered attractors, which this
-//                           pass only backgrounds)
+//                           7=surfacepack, 8=penrose, 9=gyroid, 10=kleinian,
+//                           11=bubbleshell; 12+ are the line-rendered
+//                           attractors, which this pass only backgrounds)
 //   48  power      : f32
 //   52  mbScale    : f32
 //   56  mbMinRadius: f32
@@ -508,6 +508,123 @@ fn surfacePackSeam(pos : vec3<f32>) -> vec2<f32> {
   return vec2<f32>(seam, hSeam);
 }
 
+// Apollonian bubble shell — discrete tangent-looking bubbles of cascading
+// size packed over a spherical shell (docs/reference/Bubbles.jpg,
+// SpherePack.jpg). Validated on CPU first (tools/preview-bubbleshell.py).
+//
+// Construction: octave rejection packing, descending from deSurfacePack's
+// cellular machinery with its two rejected traits fixed:
+//   * grid overlap -> each octave's lattice is rotated differently (no shared
+//     axes) and radii are capped at the kiss limit (<= 0.49 cell), so bubbles
+//     touch rather than lap;
+//   * flat 3-size look -> 6 cascading octaves; an octave's sphere is CULLED
+//     when a coarser octave's sphere already covers its centre, so small
+//     bubbles grow only in the gaps between big ones — the Apollonian
+//     gap-filling rule in procedural form.
+// Cell centres are projected onto the shell mid-surface, so every bubble sits
+// on the surface as a proud dome of its full radius (unprojected 3D-grid
+// centres drift below the surface and read as flat sliced lenses). The dark
+// seams of the reference come free: where a bubble is culled, the solid core
+// shows through.
+//
+// Every primitive here is an exact sphere SDF; the shell clip is an exact
+// intersection and the union of exact SDFs is exact — marching is safe with
+// no Lipschitz analysis. Cost: 6 octaves + 15 coverage probes = 21 sphere
+// evaluations per DE call.
+const BS_LEVELS : i32 = 6;
+const BS_CELL   : f32 = 0.34;   // coarsest lattice spacing
+const BS_RATIO  : f32 = 0.55;   // octave size cascade
+const BS_OUT    : f32 = 0.20;   // shell outer bound (domes protrude to here)
+const BS_IN     : f32 = 0.03;   // shell inner bound (anchors domes to the core)
+const BS_RADCAP : f32 = 0.49;   // kiss limit, in cell units
+const BS_RADLO  : f32 = 0.36;   // radius = cell * min(RADLO + RADHI*h, RADCAP)
+const BS_RADHI  : f32 = 0.13;
+const BS_COVER  : f32 = 0.90;   // gap-filling cull slack (fraction of small rad)
+const BS_RPROJ  : f32 = 1.0;    // centre projection radius = shell mid-surface
+
+struct BSphere {
+  dist   : f32,
+  centre : vec3<f32>,
+  rad    : f32,
+  h      : f32,
+};
+
+// Nearest sphere of octave lvl at frame-space point q.
+fn bsLevelSphere(q : vec3<f32>, cs : f32, seed : f32) -> BSphere {
+  let cell = round(q / cs);
+  var centre = cs * cell;
+  centre = centre / max(length(centre), 1e-9) * BS_RPROJ;
+  let h = hash13(cell + vec3<f32>(seed));
+  let rad = cs * min(BS_RADLO + BS_RADHI * h, BS_RADCAP);
+  var bs : BSphere;
+  bs.dist = length(q - centre) - rad;
+  bs.centre = centre;
+  bs.rad = rad;
+  bs.h = h;
+  return bs;
+}
+
+fn deBubbleShell(pos : vec3<f32>) -> DEResult {
+  const R : f32 = 1.0;
+  // Per-octave frames: distinct Euler sets (applied Rz, then Rx, then Ry),
+  // precomputed as matrices once per call — 18 trig evals instead of ~380.
+  var angs = array<vec3<f32>, 6>(
+    vec3<f32>(0.0, 0.0, 0.0),
+    vec3<f32>(0.40, 0.00, 0.70),
+    vec3<f32>(1.90, 0.50, 1.30),
+    vec3<f32>(0.90, 1.10, 2.10),
+    vec3<f32>(2.60, 1.80, 0.40),
+    vec3<f32>(0.30, 2.40, 1.80));
+  var seeds = array<f32, 6>(0.0, 7.13, 3.71, 9.37, 5.51, 2.97);
+  var mats = array<mat3x3<f32>, 6>();
+  for (var i = 0; i < BS_LEVELS; i = i + 1) {
+    let a = angs[i];
+    let cz = cos(a.z); let sz = sin(a.z);
+    let cx = cos(a.x); let sx = sin(a.x);
+    let cy = cos(a.y); let sy = sin(a.y);
+    let rz = mat3x3<f32>(vec3(cz, sz, 0.0), vec3(-sz, cz, 0.0), vec3(0.0, 0.0, 1.0));
+    let rx = mat3x3<f32>(vec3(1.0, 0.0, 0.0), vec3(0.0, cx, sx), vec3(0.0, -sx, cx));
+    let ry = mat3x3<f32>(vec3(cy, 0.0, -sy), vec3(0.0, 1.0, 0.0), vec3(sy, 0.0, cy));
+    mats[i] = ry * rx * rz;
+  }
+
+  let r = length(pos);
+  // Asymmetric shell clip: generous outer bound keeps domes round (a thin
+  // symmetric shell slices every large cap flat); tight inner bound anchors
+  // them to the core.
+  let shellD = max(r - (R + BS_OUT), (R - BS_IN) - r);
+  var d = r - R * 0.985;        // solid core: the dark seams between bubbles
+  var trapV = 0.5;
+
+  var cs = BS_CELL;
+  for (var lvl = 0; lvl < BS_LEVELS; lvl = lvl + 1) {
+    let sp = bsLevelSphere(mats[lvl] * pos, cs, seeds[lvl]);
+    // Gap-filling rule: cull if a coarser octave's sphere covers this centre.
+    var covered = false;
+    var csj = BS_CELL;
+    for (var j = 0; j < BS_LEVELS; j = j + 1) {
+      if (j >= lvl) { break; }
+      let bj = bsLevelSphere(mats[j] * sp.centre, csj, seeds[j]);
+      if (distance(sp.centre, bj.centre) < bj.rad + sp.rad * BS_COVER) {
+        covered = true;
+        break;
+      }
+      csj = csj * BS_RATIO;
+    }
+    let cand = max(sp.dist, shellD);
+    if (!covered && cand < d) {
+      d = cand;
+      trapV = sp.h;             // each bubble its own palette colour
+    }
+    cs = cs * BS_RATIO;
+  }
+
+  var res : DEResult;
+  res.dist = d;
+  res.trap = trapV;
+  return res;
+}
+
 // ---- Penrose quasicrystal ------------------------------------------------
 //
 // A genuine P3 Penrose rhombus tiling (thick 72/108 + thin 36/144), built by de
@@ -854,8 +971,10 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
     return dePenrose(pos);
   } else if (ft < 9.5) {
     return deGyroid(pos);
+  } else if (ft < 10.5) {
+    return deKleinian(pos);
   }
-  return deKleinian(pos);
+  return deBubbleShell(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {
@@ -991,7 +1110,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // Strange attractors aren't distance fields — they're rasterized as line
   // geometry by a second pipeline drawn over this pass. Emit only the
   // background here so those lines have something to blend onto.
-  if (u.fractalType > 10.5) {
+  if (u.fractalType > 11.5) {
     let bg = backgroundColor(rd);
     return vec4<f32>(select(vec3<f32>(0.0), bg, u.bgMode >= 0.5), 0.0);
   }

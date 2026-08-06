@@ -298,6 +298,7 @@
         <option value="penrose">Penrose quasicrystal (tiled disc)</option>
         <option value="gyroid">Gyroid (minimal surface labyrinth)</option>
         <option value="kleinian">Kleinian limit set (inversion group)</option>
+        <option value="bubbleshell">Apollonian bubble shell</option>
         <option value="attractor">Strange attractor (Aizawa)</option>
         <option value="lorenz">Strange attractor (Lorenz)</option>
       </select>
@@ -602,7 +603,7 @@
       // HUD: show live fractal/quality/fps (+ zoom while exploring).
       const names = ['mandelbulb', 'mandelbox', 'menger', 'julia', 'apollonian',
         'spherepack', 'encrusted', 'surfacepack', 'penrose', 'gyroid',
-        'kleinian', 'attractor', 'lorenz'];
+        'kleinian', 'bubbleshell', 'attractor', 'lorenz'];
       setInterval(() => {
         const i = handle.info;
         hud.textContent = `${names[i.fractalType]} · q${i.qualityScale} · ${i.fps}fps` +

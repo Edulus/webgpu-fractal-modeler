@@ -33,10 +33,11 @@ The renderer already includes, in menu order, matching `FRACTAL_IDS` in `src/fra
 - Penrose quasicrystal relief
 - Gyroid (Schoen's triply periodic minimal surface)
 - Kleinian limit set
+- Apollonian bubble shell
 - Aizawa attractor
 - Lorenz attractor
 
-All thirteen are reachable from the demo's model selector. The first eleven are
+All fourteen are reachable from the demo's model selector. The first twelve are
 distance-estimated surfaces sharing the raymarch pass; the two attractors are
 line geometry drawn by a second pipeline.
 
