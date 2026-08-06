@@ -23,109 +23,106 @@ if ($start -lt 0 -or $end -lt 0 -or $end -le $start) {
 }
 
 $newBlock = @'
-// Apollonian bubble shell — a hierarchy of fully rounded spheres distributed
-// over a spherical body. This is an implicit, shader-native packing rather than
-// a literal finite Soddy list.
+// Apollonian-style bubble shell — a hierarchy of complete spheres distributed
+// by spherical Fibonacci point sets.
 //
-// The rejected prototype evaluated only one cubic cell, then projected that
-// cell's sphere centre onto the shell. A projected sphere routinely extended
-// outside the sole cell that knew about it, so cell boundaries sliced it into
-// flat faces. It also left every centre on an exact cubic lattice.
+// This replaces the rejected cubic-cell construction. The former estimator
+// projected one cell's centre onto the host sphere but evaluated that sphere
+// only inside its original cell. Cell boundaries therefore sliced bubbles into
+// planes, while integer lattice centres exposed square and cubic groupings.
 //
-// This version fixes both causes:
-//   * each scale searches the complete 3x3x3 neighbourhood, so a sphere remains
-//     visible across cell boundaries;
-//   * every centre is deterministically jittered before a limited radial pull,
-//     breaking rows and square rings without allowing a centre to escape the
-//     searched neighbourhood;
-//   * no sphere is intersected with a shell clip. Every visible bubble is a
-//     complete sphere. The shell comes from where centres are admitted;
-//   * finer scales sit progressively farther behind the coarse scale. Large
-//     bubbles naturally occlude them, while the small bubbles show through the
-//     irregular gaps — hierarchy without planar subtraction or centre culling.
+// Spherical Fibonacci sets have no rows, square cells, poles, or preferred
+// longitude. The inverse map below finds the nearest point of a set in constant
+// time by testing four candidates. Each scale is therefore the exact union of
+// equal-radius spheres at that level, without enumerating the whole set.
 //
-// Five rotated frames prevent the residual statistics of one jittered lattice
-// from lining up across scales. The matrices are constants, so this estimator
-// performs no trigonometry.
-const BS_LEVELS : i32 = 5;
-const BS_CELL   : f32 = 0.72;
-const BS_RATIO  : f32 = 0.55;
-const BS_R      : f32 = 1.0;
-const BS_CORE   : f32 = 0.88;
-const BS_JITTER : f32 = 0.70;
-const BS_BAND   : f32 = 0.46;
-const BS_RADLO  : f32 = 0.18;
-const BS_RADHI  : f32 = 0.07;
+// Four independently rotated levels form a phi-like size cascade. Finer levels
+// sit progressively farther behind the coarse level: large bubbles occlude
+// them where they overlap, while small bubbles appear through irregular gaps.
+// No shell intersection is applied, so every visible bubble remains round.
+//
+// This is a shader-native Apollonian-style hierarchy, not a literal
+// Soddy-Gosset packing.
+const BS_LEVELS : i32 = 4;
+const BS_TAU    : f32 = 6.28318530718;
+const BS_PHI    : f32 = 1.61803398875;
+const BS_ROOT5  : f32 = 2.23606797750;
+const BS_CORE   : f32 = 0.875;
 
-struct BSLevelHit {
-  dist : f32,
-  trap : f32,
+struct BSFibHit {
+  dir   : vec3<f32>,
+  id    : f32,
+  dist2 : f32,
 };
 
-fn bsHash33(p : vec3<f32>) -> vec3<f32> {
-  return vec3<f32>(
-    hash13(p + vec3<f32>(17.17,  3.11,  9.43)),
-    hash13(p + vec3<f32>(41.73, 23.57,  5.29)),
-    hash13(p + vec3<f32>(11.91, 59.21, 31.07))
-  );
+fn bsFibPoint(id : f32, count : f32) -> vec3<f32> {
+  let az = BS_TAU * fract(id * BS_PHI);
+  let z = 1.0 - (2.0 * id + 1.0) / count;
+  let rr = sqrt(max(1.0 - z * z, 0.0));
+  return vec3<f32>(cos(az) * rr, sin(az) * rr, z);
 }
 
-// Exact union distance for the locally relevant spheres of one scale.
+// Constant-time inverse spherical-Fibonacci map.
 //
-// Candidate centres begin inside neighbouring cells around q. Jitter moves a
-// centre by at most 0.35 cell, the radial correction by less than 0.30 cell,
-// and the radius is at most 0.25 cell. Therefore a sphere capable of reaching q
-// must originate in this 3x3x3 neighbourhood.
-fn bsNearestLevel(
-  q : vec3<f32>,
-  cs : f32,
-  seed : f32,
-  levelFrac : f32
-) -> BSLevelHit {
-  let base = floor(q / cs);
+// The local Fibonacci basis brackets the query in lattice coordinates. Its
+// four cell corners are the only candidates that can be nearest.
+fn bsNearestFib(n : vec3<f32>, count : f32) -> BSFibHit {
+  let sin2 = max(1.0 - n.z * n.z, 1e-8);
+  let numer = max(count * BS_TAU * 0.5 * BS_ROOT5 * sin2, 1e-8);
+  let k = max(2.0, floor(log2(numer) / log2(BS_PHI + 1.0)));
 
-  var best = 1e9;
-  var bestTrap = 0.5;
+  let fk = pow(BS_PHI, k) / BS_ROOT5;
+  let fib = round(vec2<f32>(fk, fk * BS_PHI));
 
-  for (var ix = -1; ix <= 1; ix = ix + 1) {
-    for (var iy = -1; iy <= 1; iy = iy + 1) {
-      for (var iz = -1; iz <= 1; iz = iz + 1) {
-        let cell = base + vec3<f32>(f32(ix), f32(iy), f32(iz));
-        let key = cell + vec3<f32>(seed, seed * 1.73, seed * 2.31);
-        let jitter = (bsHash33(key) - vec3<f32>(0.5)) * BS_JITTER;
-        let rawCentre = (cell + vec3<f32>(0.5) + jitter) * cs;
-        let rawR = length(rawCentre);
+  let colA = 2.0 * fib / count;
+  let colB = (fract((fib + vec2<f32>(1.0)) * BS_PHI)
+            - vec2<f32>(BS_PHI - 1.0)) * BS_TAU;
 
-        // Keep one irregular layer of candidate cells around the host sphere.
-        // Cells farther away produce no bubble at this scale.
-        if (abs(rawR - BS_R) <= cs * BS_BAND) {
-          let h = hash13(key + vec3<f32>(13.37));
-          let rad = cs * (BS_RADLO + BS_RADHI * h);
-          let dir = rawCentre / max(rawR, 1e-6);
+  let v = vec2<f32>(
+    atan2(n.y, n.x),
+    n.z - 1.0 + 1.0 / count
+  );
 
-          // Coarse bubbles sit slightly proud of the shell. Finer bubbles sit
-          // farther back, so they become visible mainly through coarse gaps.
-          let radialLayer = mix(0.20, -0.38, levelFrac);
-          let targetR = BS_R + rad * (radialLayer + (h - 0.5) * 0.12);
+  let det = colA.x * colB.y - colA.y * colB.x;
+  let invDet = 1.0 / select(
+    det,
+    select(-1e-8, 1e-8, det >= 0.0),
+    abs(det) < 1e-8
+  );
 
-          // Pull only partway to the target radius. A full projection was the
-          // source of the old cell-boundary truncation.
-          let centre = rawCentre + dir * (targetR - rawR) * 0.55;
-          let sd = length(q - centre) - rad;
+  let base = floor(vec2<f32>(
+    (v.x * colB.y - colB.x * v.y) * invDet,
+    (colA.x * v.y - v.x * colA.y) * invDet
+  ));
 
-          if (sd < best) {
-            best = sd;
-            bestTrap = h;
-          }
-        }
-      }
+  var best : BSFibHit;
+  best.dir = vec3<f32>(0.0, 0.0, 1.0);
+  best.id = 0.0;
+  best.dist2 = 8.0;
+
+  for (var s = 0; s < 4; s = s + 1) {
+    var corner = vec2<f32>(0.0);
+    if (s == 1) {
+      corner = vec2<f32>(1.0, 0.0);
+    } else if (s == 2) {
+      corner = vec2<f32>(0.0, 1.0);
+    } else if (s == 3) {
+      corner = vec2<f32>(1.0, 1.0);
+    }
+
+    let id = round(clamp(dot(fib, base + corner), 0.0, count - 1.0));
+    let q = bsFibPoint(id, count);
+    let delta = q - n;
+    let d2 = dot(delta, delta);
+
+    if (d2 < best.dist2) {
+      best.dir = q;
+      best.id = id;
+      best.dist2 = d2;
     }
   }
 
-  var hit : BSLevelHit;
-  hit.dist = best;
-  hit.trap = bestTrap;
-  return hit;
+  return best;
 }
 
 fn deBubbleShell(pos : vec3<f32>) -> DEResult {
@@ -133,61 +130,67 @@ fn deBubbleShell(pos : vec3<f32>) -> DEResult {
 
   var res : DEResult;
 
-  // Conservative spherical envelope around every possible bubble. Outside it,
-  // this under-estimate is safe and avoids running the neighbourhood searches.
-  let envelope = abs(r - BS_R) - 0.44;
-  if (envelope > 0.12) {
-    res.dist = envelope * 0.85;
+  // All bubbles lie inside radius 1.36. Outside that ball, this is a safe
+  // lower bound and avoids the inverse-map work.
+  let outer = r - 1.36;
+  if (outer > 0.20) {
+    res.dist = outer;
     res.trap = 0.45;
     return res;
   }
 
-  // Constant orthonormal frames. WGSL matrices are column-major.
-  var frames = array<mat3x3<f32>, 5>(
+  // Counts grow by approximately phi^2 while radii shrink by approximately
+  // 1/phi. The resulting levels read as one continuous recursive hierarchy.
+  var counts = array<f32, 4>(24.0, 64.0, 168.0, 440.0);
+  var radii = array<f32, 4>(0.270, 0.165, 0.101, 0.062);
+
+  // Constant orthonormal frames; WGSL matrices are column-major.
+  var frames = array<mat3x3<f32>, 4>(
     mat3x3<f32>(
       vec3<f32>( 1.0,         0.0,         0.0),
       vec3<f32>( 0.0,         1.0,         0.0),
       vec3<f32>( 0.0,         0.0,         1.0)),
     mat3x3<f32>(
-      vec3<f32>( 0.76484219,  0.59336378,  0.25087018),
-      vec3<f32>(-0.64421769,  0.70446631,  0.29784358),
-      vec3<f32>( 0.0,        -0.38941834,  0.92106099)),
+      vec3<f32>( 0.55092617,  0.83416556,  0.02545943),
+      vec3<f32>(-0.51344583,  0.31474090,  0.79831795),
+      vec3<f32>( 0.65791621, -0.45288629,  0.60169783)),
     mat3x3<f32>(
-      vec3<f32>( 0.67189980, -0.31150831,  0.67194735),
-      vec3<f32>(-0.72424288, -0.08647958,  0.68410053),
-      vec3<f32>(-0.15499327, -0.94630009, -0.28371329)),
+      vec3<f32>( 0.07069068,  0.11588730, -0.99074364),
+      vec3<f32>( 0.98270547,  0.16232783,  0.08910463),
+      vec3<f32>( 0.17115136, -0.97990806, -0.10240802)),
     mat3x3<f32>(
-      vec3<f32>( 0.37361601,  0.53657955,  0.75663298),
-      vec3<f32>(-0.74398487, -0.31381737,  0.58991963),
-      vec3<f32>( 0.55398338, -0.78332691,  0.28195987)),
-    mat3x3<f32>(
-      vec3<f32>(-0.01377127, -0.33368820, -0.94258291),
-      vec3<f32>( 0.55086751, -0.78924681,  0.27135671),
-      vec3<f32>(-0.83447908, -0.51550137,  0.19468692))
+      vec3<f32>( 0.10726108, -0.66037687,  0.74323445),
+      vec3<f32>(-0.95727725,  0.13331762,  0.25660606),
+      vec3<f32>(-0.26854296, -0.73900528, -0.61786396))
   );
-  var seeds = array<f32, 5>(0.0, 7.13, 3.71, 9.37, 5.51);
 
-  // The dark body is deliberately recessed. It closes the object and provides
-  // the thin dark interstices without slicing the visible fronts of bubbles.
+  // Recessed host body: it closes the shell and supplies dark interstices
+  // without intersecting the visible fronts of the bubbles.
   var d = r - BS_CORE;
   var trapV = 0.5;
-  var cs = BS_CELL;
 
-  for (var lvl = 0; lvl < BS_LEVELS; lvl = lvl + 1) {
-    let levelFrac = f32(lvl) / f32(BS_LEVELS - 1);
-    let hit = bsNearestLevel(frames[lvl] * pos, cs, seeds[lvl], levelFrac);
-    if (hit.dist < d) {
-      d = hit.dist;
-      trapV = hit.trap;
+  if (r > 1e-7) {
+    for (var lvl = 0; lvl < BS_LEVELS; lvl = lvl + 1) {
+      let q = frames[lvl] * pos;
+      let n = q / r;
+      let hit = bsNearestFib(n, counts[lvl]);
+      let levelFrac = f32(lvl) / f32(BS_LEVELS - 1);
+
+      // Coarse bubbles sit proud. Finer bubbles recede behind them and become
+      // visible primarily in the gaps, creating the interstitial hierarchy.
+      let layer = mix(0.28, -0.55, levelFrac);
+      let centreR = 1.0 + radii[lvl] * layer;
+      let sphereD = length(q - hit.dir * centreR) - radii[lvl];
+
+      if (sphereD < d) {
+        d = sphereD;
+        trapV = fract(
+          hit.id * 0.61803399
+          + f32(lvl) * 0.217
+          + hit.dir.z * 0.11
+        );
+      }
     }
-    cs = cs * BS_RATIO;
-  }
-
-  // The neighbourhood search is exact near every candidate sphere. This small
-  // positive cap only protects empty shell gaps from a long step toward an
-  // unexamined distant cell; it never wins at a sphere surface or inside solid.
-  if (d > 0.0) {
-    d = min(d, max(abs(r - BS_R) - 0.44, 0.006));
   }
 
   res.dist = d;
@@ -203,6 +206,8 @@ $updated = $text.Substring(0, $start) + $newBlock + $newline + $newline + $text.
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($path, $updated, $utf8NoBom)
 
-Write-Host "Replaced deBubbleShell implementation."
+Write-Host "Replaced the rejected cubic estimator with a spherical-Fibonacci hierarchy."
 git diff --check
+node --check src/shaders/fractal.wgsl.js
 git diff --stat
+git status --short
