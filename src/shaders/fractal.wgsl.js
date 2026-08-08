@@ -25,8 +25,9 @@ const RAMP_MAX : u32 = 8u;
 //                           7=surfacepack, 8=penrose, 9=gyroid, 10=kleinian,
 //                           11=barth, 12=schottky (kissing/parabolic),
 //                           13=schottkyh (hyperbolic), 14=tetrabrot,
-//                           15=envoct, 16=envdodec, 17=hyp534, 18=hyp435;
-//                           19+ are the line-rendered attractors, which this
+//                           15=envoct, 16=envdodec, 17=hyp534, 18=hyp435,
+//                           19=hyp534t, 20=hyp534o, 21=hyp435t, 22=hyp435o;
+//                           23+ are the line-rendered attractors, which this
 //                           pass only backgrounds)
 //   48  power      : f32
 //   52  mbScale    : f32
@@ -1287,7 +1288,6 @@ fn deEnvelope(pos : vec3<f32>) -> DEResult {
 fn deHoneycomb(pos : vec3<f32>) -> DEResult {
   const HC_ITERS : i32 = 40;
   const R_CLIP : f32 = 0.85;
-  const THICK : f32 = 0.02;
 
   var res : DEResult;
 
@@ -1301,23 +1301,79 @@ fn deHoneycomb(pos : vec3<f32>) -> DEResult {
     return res;
   }
 
-  // {5,3,4} and {4,3,5}; both cells are spherical so the same code serves.
+  let ft = u.fractalType;
+  // {5,3,4} carries ids 17, 19, 20; {4,3,5} carries 18, 21, 22.
+  let is435 = (ft > 17.5 && ft < 18.5) || (ft > 20.5);
+
   var n0 = vec3<f32>(1.0, 0.0, 0.0);
   var n1 = vec3<f32>(-0.80901699, 0.58778525, 0.0);   // p = 5
   var n2 = vec3<f32>(0.0, -0.85065081, 0.52573111);
   var cen = vec3<f32>(0.0, 0.0, -1.49534878);          // r = 4
   var sph = 1.11178595;
-  if (u.fractalType > 17.5) {
+  if (is435) {
     n1 = vec3<f32>(-0.70710678, 0.70710678, 0.0);      // p = 4
     n2 = vec3<f32>(0.0, -0.70710678, 0.70710678);
     cen = vec3<f32>(0.0, 0.0, -2.05817103);            // r = 5
     sph = 1.79890744;
   }
 
-  // The edge circle: the mirror sphere cut by the plane n2.
-  let h = dot(cen, n2);
-  let orig = cen - n2 * h;
-  let rad = sqrt(max(sph * sph - h * h, 1e-12));
+  // Baked Wythoff edge circles: centre.xyz with radius in w, and the circle's
+  // plane normal. The seed depends only on the group and the active-mirror
+  // string, so these are constants and the per-step cost is unchanged.
+  var ec = array<vec4<f32>, 4>(vec4<f32>(0.0), vec4<f32>(0.0),
+                               vec4<f32>(0.0), vec4<f32>(0.0));
+  var en = array<vec3<f32>, 4>(vec3<f32>(0.0), vec3<f32>(0.0),
+                               vec3<f32>(0.0), vec3<f32>(0.0));
+  var ecount = 1;
+  var thick = 0.020;
+
+  if (ft < 18.5) {
+    // 1000 -- regular. Verified against the independently derived circle the
+    // first honeycomb estimator used: centres agree to 1e-16.
+    if (is435) {
+      ec[0] = vec4<f32>(0.0, -1.02908551, -1.02908551, 1.05737126);
+      en[0] = vec3<f32>(0.0, 0.70710678, -0.70710678);
+    } else {
+      ec[0] = vec4<f32>(0.0, -0.66874030, -1.08204454, 0.78615138);
+      en[0] = vec3<f32>(0.0, 0.85065081, -0.52573111);
+    }
+  } else if (ft < 19.5) {
+    // {5,3,4} 1100 -- truncated
+    ec[0] = vec4<f32>(0.0, -0.66874030, -1.08204454, 0.78615138);
+    en[0] = vec3<f32>(0.0, 0.85065081, -0.52573111);
+    ec[1] = vec4<f32>(-0.39307569, -0.54102227, -1.08204454, 0.78615138);
+    en[1] = vec3<f32>(-0.5, -0.68819096, 0.52573111);
+    ecount = 2; thick = 0.017;
+  } else if (ft < 20.5) {
+    // {5,3,4} 1111 -- omnitruncated
+    ec[0] = vec4<f32>(0.0, -0.61749045, -1.38075061, 1.13479809);
+    en[0] = vec3<f32>(0.0, 0.91287093, -0.40824829);
+    ec[1] = vec4<f32>(-0.36295178, -0.49956026, -1.38075061, 1.13479809);
+    en[1] = vec3<f32>(-0.53657208, -0.73852813, 0.40824829);
+    ec[2] = vec4<f32>(-0.20063481, -0.78816061, -1.27527065, 1.13479809);
+    en[2] = vec3<f32>(0.99116321, -0.06973710, -0.11283710);
+    ec[3] = vec4<f32>(-0.64938335, -1.99859645, -0.66874030, 1.96552795);
+    en[3] = vec3<f32>(-0.95105652, 0.30901699, 0.0);
+    ecount = 4; thick = 0.012;
+  } else if (ft < 21.5) {
+    // {4,3,5} 1100 -- truncated
+    ec[0] = vec4<f32>(0.0, -1.02908551, -1.02908551, 1.05737126);
+    en[0] = vec3<f32>(0.0, 0.70710678, -0.70710678);
+    ec[1] = vec4<f32>(-0.72767335, -0.72767335, -1.02908551, 1.05737126);
+    en[1] = vec3<f32>(-0.5, -0.5, 0.70710678);
+    ecount = 2; thick = 0.017;
+  } else {
+    // {4,3,5} 1111 -- omnitruncated
+    ec[0] = vec4<f32>(0.0, -1.14061807, -1.80877666, 1.89015411);
+    en[0] = vec3<f32>(0.0, 0.84586181, -0.53340209);
+    ec[1] = vec4<f32>(-0.80653877, -0.80653877, -1.80877666, 1.89015411);
+    en[1] = vec3<f32>(-0.59811460, -0.59811460, 0.53340209);
+    ec[2] = vec4<f32>(-0.47245947, -1.47469736, -1.47469736, 1.89015411);
+    en[2] = vec3<f32>(0.97528690, -0.15622989, -0.15622989);
+    ec[3] = vec4<f32>(-1.14497143, -2.76420555, -0.48586827, 2.86144367);
+    en[3] = vec3<f32>(-0.92387953, 0.38268343, 0.0);
+    ecount = 4; thick = 0.012;
+  }
 
   var p = pos;
   var factor = 1.0;
@@ -1344,12 +1400,16 @@ fn deHoneycomb(pos : vec3<f32>) -> DEResult {
     word = word + 1.0;
   }
 
-  // Distance to the edge circle, carried back through the conformal factor --
+  // Nearest of the seed's edges, carried back through the conformal factor --
   // rays are marched in the Euclidean ball, so the estimate must be Euclidean.
-  let w = p - orig;
-  let axial = dot(w, n2);
-  let radial = sqrt(max(dot(w, w) - axial * axial, 0.0)) - rad;
-  let tube = (sqrt(radial * radial + axial * axial) - THICK) / max(factor, 1e-9);
+  var best = 1e30;
+  for (var i = 0; i < ecount; i = i + 1) {
+    let w = p - ec[i].xyz;
+    let axial = dot(w, en[i]);
+    let radial = sqrt(max(dot(w, w) - axial * axial, 0.0)) - ec[i].w;
+    best = min(best, sqrt(radial * radial + axial * axial));
+  }
+  let tube = (best - thick) / max(factor, 1e-9);
 
   res.dist = max(tube, clip);
   // Reflection depth: cells near the boundary took far more folding than the
@@ -1531,7 +1591,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // Strange attractors aren't distance fields — they're rasterized as line
   // geometry by a second pipeline drawn over this pass. Emit only the
   // background here so those lines have something to blend onto.
-  if (u.fractalType > 18.5) {
+  if (u.fractalType > 22.5) {
     let bg = backgroundColor(rd);
     return vec4<f32>(select(vec3<f32>(0.0), bg, u.bgMode >= 0.5), 0.0);
   }

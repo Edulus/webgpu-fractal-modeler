@@ -61,9 +61,9 @@ const U = {
 const UNIFORM_FLOATS = 96;
 const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 384
 
-// Distance-estimated fractals occupy ids 0..18; the volumetric/line-rendered
-// attractors follow at 19+. The shader keys off that split (see the
-// `fractalType > 18.5` test in fractal.wgsl.js), so keep DE types contiguous at
+// Distance-estimated fractals occupy ids 0..22; the volumetric/line-rendered
+// attractors follow at 23+. The shader keys off that split (see the
+// `fractalType > 22.5` test in fractal.wgsl.js), so keep DE types contiguous at
 // the front when adding new ones and move the attractors up to match.
 //
 // The two Schottky entries share a single estimator and differ only in regime:
@@ -81,7 +81,11 @@ const FRACTAL_IDS = {
   spherepack: 5, encrusted: 6, surfacepack: 7, penrose: 8, gyroid: 9,
   kleinian: 10, barth: 11, schottky: 12, schottkyh: 13, tetrabrot: 14,
   envoct: 15, envdodec: 16, hyp534: 17, hyp435: 18,
-  attractor: 19, lorenz: 20,
+  // Wythoffian forms of the same two groups: the active-mirror string picks
+  // which member of the family the seed generates. deHoneycomb groups these by
+  // id ({5,3,4} holds 17/19/20, {4,3,5} holds 18/21/22), so they must stay put.
+  hyp534t: 19, hyp534o: 20, hyp435t: 21, hyp435o: 22,
+  attractor: 23, lorenz: 24,
 };
 
 // Quality tiers -> internal-resolution scale factor.
@@ -92,7 +96,8 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 // Indexed by fractal id (see FRACTAL_IDS).
 // mandelbulb, mandelbox, menger, julia, apollonian, spherepack, encrusted,
 // surfacepack, penrose, gyroid, kleinian, barth, schottky, schottkyh,
-// tetrabrot, envoct, envdodec, hyp534, hyp435, attractor(Aizawa), lorenz
+// tetrabrot, envoct, envdodec, hyp534, hyp435, hyp534t, hyp534o, hyp435t,
+// hyp435o, attractor(Aizawa), lorenz
 // The Penrose disc is wide and flat, so it needs a little more room than the
 // roughly ball-shaped estimators to sit inside the frame edge-on. The Barth
 // sextic clips at radius 2.0, the largest here, and its 4.6 keeps the same
@@ -106,7 +111,8 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 // The honeycombs are clipped to radius 0.85 inside the Poincare ball, so they
 // need the closest orbit of anything here.
 const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.1, 3.0, 3.5, 3.2, 3.6, 4.6,
-                    1.55, 1.75, 3.4, 2.85, 5.75, 2.0, 2.0, 3.2, 3.0];
+                    1.55, 1.75, 3.4, 2.85, 5.75, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
+                    3.2, 3.0];
 
 // Number of integrated trajectory samples drawn as a line strip per attractor.
 // These are exact float positions (vector geometry), so the curve stays crisp
@@ -931,7 +937,7 @@ export async function initFractalBackground(canvas, options = {}) {
                     // Every distance-estimated surface, which is all ids up to
                     // and including the last one before the attractors. The
                     // attractors are line geometry with no field to probe.
-                    && state.fractalType <= FRACTAL_IDS.hyp435;
+                    && state.fractalType <= FRACTAL_IDS.hyp435o;
     if (doProbe) {
       state.probeAt = nowMs;
       const cpass = encoder.beginComputePass();

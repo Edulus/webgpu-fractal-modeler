@@ -43,6 +43,7 @@ file. See [Project structure](#project-structure) and the model notes below.
 - Envelope extrusion, dodecahedral seed (small stellated dodecahedron)
 - Hyperbolic honeycomb {5,3,4}
 - Hyperbolic honeycomb {4,3,5}
+- Truncated and omnitruncated forms of both honeycombs
 - Aizawa strange attractor
 - Lorenz strange attractor
 
@@ -328,6 +329,14 @@ Three things had to be got right, and each was caught by measurement rather than
 - **Clipped well inside the ball, not at it.** The edges accumulate on the sphere at infinity, so near `|p| = 1` the structure is finer than any finite reflection budget resolves. Returning the clip distance on its own also makes the clip a surface, since it falls to zero there and trips the hit test; taking `max` with the tube means it only shows where it actually cuts an edge.
 
 Rays are marched in the Euclidean ball, so the estimate must be Euclidean: the conformal factor is accumulated through the inversions and divided out at the end, exactly as the Apollonian and Kleinian estimators do. Fly-through mode is the natural way to see these — a tessellation of space is something to be inside.
+
+**The regular honeycomb is one member of a family.** The Wythoff construction keeps the same four mirrors and adds a *seed point*, labelled by which mirrors it sits off — a four-bit string. The seed lies exactly **on** every inactive mirror and at **equal distance from** every active one, which is three equations in three unknowns for any bit string, so each has an isolated solution. Its orbit gives the vertices, and the orbit of the segments joining it to its mirror images gives the edges. `1000` is the regular honeycomb, `1100` truncated, `1111` omnitruncated — up to fifteen distinct honeycombs per group from mirrors already in hand.
+
+Two facts make this cheap. A circle orthogonal to the boundary sphere is fixed setwise by inversion in it, so the geodesic through the seed and its mirror image also passes through the seed's inverse point — three points determine it in closed form. And the seed depends only on the group and the bit string, so the edge circles are **constants**: solved on the CPU and baked, leaving the shader's per-step cost identical to the regular case.
+
+The `1000` case is the check that matters. Its edge circle is derived completely differently from the one the original honeycomb estimator used — seed-and-reflect versus mirror-sphere-cut-by-a-plane — and the two agree to **1e-16** in centre, radius and normal.
+
+One member is excluded: `0001` places the seed at the cell centre, the origin, whose inverse point is at infinity, so the geodesic is a straight diameter and the circumcircle degenerates. It is also redundant here, since activating only the last mirror gives the *dual* honeycomb and `{5,3,4}` and `{4,3,5}` are each other's duals.
 
 #### Envelope extrusion
 

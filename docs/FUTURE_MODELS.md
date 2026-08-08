@@ -40,11 +40,13 @@ The renderer already includes, in menu order, matching `FRACTAL_IDS` in `src/fra
 - Envelope extrusion, dodecahedral seed
 - Hyperbolic honeycomb {5,3,4}
 - Hyperbolic honeycomb {4,3,5}
+- Truncated {5,3,4} and {4,3,5}
+- Omnitruncated {5,3,4} and {4,3,5}
 - Aizawa attractor
 - Lorenz attractor
 
-Twenty are reachable from the demo's model selector; the Penrose relief is
-retired, for the reason recorded under quasicrystals below. The first eighteen
+Twenty-four are reachable from the demo's model selector; the Penrose relief is
+retired, for the reason recorded under quasicrystals below. The first twenty-two
 offered are
 distance-estimated surfaces sharing the raymarch pass; the two attractors are
 line geometry drawn by a second pipeline. The two Schottky entries share one

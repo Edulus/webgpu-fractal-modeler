@@ -351,7 +351,11 @@
         <option value="envoct">Envelope extrusion (octahedral seed)</option>
         <option value="envdodec">Envelope extrusion (dodecahedral seed)</option>
         <option value="hyp534">Hyperbolic honeycomb {5,3,4}</option>
+        <option value="hyp534t">Hyperbolic honeycomb {5,3,4}, truncated</option>
+        <option value="hyp534o">Hyperbolic honeycomb {5,3,4}, omnitruncated</option>
         <option value="hyp435">Hyperbolic honeycomb {4,3,5}</option>
+        <option value="hyp435t">Hyperbolic honeycomb {4,3,5}, truncated</option>
+        <option value="hyp435o">Hyperbolic honeycomb {4,3,5}, omnitruncated</option>
         <option value="attractor">Strange attractor (Aizawa)</option>
         <option value="lorenz">Strange attractor (Lorenz)</option>
       </select>
@@ -660,6 +664,14 @@
           'Dodecahedra filling curved space, four meeting along every edge. They are all the same size; the shrinking is what flattening that space onto a ball does to it.'],
         hyp435: ['Hyperbolic honeycomb {4,3,5}',
           'Cubes filling the same curved space, five meeting along every edge, which no ordinary space could accommodate.'],
+        hyp534t: ['Truncated {5,3,4}',
+          'The same honeycomb with every corner sliced off, which turns each dodecahedron into a twenty-sided cell and opens a triangle at each cut.'],
+        hyp534o: ['Omnitruncated {5,3,4}',
+          'Every corner and every edge cut away at once. The seed point is pushed off all four mirrors, which gives the family its most elaborate member.'],
+        hyp435t: ['Truncated {4,3,5}',
+          'The cubic honeycomb with its corners cut back, each cube becoming a fourteen-sided cell.'],
+        hyp435o: ['Omnitruncated {4,3,5}',
+          'The richest form of the cubic honeycomb, with the seed clear of all four mirrors at once.'],
         attractor: ['Aizawa attractor',
           'One trajectory, traced for six hundred thousand steps. It never repeats and never escapes, and never quite closes the loop.'],
         lorenz: ['Lorenz attractor',
@@ -741,7 +753,8 @@
       const names = ['mandelbulb', 'mandelbox', 'menger', 'julia', 'apollonian',
         'spherepack', 'encrusted', 'surfacepack', 'penrose', 'gyroid',
         'kleinian', 'barth', 'schottky', 'schottkyh', 'tetrabrot',
-        'envoct', 'envdodec', 'hyp534', 'hyp435', 'attractor', 'lorenz'];
+        'envoct', 'envdodec', 'hyp534', 'hyp435', 'hyp534t', 'hyp534o',
+        'hyp435t', 'hyp435o', 'attractor', 'lorenz'];
       setInterval(() => {
         const i = handle.info;
         hud.textContent = `${names[i.fractalType]} · q${i.qualityScale} · ${i.fps}fps` +
