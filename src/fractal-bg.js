@@ -1085,7 +1085,7 @@ export async function initFractalBackground(canvas, options = {}) {
       // Palette phase has its own clock: it remains live on a converged frame.
       // Geometry time still freezes while accumulating, so the material samples
       // describe one stable scene instead of smearing animation together.
-      state.colorPhase = (state.colorPhase + (dt / 1000) * state.colorCycle) % 1;
+      state.colorPhase += (dt / 1000) * state.colorCycle;
       if (!acc) {
         state.animTime += dt / 1000;
         state.parallax.x += (state.parallax.tx - state.parallax.x) * 0.05;
