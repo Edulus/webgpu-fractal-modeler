@@ -321,6 +321,7 @@
       <summary>Load palette…</summary>
       <textarea id="pal-input" rows="2" placeholder="Paste a coolors.co link, hex list, or .gpl contents"></textarea>
       <div class="row">
+        <button id="pal-coolors" title="copy palette URL">Coolors</button>
         <button id="pal-load">Load</button>
         <button id="pal-file-btn">File…</button>
       </div>
@@ -498,14 +499,22 @@
         const parsed = PaletteIO.parsePalette(text);
         if (!parsed) {
           say('Could not read that. Expected a coolors.co link, hex list, or .gpl file.', 'err');
-          return;
+          return false;
         }
         if (!palName.value.trim() && parsed.name && parsed.name !== 'Imported') {
           palName.value = parsed.name;
         }
         applyColors(parsed.colors, label || parsed.source);
+        if (parsed.source === 'coolors') palInput.value = '';
+        return true;
       }
 
+      document.getElementById('pal-coolors').addEventListener('click', () => {
+        window.open('https://coolors.co/', '_blank', 'noopener,noreferrer');
+      });
+      palInput.addEventListener('input', () => {
+        if (PaletteIO.parseCoolorsUrl(palInput.value)) loadFromText(palInput.value);
+      });
       document.getElementById('pal-load').addEventListener('click',
         () => loadFromText(palInput.value));
       document.getElementById('pal-file-btn').addEventListener('click', () => palFile.click());
