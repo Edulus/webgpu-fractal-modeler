@@ -30,7 +30,6 @@ The renderer already includes, in menu order, matching `FRACTAL_IDS` in `src/fra
 - Nested sphere packing
 - Ornate planet with a polar bloom
 - Studded surface packing
-- Penrose quasicrystal relief
 - Gyroid (Schoen's triply periodic minimal surface)
 - Kleinian limit set
 - Barth sextic
@@ -44,7 +43,9 @@ The renderer already includes, in menu order, matching `FRACTAL_IDS` in `src/fra
 - Aizawa attractor
 - Lorenz attractor
 
-All twenty-one are reachable from the demo's model selector. The first nineteen are
+Twenty are reachable from the demo's model selector; the Penrose relief is
+retired, for the reason recorded under quasicrystals below. The first eighteen
+offered are
 distance-estimated surfaces sharing the raymarch pass; the two attractors are
 line geometry drawn by a second pipeline. The two Schottky entries share one
 estimator and differ only in regime.

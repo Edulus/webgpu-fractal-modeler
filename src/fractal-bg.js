@@ -73,6 +73,11 @@ const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 384
 // so these two must stay adjacent and in this order.
 const FRACTAL_IDS = {
   mandelbulb: 0, mandelbox: 1, menger: 2, julia: 3, apollonian: 4,
+  // penrose (8) is RETIRED: it is an honest P3 tiling, but engraved on a disc,
+  // which is the 2D-pattern-on-a-primitive case the roadmap warns against. The
+  // id and its estimator are kept so nothing renumbers and the work is not
+  // lost; it is simply no longer offered in the selector. Still reachable via
+  // setFractal('penrose').
   spherepack: 5, encrusted: 6, surfacepack: 7, penrose: 8, gyroid: 9,
   kleinian: 10, barth: 11, schottky: 12, schottkyh: 13, tetrabrot: 14,
   envoct: 15, envdodec: 16, hyp534: 17, hyp435: 18,
