@@ -21,9 +21,8 @@ jobs:
           ref: agent/palette-faithful-cycle
           fetch-depth: 0
 
-      - name: Apply asserted renderer migration
+      - name: Apply asserted palette refinements
         run: |
-          node tools/apply-palette-cycle-patch.mjs
           node tools/fix-palette-phase.mjs
           node tools/fix-palette-material-details.mjs
 
