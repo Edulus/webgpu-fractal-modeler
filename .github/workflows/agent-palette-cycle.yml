@@ -36,39 +36,26 @@ jobs:
           node --check src/shaders/attractor.wgsl.js
           node --check tools/colorcycle.test.js
 
-      - name: Compile all WGSL modules in headless Chrome
+      - name: Validate all WGSL modules with Naga
         run: |
-          CHROME="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)"
-          test -n "$CHROME"
-          python3 -m http.server 8765 >/tmp/palette-http.log 2>&1 &
-          SERVER_PID=$!
-          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
-          sleep 1
-          ok=0
-          for mode in vulkan angle; do
-            if [ "$mode" = vulkan ]; then
-              FLAGS=(--use-angle=vulkan --enable-features=Vulkan --disable-vulkan-surface --use-vulkan=swiftshader --use-webgpu-adapter=swiftshader)
-            else
-              FLAGS=(--use-gl=angle --use-angle=swiftshader --use-webgpu-adapter=swiftshader)
-            fi
-            "$CHROME" --headless=new --no-sandbox --disable-gpu-sandbox \
-              --enable-unsafe-webgpu --enable-unsafe-swiftshader \
-              "${FLAGS[@]}" --virtual-time-budget=10000 --dump-dom \
-              http://127.0.0.1:8765/tools/shader-check.html > /tmp/shader-check.html 2>/tmp/chrome-stderr.log || true
-            if grep -q "All shaders compiled." /tmp/shader-check.html; then
-              ok=1
-              break
-            fi
+          cargo install naga-cli --version 30.0.0 --locked
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { FRACTAL_WGSL } from './src/shaders/fractal.wgsl.js';
+          import { MATERIAL_WGSL } from './src/shaders/material.wgsl.js';
+          import { COMPOSITE_WGSL } from './src/shaders/composite.wgsl.js';
+          import { ATTRACTOR_WGSL } from './src/shaders/attractor.wgsl.js';
+          for (const [name, source] of [
+            ['fractal', FRACTAL_WGSL],
+            ['material', MATERIAL_WGSL],
+            ['composite', COMPOSITE_WGSL],
+            ['attractor', ATTRACTOR_WGSL],
+          ]) fs.writeFileSync(`/tmp/${name}.wgsl`, source);
+          NODE
+          for shader in fractal material composite attractor; do
+            echo "== $shader.wgsl =="
+            naga "/tmp/$shader.wgsl"
           done
-          if [ "$ok" -ne 1 ]; then
-            cat /tmp/chrome-stderr.log || true
-            cat /tmp/shader-check.html || true
-            exit 1
-          fi
-          grep -q "ok   fractal.wgsl" /tmp/shader-check.html
-          grep -q "ok   material.wgsl" /tmp/shader-check.html
-          grep -q "ok   composite.wgsl" /tmp/shader-check.html
-          grep -q "ok   attractor.wgsl" /tmp/shader-check.html
 
       - name: Unit tests
         run: |
