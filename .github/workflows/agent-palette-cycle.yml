@@ -1,4 +1,4 @@
-name: Palette faithful cycle migration
+name: Palette faithful cycle final validation
 
 on:
   push:
@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  patch-and-test:
+  validate:
     if: ${{ !contains(github.event.head_commit.message, '[palette-patch]') }}
     runs-on: ubuntu-latest
     steps:
@@ -21,10 +21,11 @@ jobs:
           ref: agent/palette-faithful-cycle
           fetch-depth: 0
 
-      - name: Apply asserted palette refinements
+      - name: Apply asserted finalization
         run: |
           node tools/fix-palette-phase.mjs
           node tools/fix-palette-material-details.mjs
+          node tools/finalize-palette-cycle.mjs
 
       - name: JavaScript syntax
         run: |
@@ -33,6 +34,41 @@ jobs:
           node --check src/shaders/material.wgsl.js
           node --check src/shaders/composite.wgsl.js
           node --check src/shaders/attractor.wgsl.js
+          node --check tools/colorcycle.test.js
+
+      - name: Compile all WGSL modules in headless Chrome
+        run: |
+          CHROME="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)"
+          test -n "$CHROME"
+          python3 -m http.server 8765 >/tmp/palette-http.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+          sleep 1
+          ok=0
+          for mode in vulkan angle; do
+            if [ "$mode" = vulkan ]; then
+              FLAGS=(--use-angle=vulkan --enable-features=Vulkan --disable-vulkan-surface --use-vulkan=swiftshader --use-webgpu-adapter=swiftshader)
+            else
+              FLAGS=(--use-gl=angle --use-angle=swiftshader --use-webgpu-adapter=swiftshader)
+            fi
+            "$CHROME" --headless=new --no-sandbox --disable-gpu-sandbox \
+              --enable-unsafe-webgpu --enable-unsafe-swiftshader \
+              "${FLAGS[@]}" --virtual-time-budget=10000 --dump-dom \
+              http://127.0.0.1:8765/tools/shader-check.html > /tmp/shader-check.html 2>/tmp/chrome-stderr.log || true
+            if grep -q "All shaders compiled." /tmp/shader-check.html; then
+              ok=1
+              break
+            fi
+          done
+          if [ "$ok" -ne 1 ]; then
+            cat /tmp/chrome-stderr.log || true
+            cat /tmp/shader-check.html || true
+            exit 1
+          fi
+          grep -q "ok   fractal.wgsl" /tmp/shader-check.html
+          grep -q "ok   material.wgsl" /tmp/shader-check.html
+          grep -q "ok   composite.wgsl" /tmp/shader-check.html
+          grep -q "ok   attractor.wgsl" /tmp/shader-check.html
 
       - name: Unit tests
         run: |
@@ -41,7 +77,7 @@ jobs:
             node "$t"
           done
 
-      - name: Renderer invariants
+      - name: Renderer and documentation invariants
         run: |
           grep -q "MATERIAL_WGSL" src/fractal-bg.js
           grep -q "colorPhase: 63" src/fractal-bg.js
@@ -55,8 +91,11 @@ jobs:
           grep -q "palette(m.x / m.y + phase)" src/shaders/composite.wgsl.js
           grep -q "u.paletteMode > 0.5 && a.z > 1e-7" src/shaders/composite.wgsl.js
           grep -q "material.wgsl" tools/shader-check.html
+          grep -q "Palette-faithful colour cycling" README.md
+          grep -q "Palette-coordinate shift rate per second" README.md
+          ! grep -q "Hue cycles per second" README.md
 
-      - name: Commit generated renderer
+      - name: Commit final generated changes
         run: |
           if git diff --quiet; then
             echo "No generated changes"
@@ -64,6 +103,6 @@ jobs:
           fi
           git config user.name "palette-cycle-migration"
           git config user.email "actions@users.noreply.github.com"
-          git add src/fractal-bg.js src/shaders/material.wgsl.js src/shaders/composite.wgsl.js src/shaders/attractor.wgsl.js tools/shader-check.html
-          git commit -m "[palette-patch] Refine palette-independent material encoding"
+          git add README.md src/fractal-bg.js src/shaders/material.wgsl.js src/shaders/composite.wgsl.js src/shaders/attractor.wgsl.js tools/colorcycle.test.js tools/shader-check.html
+          git commit -m "[palette-patch] Finalize palette-faithful colour cycling"
           git push origin HEAD:agent/palette-faithful-cycle
