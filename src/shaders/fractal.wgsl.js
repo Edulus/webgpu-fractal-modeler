@@ -24,8 +24,8 @@ const RAMP_MAX : u32 = 8u;
 //                           4=apollonian, 5=spherepack, 6=encrusted,
 //                           7=surfacepack, 8=penrose, 9=gyroid, 10=kleinian,
 //                           11=barth, 12=schottky (kissing/parabolic),
-//                           13=schottkyh (hyperbolic); 14+ are the
-//                           line-rendered attractors, which this pass only
+//                           13=schottkyh (hyperbolic), 14=tetrabrot; 15+ are
+//                           the line-rendered attractors, which this pass only
 //                           backgrounds)
 //   48  power      : f32
 //   52  mbScale    : f32
@@ -1048,6 +1048,112 @@ fn deSchottky(pos : vec3<f32>) -> DEResult {
   return res;
 }
 
+// ---- Tetrabrot (bicomplex Mandelbrot slice) --------------------------------
+//
+// The parameter-space companion to the quaternion Julia set -- but NOT the
+// quaternion Mandelbrot set, which is degenerate. Starting from z0 = 0, every
+// iterate of z^2 + c is a real polynomial in c, so the orbit never leaves the
+// commutative subalgebra R[c], which for a non-real quaternion is isomorphic to
+// C by c -> Re(c) + i|Im(c)|. Membership therefore depends on c only through
+// (Re c, |Im c|), making the quaternion Mandelbrot set the plane Mandelbrot set
+// REVOLVED about the real axis -- a 2D pattern spun around a primitive, which
+// this project's own rules exclude. Measured before discarding it: 4000 random
+// quaternions, zero escape-time mismatches against the complex iteration, and
+// zero disagreements across 2400 random rotations of Im(c).
+//
+// Bicomplex numbers escape this because they are commutative WITH ZERO
+// DIVISORS. In the idempotent basis e1 = (1 + ij)/2, e2 = (1 - ij)/2 every
+// element splits as w = w1 e1 + w2 e2 and multiplication is componentwise, so
+// w -> w^2 + c decouples into two independent complex quadratic maps and
+//
+//     c is in the set  <=>  c1 in M and c2 in M.
+//
+// For the standard slice c = x + y i + z j the components are
+//
+//     c1 = x + (y - z) i ,     c2 = x + (y + z) i
+//
+// so the Tetrabrot is the INTERSECTION OF TWO PRISMS over the classical
+// Mandelbrot set, erected along the two diagonals of the (y,z) plane. That is
+// genuinely three-dimensional: 580 of 2000 rotated samples change membership,
+// where the quaternion version had zero.
+fn deTetrabrot(pos : vec3<f32>) -> DEResult {
+  const TB_ITERS : i32 = 64;
+  const BAILOUT : f32 = 64.0;      // |z|^2
+  const X_SHIFT : f32 = -0.5;      // measured interior centre is c_x = -0.495
+  const SQRT2 : f32 = 1.41421356;
+  const KDE_IN : f32 = 2.4;        // in-box safety factor (worst sampled 2.248)
+  const KDE_OUT : f32 = 4.5;       // outside it            (worst sampled 4.139)
+  const BOX : vec3<f32> = vec3<f32>(0.90, 0.86, 0.86);   // measured extent
+
+  var res : DEResult;
+
+  let c1 = vec2<f32>(pos.x + X_SHIFT, pos.y - pos.z);
+  let c2 = vec2<f32>(pos.x + X_SHIFT, pos.y + pos.z);
+
+  // Both components iterate together; each carries its own derivative for the
+  // Douady-Hubbard exterior estimate D = 2|z| log|z| / |z'|.
+  var z1 = vec2<f32>(0.0); var d1 = vec2<f32>(1.0, 0.0);
+  var z2 = vec2<f32>(0.0); var d2 = vec2<f32>(1.0, 0.0);
+  var e1 = 0.0; var e2 = 0.0;      // escape estimates, 0 while still bounded
+  var esc = f32(TB_ITERS);
+  var live1 = true; var live2 = true;
+
+  for (var i = 0; i < TB_ITERS; i = i + 1) {
+    if (live1) {
+      // z' = 2 z z' + 1, using z BEFORE the update
+      d1 = 2.0 * vec2<f32>(z1.x * d1.x - z1.y * d1.y,
+                           z1.x * d1.y + z1.y * d1.x) + vec2<f32>(1.0, 0.0);
+      z1 = vec2<f32>(z1.x * z1.x - z1.y * z1.y, 2.0 * z1.x * z1.y) + c1;
+      let m2 = dot(z1, z1);
+      if (m2 > BAILOUT) {
+        let m = sqrt(m2);
+        e1 = 2.0 * m * log(m) / max(length(d1), 1e-12);
+        esc = min(esc, f32(i));
+        live1 = false;
+      }
+    }
+    if (live2) {
+      d2 = 2.0 * vec2<f32>(z2.x * d2.x - z2.y * d2.y,
+                           z2.x * d2.y + z2.y * d2.x) + vec2<f32>(1.0, 0.0);
+      z2 = vec2<f32>(z2.x * z2.x - z2.y * z2.y, 2.0 * z2.x * z2.y) + c2;
+      let m2 = dot(z2, z2);
+      if (m2 > BAILOUT) {
+        let m = sqrt(m2);
+        e2 = 2.0 * m * log(m) / max(length(d2), 1e-12);
+        esc = min(esc, f32(i));
+        live2 = false;
+      }
+    }
+    if (!live1 && !live2) { break; }
+  }
+
+  // Intersection of the two prisms, so the larger estimate governs. The sqrt2
+  // is the projection's metric distortion, not a fudge: for m(p) = (x, y -+ z),
+  // |m(p) - m(q)|^2 = dx^2 + (dy -+ dz)^2 <= 2|p - q|^2, so |p - q| >= D/sqrt2.
+  let field = max(e1, e2) / SQRT2;
+
+  // The formula is sharp at the surface (measured ratio to true distance 0.90)
+  // but increasingly optimistic away from it -- at the camera it claimed 10.85
+  // against a true 2.9, and the first CPU render came back completely empty
+  // because the opening step cleared the whole object. The set is contained in
+  // the box, so the box SDF is also a valid under-estimate; the max of the two
+  // takes the box in the far field and the formula near the surface.
+  //
+  // The divisor has to match where the point is. max() of two estimates is only
+  // valid when BOTH under-estimate, and 2.4 holds only inside the box -- outside
+  // it the formula runs to 4.14x, and using 2.4 there let the march skip the
+  // object entirely: every ray in the reference sweep reported a miss.
+  let q = abs(pos) - BOX;
+  let box = min(max(q.x, max(q.y, q.z)), 0.0) + length(max(q, vec3<f32>(0.0)));
+  let kde = select(KDE_IN, KDE_OUT, box > 0.0);
+
+  res.dist = max(box, field / kde);
+  // Escape iteration: the boundary's filigree reads as a different band from
+  // the solid body, which never escapes at all.
+  res.trap = clamp(0.10 + 0.028 * esc, 0.0, 1.0);
+  return res;
+}
+
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
   let ft = u.fractalType;
@@ -1075,9 +1181,11 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
     return deKleinian(pos);
   } else if (ft < 11.5) {
     return deBarth(pos);
+  } else if (ft < 13.5) {
+    // Both Schottky entries share one estimator; the id selects the regime.
+    return deSchottky(pos);
   }
-  // Both Schottky entries share one estimator; the id selects the regime.
-  return deSchottky(pos);
+  return deTetrabrot(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {
@@ -1213,7 +1321,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // Strange attractors aren't distance fields — they're rasterized as line
   // geometry by a second pipeline drawn over this pass. Emit only the
   // background here so those lines have something to blend onto.
-  if (u.fractalType > 13.5) {
+  if (u.fractalType > 14.5) {
     let bg = backgroundColor(rd);
     return vec4<f32>(select(vec3<f32>(0.0), bg, u.bgMode >= 0.5), 0.0);
   }

@@ -34,6 +34,7 @@ No Three.js, no Babylon, no build step, and no npm. Just ES modules, WGSL, and H
 - Barth sextic
 - Kissing Schottky group (parabolic)
 - Schottky group (hyperbolic)
+- Tetrabrot (bicomplex Mandelbrot slice)
 - Aizawa strange attractor
 - Lorenz strange attractor
 
@@ -282,6 +283,7 @@ Uniforms occupy one 160-byte, 16-byte-aligned buffer. The byte offsets are mirro
 - **Kleinian limit set:** box fold and conditional sphere inversion generating a discrete group's accumulation set
 - **Barth sextic:** a degree-6 algebraic surface carrying the maximum number of nodes a sextic can have
 - **Schottky groups:** a free discrete group of Möbius transformations of space, at and near the kissing configuration
+- **Tetrabrot:** a 3D slice of the bicomplex Mandelbrot set, the parameter-space companion to the quaternion Julia
 
 All shader loops are statically bounded for WGSL portability, with guarded logarithm, power, radius, and inversion domains.
 
@@ -292,6 +294,26 @@ A Kleinian group is a discrete group of Möbius transformations, and its limit s
 The smooth caps in the result are not an artefact: they are the group's tangent spheres, with recursive filigree running along the ridges where they meet. Slowly drifting the inversion radius walks the construction through a family of nearby Kleinian groups, morphing the limit set within a narrow band — the structure degenerates quickly outside it.
 
 Parameters came from rendering candidates rather than from a reference. The construction is sharply sensitive to them: of the first four published-looking parameter sets tried, three collapsed into featureless lobes, and swapping the final primitive alone was enough to turn the surface from tangent spheres into granular noise.
+
+#### Tetrabrot
+
+The parameter-space companion to the quaternion Julia set — but deliberately **not** the quaternion Mandelbrot set, which is degenerate.
+
+Starting from `z₀ = 0`, every iterate of `z² + c` is a real polynomial in `c`, so the orbit never leaves the commutative subalgebra `ℝ[c]`, which for a non-real quaternion is isomorphic to `ℂ` by `c ↦ Re(c) + i|Im(c)|`. Membership therefore depends on `c` only through `(Re c, |Im c|)` — making the quaternion Mandelbrot set the **plane Mandelbrot set revolved about the real axis**, a 2D pattern spun around a primitive, which this project's own rules exclude. Measured before discarding it: 4000 random quaternions gave **zero** escape-time mismatches against the complex iteration, and **zero** disagreements across 2400 random rotations of `Im(c)`.
+
+Bicomplex numbers escape this because they are commutative *with zero divisors*. In the idempotent basis `e₁ = (1+ij)/2`, `e₂ = (1−ij)/2` every element splits as `w = w₁e₁ + w₂e₂` with multiplication **componentwise**, so `w ↦ w² + c` decouples into two independent complex quadratic maps and `c` is in the set exactly when both components are in `M`. For the standard slice `c = x + yi + zj`:
+
+```text
+c₁ = x + (y − z)i        c₂ = x + (y + z)i
+```
+
+So the Tetrabrot is the **intersection of two prisms** over the classical Mandelbrot set, erected along the two diagonals of the `(y,z)` plane. That is genuinely three-dimensional: 580 of 2000 rotated samples change membership, where the quaternion version had none. The `z = 0` cross-section is exactly the classical Mandelbrot set, since both components collapse there — checked cell by cell, 32 disagreements in 25,600, all on the boundary.
+
+The corrugated ridges on the surface are the object, not an artefact — the surface is the preimage of `∂M` under the projection, so the Mandelbrot boundary's filaments are swept along the two prism axes. Raising the bailout and the iteration count leaves them unchanged.
+
+Each component takes the Douady–Hubbard exterior estimate `2|z|log|z|/|z′|`, combined with `max` because the set is an intersection, and divided by `√2` for the projection's metric distortion — `|m(p) − m(q)|² = dx² + (dy∓dz)² ≤ 2|p−q|²`, so the factor is a genuine bound rather than a fudge.
+
+**The formula is sharp at the surface and badly optimistic away from it** — measured ratio to true distance 0.90 close in, but 10.85 against a true 2.9 at the camera, so the opening step cleared the whole object and the first render came back completely empty. The set is contained in a tight box, so the box SDF is also a valid under-estimate and the larger of the two wins: the box in the far field, the formula near the surface. The divisor has to match which region the point is in — 2.4 inside the box (worst sampled 2.248), 4.5 outside (worst sampled 4.139). Using the in-box figure everywhere made *every* reference ray miss.
 
 #### Kissing Schottky groups
 
