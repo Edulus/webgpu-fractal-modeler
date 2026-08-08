@@ -313,3 +313,40 @@ export function orbitDragScale(zoom, pinned = false) {
   if (pinned) return 1;
   return clamp((zoom - 0.45) / 0.55, DRAG_MIN, DRAG_MAX);
 }
+
+
+// ---- Device-loss recovery ---------------------------------------------------
+//
+// A lost GPU device is usually transient -- a driver reset, a laptop switching
+// GPUs, a tab backgrounded too long -- and re-initialising recovers it. What is
+// NOT recoverable is losing the device again and again in quick succession.
+//
+// The first version of this recorded a single boolean the moment it re-tried
+// and never cleared it, so the SECOND loss in a session was fatal however many
+// hours apart the two were, and it reported "re-init failed" even though the
+// earlier re-init had actually succeeded. The visible result was a hidden
+// canvas and a "WebGPU unavailable" banner on a machine where WebGPU worked.
+//
+// Pure so it can be tested without a GPU, which is the whole difficulty with
+// this path: a device loss cannot be provoked on demand.
+
+/** Re-init attempts allowed inside one burst before giving up. */
+export const MAX_REINITS = 3;
+/** A device that survives this long is treated as recovered, not as failing. */
+export const REINIT_RESET_MS = 60000;
+
+/**
+ * Decide what to do when the device is lost.
+ *
+ * @param {number} attempts  re-inits already made in the current burst
+ * @param {number} aliveMs   how long the device lasted since it came up
+ * @returns {{retry: boolean, attempts: number}} the decision, and the attempt
+ *   count to carry forward -- reset to zero when the device had been alive long
+ *   enough to count as recovered rather than failing.
+ */
+export function planDeviceLoss(attempts, aliveMs) {
+  // Survived long enough that this is a fresh incident, not the same burst.
+  if (aliveMs >= REINIT_RESET_MS) return { retry: true, attempts: 1 };
+  if (attempts < MAX_REINITS) return { retry: true, attempts: attempts + 1 };
+  return { retry: false, attempts };
+}

@@ -21,6 +21,7 @@ import {
   makeFlyCamera, stepFlyCamera, aimFlyCamera, dollyFlyCamera, scaleFlySpeed,
   usableClearance, orbitDragScale, pinchZoomFactor, pinchDollyDistance,
   driftFloor, decayMomentum, DRIFT_RATE, FLY_SPEED_MIN, FLY_SPEED_MAX,
+  planDeviceLoss, MAX_REINITS,
 } from './camera.js';
 
 // ---- Uniform buffer layout (mirror of the WGSL Uniforms struct) -----------
@@ -1405,6 +1406,9 @@ export async function initFractalBackground(canvas, options = {}) {
   async function init(isReinit) {
     const device = await acquireDevice();
     state.device = device;
+    // When this device came up, so a later loss can tell a fresh incident from
+    // the continuation of a failing burst.
+    state._deviceUpAt = performance.now();
 
     // Device-lost handling: try one re-init, then fall back.
     device.lost.then((info) => {
@@ -1412,11 +1416,18 @@ export async function initFractalBackground(canvas, options = {}) {
       // 'destroyed' reason means we tore it down intentionally.
       if (info.reason === 'destroyed') return;
       console.warn('[fractal-bg] device lost:', info.message);
-      if (!state._reinitAttempted) {
-        state._reinitAttempted = true;
+      // A loss is usually transient and re-initialising recovers it. Only a
+      // BURST of losses is fatal: a device that ran for a while before failing
+      // starts a fresh count, so one bad moment hours into a session is not
+      // treated as the continuation of an earlier one.
+      const aliveMs = performance.now() - (state._deviceUpAt || 0);
+      const plan = planDeviceLoss(state._reinits || 0, aliveMs);
+      state._reinits = plan.attempts;
+      if (plan.retry) {
         reinit();
       } else {
-        opts.onUnsupported('WebGPU device lost and re-init failed');
+        opts.onUnsupported(
+          `WebGPU device lost ${plan.attempts} times in quick succession`);
         destroy();
       }
     });
