@@ -54,6 +54,7 @@ const RAMP_MAX : u32 = 8u;
 //   248 colorCycle   : f32   (palette cycles per second; 0 = static)
 //   252 _pad3        : f32
 //   256 ramp         : array<vec4<f32>, 8>  (imported palette stops)
+//   384 imageAdjust  : vec4<f32>  (exposure, contrast, saturation, hue)
 struct Uniforms {
   resolution : vec2<f32>,
   time       : f32,
@@ -87,6 +88,8 @@ struct Uniforms {
   colorCycle   : f32,
   _pad3        : f32,
   ramp         : array<vec4<f32>, RAMP_MAX>,
+  // (exposure, contrast, saturation, hue turns) -- composite pass only.
+  imageAdjust  : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;

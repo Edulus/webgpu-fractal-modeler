@@ -59,9 +59,13 @@ const U = {
   colorCycle: 62,   // palette cycles per second; 0 = static
   _pad3: 63,        // pads the ramp array to a 16-byte boundary
   ramp: 64,         // 8 * vec4 -> slots 64..95 (byte 256)
+  // Post-chain image adjustments, applied in the composite pass only, so
+  // changing them never re-marches the scene or resets accumulation.
+  // (exposure, contrast, saturation, hue turns). Byte 384, 16-byte aligned.
+  imageAdjust: 96,
 };
-const UNIFORM_FLOATS = 96;
-const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 384
+const UNIFORM_FLOATS = 100;
+const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 400
 
 // Distance-estimated fractals occupy ids 0..22; the volumetric/line-rendered
 // attractors follow at 23+. The shader keys off that split (see the
@@ -292,6 +296,8 @@ export async function initFractalBackground(canvas, options = {}) {
     accumSamples: 0,
     // Palette cycles per second. One full turn of hue every 40s by default.
     colorCycle: opts.colorCycle ?? 0.025,
+    // Neutral by default, so the shipped image is unchanged.
+    image: { exposure: 1, contrast: 1, saturation: 1, hue: 0 },
     accumParity: 0,
     accumOn: true,
     // active pointers for drag / pinch tracking
@@ -858,6 +864,11 @@ export async function initFractalBackground(canvas, options = {}) {
     // changing it never invalidates the accumulated image -- which is the whole
     // point: the colour keeps moving on a frame that has already converged.
     d[U.colorCycle] = state.colorCycle;
+    const im = state.image;
+    d[U.imageAdjust] = im.exposure;
+    d[U.imageAdjust + 1] = im.contrast;
+    d[U.imageAdjust + 2] = im.saturation;
+    d[U.imageAdjust + 3] = im.hue;
 
     const p = state.palette;
     const ramp = state.paletteRamp;
@@ -1713,6 +1724,19 @@ export async function initFractalBackground(canvas, options = {}) {
      * Deliberately does NOT reset accumulation: the cycle lives in the post
      * chain, so a converged image keeps its sharpness while the colour moves.
      */
+    /**
+     * Post-chain image adjustments. Accepts any subset of
+     * {exposure, contrast, saturation, hue}; hue is in turns, 0..1.
+     * Like the colour cycle these live in the composite pass, so they do NOT
+     * reset accumulation -- a slider drag stays sharp instead of re-marching.
+     */
+    setImageAdjust(next) {
+      const im = state.image;
+      for (const k of ['exposure', 'contrast', 'saturation', 'hue']) {
+        if (next && next[k] !== undefined) im[k] = Number(next[k]) || 0;
+      }
+      if (!state.running) renderFrame(performance.now(), true);
+    },
     setColorCycle(rate) {
       state.colorCycle = Math.max(0, Number(rate) || 0);
       if (!state.running) renderFrame(performance.now(), true);
@@ -1827,6 +1851,7 @@ export async function initFractalBackground(canvas, options = {}) {
         clearance: Number.isFinite(state.probeDist) ? +state.probeDist.toFixed(4) : null,
         samples: state.accumSamples,
         colorCycle: state.colorCycle,
+        image: { ...state.image },
         zoom: +(state.orbit.dist / (CAM_RADIUS[state.fractalType] ?? 2.55)).toFixed(3),
         pinned: state.orbit.pinned,
         drifting: orbitDrifting(),

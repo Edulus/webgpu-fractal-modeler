@@ -130,7 +130,8 @@
          panel's width. */
       min-width: 0;
     }
-    #panel > *, #panel label, #panel .row > *, #panel #pal-io > * { min-width: 0; }
+    #panel > *, #panel label, #panel .row > *,
+    #panel #pal-io > *, #panel #img-io > * { min-width: 0; }
     /* A text input carries an intrinsic size of ~20 characters regardless of
        its container, which pushed the Save button past the panel edge even
        after the grid tracks were freed. */
@@ -152,6 +153,25 @@
       gap: 8px;
     }
     #panel label.check input { width: auto; accent-color: var(--accent); }
+    /* Image sliders, collapsed by default so the panel stays as compact as it
+       was -- it is only 208px wide on a phone. */
+    #img-io { color: var(--muted); font-size: 12px; }
+    #img-io summary { cursor: pointer; padding: 2px 0; }
+    #img-io > *:not(summary) { margin-top: 7px; }
+    #panel label.slider { gap: 2px; font-size: 12px; }
+    /* A range input carries an intrinsic width of its own (~129px in Chromium)
+       and, like every other grid item, min-width:auto keeps it from shrinking
+       below that. Inside the 178px of content a phone panel has, that is what
+       pushed the four sliders past the panel edge. */
+    #panel input[type="range"] {
+      accent-color: var(--accent);
+      /* The UA sheet gives a range 2px of margin on every side, which sits
+         outside a width:100% track and put the thumb 2px past the panel. */
+      padding: 0;
+      margin: 0;
+      min-width: 0;
+      box-sizing: border-box;
+    }
     #panel select, #panel button {
       appearance: none;
       background: rgba(6, 8, 16, 0.7);
@@ -439,6 +459,24 @@
     <button id="btn-explorer">Enter explorer mode</button>
     <button id="btn-fly">Fly through</button>
     <button id="btn-reset" class="hidden">Reset view</button>
+
+    <details id="img-io">
+      <summary>Image…</summary>
+      <label class="slider">Brightness
+        <input type="range" id="adj-exposure" min="0.2" max="3" step="0.01" value="1" />
+      </label>
+      <label class="slider">Contrast
+        <input type="range" id="adj-contrast" min="0.5" max="2" step="0.01" value="1" />
+      </label>
+      <label class="slider">Saturation
+        <input type="range" id="adj-saturation" min="0" max="2" step="0.01" value="1" />
+      </label>
+      <label class="slider">Hue
+        <input type="range" id="adj-hue" min="0" max="1" step="0.005" value="0" />
+      </label>
+      <button id="adj-reset">Reset image</button>
+    </details>
+
     <div id="hud">initializing…</div>
   </div>
 
@@ -782,6 +820,37 @@
         }
       });
       btnReset.addEventListener('click', () => handle.resetView());
+
+      // Colour cycling on/off. The rate the renderer booted with is the "on"
+      // setting, so the checkbox never invents a speed of its own.
+      {
+        const chk = document.getElementById('chk-cycle');
+        const rate = handle.info.colorCycle || 0.025;
+        chk.checked = handle.info.colorCycle > 0;
+        chk.addEventListener('change', () => handle.setColorCycle(chk.checked ? rate : 0));
+      }
+
+      // Image adjustments. All four live in the composite pass, so dragging a
+      // slider re-presents the accumulated frame rather than re-marching it --
+      // the picture stays sharp under the drag instead of dissolving into noise
+      // and re-converging, which is what any control on the raymarch does.
+      {
+        const NEUTRAL = { exposure: 1, contrast: 1, saturation: 1, hue: 0 };
+        const inputs = {
+          exposure: document.getElementById('adj-exposure'),
+          contrast: document.getElementById('adj-contrast'),
+          saturation: document.getElementById('adj-saturation'),
+          hue: document.getElementById('adj-hue'),
+        };
+        for (const [key, el] of Object.entries(inputs)) {
+          // 'input', not 'change': the picture should follow the thumb.
+          el.addEventListener('input', () => handle.setImageAdjust({ [key]: +el.value }));
+        }
+        document.getElementById('adj-reset').addEventListener('click', () => {
+          for (const [key, el] of Object.entries(inputs)) el.value = NEUTRAL[key];
+          handle.setImageAdjust(NEUTRAL);
+        });
+      }
       // (Double-tap / double-click freezes the view; handled inside the library
       // so it can tell a real tap from the end of a pinch. Recentring is this
       // button, deliberately kept apart from freezing -- stopping on something

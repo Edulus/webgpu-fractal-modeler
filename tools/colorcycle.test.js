@@ -1,8 +1,9 @@
-// Colour-cycle maths. Run: node tools/colorcycle.test.js
+// Colour maths of the composite pass. Run: node tools/colorcycle.test.js
 //
-// A JS mirror of hueRotate() in composite.wgsl.js. The shader itself cannot be
-// exercised here -- this environment loses the GPU device -- so the properties
-// that make the cycle seamless are checked on the arithmetic instead.
+// A JS mirror of hueRotate() and the image-adjustment chain in
+// composite.wgsl.js. The shader itself cannot be exercised here -- this
+// environment loses the GPU device -- so the properties that make the cycle
+// seamless, and the sliders well-behaved, are checked on the arithmetic.
 
 const K = [0.57735027, 0.57735027, 0.57735027];
 const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
@@ -72,6 +73,96 @@ check('the clamped form is non-negative everywhere', bad === 0);
 check('clamping leaves grey untouched', nearV(shaderRotate(grey, 2.0), grey, 1e-6));
 check('and still returns to the start after a full turn',
       nearV(shaderRotate(mixed, TAU), mixed, 1e-6));
+
+// ---- Image adjustments -----------------------------------------------------
+// The rest of fs_composite, up to the vignette: exposure into the tonemapper,
+// gamma, then saturation and contrast in display space.
+
+const clamp01 = (x) => Math.min(Math.max(x, 0), 1);
+const acesFilm = (c) => c.map((x) =>
+  clamp01((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)));
+const luma = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+
+// hue is in turns; phase is what the cycle contributes at this instant.
+function adjust(hdr, { exposure = 1, contrast = 1, saturation = 1, hue = 0 } = {}, phase = 0) {
+  const turns = hue + phase;
+  let c = turns !== 0 ? hueRotate(hdr, TAU * turns).map((v) => Math.max(v, 0)) : hdr;
+  c = acesFilm(c.map((v) => v * 1.05 * exposure)).map((v) => Math.pow(v, 1 / 2.2));
+  const L = luma(c);
+  c = c.map((v) => L + (v - L) * saturation);
+  c = c.map((v) => (v - 0.5) * contrast + 0.5);
+  return c.map((v) => Math.max(v, 0));
+}
+
+// The shipped defaults must leave the picture exactly as it was before the
+// sliders existed, or every screenshot in the README is now wrong.
+const oldChain = (hdr) => acesFilm(hdr.map((v) => v * 1.05)).map((v) => Math.pow(v, 1 / 2.2));
+for (const c of [red, mixed, grey, [0.05, 0.9, 0.2], [2.4, 1.8, 0.3]]) {
+  check(`neutral settings are the untouched chain for ${c}`, nearV(adjust(c), oldChain(c), 1e-12));
+}
+
+// Exposure sits BEFORE the tonemapper, which is what makes it roll off rather
+// than clip: brighter always reads as brighter, and never leaves the display
+// range even at the top of the slider.
+let monotone = true, inRange = true;
+for (const c of [mixed, [0.2, 0.4, 0.9], [1.5, 1.5, 1.5]]) {
+  let prev = -1;
+  for (let e = 0.2; e <= 3.0001; e += 0.05) {
+    const out = adjust(c, { exposure: e });
+    if (luma(out) < prev - 1e-9) monotone = false;
+    if (out.some((v) => v > 1 + 1e-9)) inRange = false;
+    prev = luma(out);
+  }
+}
+check('brightness is monotone across its whole range', monotone);
+check('and never pushes a channel past white', inRange);
+
+// Saturation: 0 is the greyscale of the same picture, 1 changes nothing.
+check('saturation 1 is the identity', nearV(adjust(mixed, { saturation: 1 }), adjust(mixed), 1e-12));
+const flat = adjust(mixed, { saturation: 0 });
+check('saturation 0 is achromatic', near(flat[0], flat[1]) && near(flat[1], flat[2]));
+check('and holds the luminance it started from', near(luma(flat), luma(adjust(mixed)), 1e-6));
+
+// Contrast pivots on mid-grey. Pivot anywhere else and the picture visibly
+// brightens or darkens as the control is turned, which reads as a broken
+// slider rather than a contrast one.
+// The scene value that lands on display 0.5 through exposure, ACES and gamma.
+const midHdr = [0.1441075, 0.1441075, 0.1441075];
+const mid = adjust(midHdr)[0];
+let pivotDrift = 0;
+for (const k of [0.5, 0.8, 1.3, 2.0]) {
+  pivotDrift = Math.max(pivotDrift, Math.abs(adjust(midHdr, { contrast: k })[0] - mid));
+}
+check('contrast holds mid-grey within 2/255', pivotDrift < 2 / 255);
+check('contrast > 1 pushes a bright value brighter',
+      adjust([1.2, 1.2, 1.2], { contrast: 1.8 })[0] > adjust([1.2, 1.2, 1.2])[0]);
+
+// The hue slider and the cycle are added together, so one offsets the loop
+// rather than overriding it -- and a whole turn of slider is no turn at all.
+check('slider hue and cycle phase compose',
+      nearV(adjust(mixed, { hue: 0.25 }), adjust(mixed, { hue: 0 }, 0.25), 1e-12));
+check('a full turn of the hue slider is neutral',
+      nearV(adjust(mixed, { hue: 1 }), adjust(mixed), 1e-6));
+
+// Nothing anywhere in the parameter space may leave a negative channel: the
+// gamma step is pow(), and pow() of a negative base is NaN -- black or garbage
+// pixels rather than a merely wrong colour.
+let neg = 0, nan = 0;
+for (const c of [red, mixed, grey, [1, 1, 1], [0, 0, 0], [3, 0.1, 0.02]]) {
+  for (const exposure of [0.2, 1, 3]) {
+    for (const contrast of [0.5, 1, 2]) {
+      for (const saturation of [0, 1, 2]) {
+        for (let h = 0; h < 1; h += 0.05) {
+          const out = adjust(c, { exposure, contrast, saturation, hue: h });
+          if (out.some((v) => v < 0)) neg++;
+          if (out.some((v) => Number.isNaN(v))) nan++;
+        }
+      }
+    }
+  }
+}
+check('no combination of the four sliders goes negative', neg === 0);
+check('and none produces NaN', nan === 0);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 console.log(`(${negatives}/2000 angles drive a channel negative for pure red)`);

@@ -42,6 +42,8 @@ struct Uniforms {
   colorCycle   : f32,
   _pad3        : f32,
   ramp         : array<vec4<f32>, 8>,
+  // (exposure, contrast, saturation, hue turns) -- composite pass only.
+  imageAdjust  : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;
@@ -173,19 +175,34 @@ fn fs_composite(in : VSOut) -> @location(0) vec4<f32> {
   // angle bounded, so a session running for hours has the same precision as one
   // running for seconds rather than losing bits to a growing time value.
   let rate = select(u.colorCycle, 0.0, u.reducedMotion > 0.5);
-  if (rate > 0.0) {
+  // The slider sets where the loop sits; the cycle carries it on from there, so
+  // the two compose instead of one overriding the other. With cycling off this
+  // is a plain hue control.
+  let hueTurns = u.imageAdjust.w + select(0.0, fract(u.time * rate), rate > 0.0);
+  if (hueTurns != 0.0) {
     // Clamped because rotating about grey takes saturated colours OUT of the
     // positive octant -- measured, a channel goes negative at 1999 of 2000
     // angles for pure red. Negatives survive acesFilm and then reach
     // pow(col, 1/2.2), which is NaN for a negative base: black or garbage
     // pixels rather than a wrong hue. Clamping desaturates the few colours that
     // leave the gamut, which is the usual and correct answer.
-    hdr = max(hueRotate(hdr, 6.28318531 * fract(u.time * rate)), vec3<f32>(0.0));
+    hdr = max(hueRotate(hdr, 6.28318531 * hueTurns), vec3<f32>(0.0));
   }
 
-  // Tonemap + gamma.
-  var col = acesFilm(hdr * 1.05);
+  // Exposure BEFORE the tonemapper, which is what makes it behave like a
+  // camera: highlights roll off along the ACES curve instead of clipping flat,
+  // which is what a brightness multiply after the tonemap would do. The 1.05
+  // was already here as a fixed exposure; the slider scales it.
+  var col = acesFilm(hdr * 1.05 * u.imageAdjust.x);
   col = pow(col, vec3<f32>(1.0 / 2.2));
+
+  // Saturation and contrast in DISPLAY space, after gamma. Contrast pivots on
+  // mid-grey; pivot anywhere else and the picture visibly brightens or darkens
+  // as the control is turned. Applied before the vignette so that stays an
+  // even frame effect rather than being amplified along with everything else.
+  col = mix(vec3<f32>(luma(col)), col, u.imageAdjust.z);
+  col = (col - vec3<f32>(0.5)) * u.imageAdjust.y + vec3<f32>(0.5);
+  col = max(col, vec3<f32>(0.0));
 
   // Vignette — subtle, keeps edges dark for text legibility.
   let q = in.uv - vec2<f32>(0.5);

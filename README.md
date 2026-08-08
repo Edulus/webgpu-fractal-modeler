@@ -119,6 +119,10 @@ It used to live on the palette lookup inside the raymarch, where it could only b
 
 The rotation is about the grey axis, by Rodrigues' formula, so the achromatic axis is fixed: greys, whites and specular highlights stay neutral, the channel sum is preserved so brightness holds steady, and a full turn returns exactly to the start, which is what makes the loop seamless. It is clamped afterwards, because rotating about grey takes saturated colours out of the positive octant — measured, a channel goes negative at 1999 of 2000 angles for pure red, and a negative reaching `pow(col, 1/2.2)` is NaN rather than merely a wrong hue. Pinned under `prefers-reduced-motion`.
 
+**Brightness, contrast, saturation and hue are camera controls, not filters.** They live in the same post chain as the cycle, for the same reason: dragging a slider re-presents the frame that is already there instead of re-marching it, so the picture stays sharp under the drag rather than dissolving into noise and re-converging. Anything wired to the raymarch behaves the opposite way.
+
+Where each one sits in the chain is what makes it behave. Brightness is an exposure multiply *before* the tonemapper, so highlights roll off along the ACES curve the way a camera's do; the same multiply after the tonemap would clip them flat. Hue joins the cycle's phase by addition, so the slider offsets where the loop sits rather than fighting it, and with cycling off it is a plain hue control. Saturation and contrast come after gamma, in display space, and contrast pivots on mid-grey — pivot anywhere else and the picture visibly brightens or darkens as the control is turned. All four are neutral by default, so an unchanged installation renders exactly what it did before they existed.
+
 **Switching models carries the zoom as a ratio.** Each estimator lives at a different world scale, which is what the per-model orbit radius is for, so keeping the raw distance across a switch means arriving at a model framed by the previous one's size. The distance is rescaled by the ratio of the two radii and the pivot returns to the origin, since it described a surface that no longer exists.
 
 **The view keeps its momentum.** Angular velocity decays towards a floor rather than towards zero: a throw sheds its speed over a few seconds and settles into a drift of about two degrees a second — a full turn in three minutes — which it then holds indefinitely. The floor points wherever the last movement went, so the model carries on the way you left it going. A view that has never been dragged has no last movement to retain and stands still.
@@ -223,6 +227,8 @@ Recommended canvas CSS:
 | `setFractal(name)` | Switch the model at runtime without reinitializing WebGPU. |
 | `setPalette(name)` | Switch the cosine palette at runtime. |
 | `setPaletteColors(colors)` | Use an imported palette: `[[r,g,b], …]` in 0..1. `null` returns to the preset. |
+| `setColorCycle(rate)` | Hue cycles per second; `0` stops it. Does not reset accumulation. |
+| `setImageAdjust({exposure, contrast, saturation, hue})` | Post-chain image controls, any subset. `hue` is in turns. Does not reset accumulation. |
 | `setQuality(mode)` | Select low, medium, high, or adaptive rendering quality. |
 | `setTransparent(bool)` | Toggle transparent embedding and opaque presentation modes. |
 | `setExplorer(bool)` | Toggle the full model-viewer preset. |
@@ -236,7 +242,7 @@ Recommended canvas CSS:
 | `pause()` | Stop the render loop. |
 | `resume()` | Resume rendering while respecting visibility gating. |
 | `destroy()` | Tear down observers, listeners, textures, and the WebGPU device. |
-| `info` | Model, quality, FPS, reduced-motion, explorer, fly, speed, position, zoom, whether the orbit pivot is pinned, camera clearance, and accumulated sample count. |
+| `info` | Model, quality, FPS, reduced-motion, explorer, fly, speed, position, zoom, whether the orbit pivot is pinned, camera clearance, accumulated sample count, cycle rate, and the image settings. |
 
 ## Loading palettes
 
