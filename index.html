@@ -209,6 +209,38 @@
       font-weight: 600;
     }
 
+    /* Wall label: what the current shape is. Lower-left, because explorer and
+       fly modes hide .wrap and leave that whole side of the screen empty. Not
+       shown in the default background mode, where the page content is the
+       subject and a caption over it would just be clutter. */
+    #model-note {
+      position: fixed;
+      left: 18px;
+      /* Clear of the bottom-centre nav/fly hint, which shares this edge and is
+         visible in exactly the same modes. */
+      bottom: 64px;
+      z-index: 10;
+      max-width: min(34ch, 34vw);
+      padding: 11px 14px;
+      border-radius: 12px;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      backdrop-filter: blur(10px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.35s ease;
+    }
+    body.explorer #model-note, body.flying #model-note { opacity: 1; }
+    #model-note b {
+      display: block;
+      color: var(--fg);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      margin-bottom: 3px;
+    }
+    #model-note span { color: var(--muted); font-size: 12px; line-height: 1.5; }
+
     /* Navigation hint — only visible in explorer mode. */
     #nav-hint {
       position: fixed;
@@ -272,6 +304,8 @@
     @media (max-width: 640px) {
       #panel { width: 168px; top: 10px; right: 10px; padding: 10px 12px; }
       #nav-hint, #fly-hint { font-size: 11px; padding: 7px 12px; bottom: 12px; }
+      /* Sit above the bottom-centre hint rather than beside it. */
+      #model-note { left: 10px; right: 10px; bottom: 56px; max-width: none; }
     }
   </style>
 </head>
@@ -354,6 +388,8 @@
   </div>
 
   <!-- Navigation hint (shown only in explorer mode) -->
+  <aside id="model-note" aria-live="polite"><b></b><span></span></aside>
+
   <div id="nav-hint">Drag to rotate · pinch or scroll to zoom · double-tap to freeze the view</div>
   <div id="fly-hint">WASD to move · Q/E down·up · drag to look · shift to sprint · scroll for speed</div>
 
@@ -569,8 +605,66 @@
         }
       });
 
+      // Wall label: the formal name, then one sentence on what the thing is.
+      // The names in the dropdown stay exactly as they are -- they are the draw,
+      // and they read as meaning something because they do. This is the payoff
+      // for the curiosity they create, so nobody has to leave to find out.
+      const NOTES = {
+        mandelbulb: ['Mandelbulb',
+          'A point raised to the eighth power in spherical coordinates, over and over. The best-known attempt at a Mandelbrot set for three dimensions.'],
+        mandelbox: ['Mandelbox',
+          'A box fold and a sphere fold applied in turn, endlessly, which builds an architecture of ledges and shafts out of two simple rules.'],
+        menger: ['Menger sponge',
+          'A cube with a cross bored through it, then the same cross bored through every piece that remains, forever.'],
+        julia: ['Quaternion Julia set',
+          'A Julia set built from quaternions, which is four-dimensional, cut down to the three-dimensional slice you can see.'],
+        apollonian: ['Apollonian packing',
+          'Spheres dropped into the gaps between spheres, and into the gaps those leave, without end.'],
+        spherepack: ['Nested sphere packing',
+          'The same packing rule resolved into tangent spheres of every size, each sitting in the hollow left by its neighbours.'],
+        encrusted: ['Ornate planet',
+          'A smooth world with a fractal growth gathered around one pole, thinning as it spreads towards the equator.'],
+        surfacepack: ['Studded surface packing',
+          'Three nested scales of repeating cells, each one studded with spheres cut against a shell around a solid core.'],
+        gyroid: ['Gyroid',
+          'A minimal surface dividing space into two interlocking labyrinths. It contains no straight line and no mirror plane anywhere.'],
+        kleinian: ['Kleinian limit set',
+          'The set of points that a discrete group of Mobius transformations piles up on when its moves are repeated without end.'],
+        barth: ['Barth sextic',
+          'A surface of degree six carrying 65 singular points, which is the greatest number a sextic can possibly have.'],
+        schottky: ['Kissing Schottky group',
+          'Five mutually tangent spheres, reflected through one another. Where they touch, the motions of the group become parabolic and the packing closes up.'],
+        schottkyh: ['Schottky group, hyperbolic',
+          'The same five spheres pulled apart. Every motion turns hyperbolic and the packing opens into a scattered dust.'],
+        tetrabrot: ['Tetrabrot',
+          'A slice through the bicomplex Mandelbrot set. Two Mandelbrot sets crossed at right angles, which is why the flat cut through the middle is the familiar one.'],
+        envoct: ['Stella octangula',
+          'A pyramid raised on each face of an octahedron, each one turning out to be a perfect tetrahedron. Kepler described it in 1611.'],
+        envdodec: ['Small stellated dodecahedron',
+          'The same construction on a dodecahedron. The spikes are longer than the faces they stand on, by the golden ratio exactly.'],
+        hyp534: ['Hyperbolic honeycomb {5,3,4}',
+          'Dodecahedra filling curved space, four meeting along every edge. They are all the same size; the shrinking is what flattening that space onto a ball does to it.'],
+        hyp435: ['Hyperbolic honeycomb {4,3,5}',
+          'Cubes filling the same curved space, five meeting along every edge, which no ordinary space could accommodate.'],
+        attractor: ['Aizawa attractor',
+          'One trajectory, traced for six hundred thousand steps. It never repeats and never escapes, and never quite closes the loop.'],
+        lorenz: ['Lorenz attractor',
+          'The original strange attractor: convection stripped down to three equations, and the reason weather cannot be forecast far ahead.'],
+      };
+
+      function showNote(key) {
+        const n = NOTES[key];
+        const el = document.getElementById('model-note');
+        if (!n) { el.style.display = 'none'; return; }
+        el.style.display = '';
+        el.querySelector('b').textContent = n[0];
+        el.querySelector('span').textContent = n[1];
+      }
+      showNote(document.getElementById('sel-fractal').value);
+
       document.getElementById('sel-fractal').addEventListener('change', (e) => {
         handle.setFractal(e.target.value);
+        showNote(e.target.value);
         // A focused <select> swallows W/A/S/D and the arrow keys, so hand focus
         // back to the page while flying.
         if (handle.info.fly) e.target.blur();
