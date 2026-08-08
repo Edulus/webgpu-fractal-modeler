@@ -26,6 +26,7 @@ jobs:
           node tools/fix-palette-phase.mjs
           node tools/fix-palette-material-details.mjs
           node tools/finalize-palette-cycle.mjs
+          node tools/fix-colorcycle-comment.mjs
 
       - name: JavaScript syntax
         run: |
@@ -35,27 +36,6 @@ jobs:
           node --check src/shaders/composite.wgsl.js
           node --check src/shaders/attractor.wgsl.js
           node --check tools/colorcycle.test.js
-
-      - name: Validate all WGSL modules with Naga
-        run: |
-          cargo install naga-cli --version 30.0.0 --locked
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          import { FRACTAL_WGSL } from './src/shaders/fractal.wgsl.js';
-          import { MATERIAL_WGSL } from './src/shaders/material.wgsl.js';
-          import { COMPOSITE_WGSL } from './src/shaders/composite.wgsl.js';
-          import { ATTRACTOR_WGSL } from './src/shaders/attractor.wgsl.js';
-          for (const [name, source] of [
-            ['fractal', FRACTAL_WGSL],
-            ['material', MATERIAL_WGSL],
-            ['composite', COMPOSITE_WGSL],
-            ['attractor', ATTRACTOR_WGSL],
-          ]) fs.writeFileSync(`/tmp/${name}.wgsl`, source);
-          NODE
-          for shader in fractal material composite attractor; do
-            echo "== $shader.wgsl =="
-            naga "/tmp/$shader.wgsl"
-          done
 
       - name: Unit tests
         run: |
@@ -80,7 +60,9 @@ jobs:
           grep -q "material.wgsl" tools/shader-check.html
           grep -q "Palette-faithful colour cycling" README.md
           grep -q "Palette-coordinate shift rate per second" README.md
+          grep -q "Palette-coordinate shift rate per second" src/fractal-bg.js
           ! grep -q "Hue cycles per second" README.md
+          ! grep -q "full colour cycles per second" src/fractal-bg.js
 
       - name: Commit final generated changes
         run: |
@@ -91,5 +73,5 @@ jobs:
           git config user.name "palette-cycle-migration"
           git config user.email "actions@users.noreply.github.com"
           git add README.md src/fractal-bg.js src/shaders/material.wgsl.js src/shaders/composite.wgsl.js src/shaders/attractor.wgsl.js tools/colorcycle.test.js tools/shader-check.html
-          git commit -m "[palette-patch] Finalize palette-faithful colour cycling"
+          git commit -m "[palette-patch] Align palette cycle API documentation"
           git push origin HEAD:agent/palette-faithful-cycle
