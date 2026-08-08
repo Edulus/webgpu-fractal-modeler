@@ -1,22 +1,27 @@
-# WebGPU Fractal Modeler
+# Complex Geometry Explorer
 
 ### ▶ [Live demo](https://edulus.github.io/webgpu-fractal-modeler/)
 
-A self-contained, dependency-free **WebGPU platform for rendering, exploring, and embedding interactive 3D fractals and strange attractors**.
+**Twenty objects from mathematics, alive in your browser.** Shapes that come out
+of equations, symmetry groups and endless repetition — minimal surfaces,
+stellated solids, strange attractors, tessellations of curved space. Spin them,
+zoom in as far as you like, and fly inside the ones with an interior.
 
-The project began as an animated website background and has evolved into a full-screen 3D fractal model viewer with orbit controls, zoom, adaptive rendering quality, live model and palette switching, and reusable transparent rendering for websites and applications.
+Everything is drawn live, pixel by pixel, as you move. It opens instantly, works
+offline, and can also sit behind the content of a web page as a slow animated
+background.
 
-No Three.js, no Babylon, no build step, and no npm. Just ES modules, WGSL, and HTML.
+*For developers:* built from ES modules and WGSL alone, and runs straight from a
+file. See [Project structure](#project-structure) and the model notes below.
 
-## Applications
+## Uses
 
-- Interactive 3D fractal exploration
-- Full-screen generative visual experiences
+- Exploring mathematical objects interactively, on screen or in a lecture
+- Full-screen generative visuals
 - Website and application backgrounds
 - Digital-art installations and gallery displays
-- Music visualizers and projection visuals
-- Educational demonstrations of fractals and strange attractors
-- A reusable WebGPU renderer for other projects
+- Music visualisers and projection visuals
+- A reusable renderer for other projects
 
 ## Included models
 
