@@ -1693,11 +1693,6 @@ export async function initFractalBackground(canvas, options = {}) {
       }
     },
     /**
-     * Palette cycling rate, in full colour cycles per second. 0 stops it.
-     * Deliberately does NOT reset accumulation: the cycle lives in the post
-     * chain, so a converged image keeps its sharpness while the colour moves.
-     */
-    /**
      * Post-chain image adjustments. Accepts any subset of
      * {exposure, contrast, saturation, hue}; hue is in turns, 0..1.
      * Like the colour cycle these live in the composite pass, so they do NOT
@@ -1710,6 +1705,11 @@ export async function initFractalBackground(canvas, options = {}) {
       }
       if (!state.running) renderFrame(performance.now(), true);
     },
+    /**
+     * Palette-coordinate shift rate per second. 0 stops it. The phase is
+     * resolved after material accumulation, so a converged image stays sharp
+     * while the selected palette moves across its stored coordinates.
+     */
     setColorCycle(rate) {
       state.colorCycle = Math.max(0, Number(rate) || 0);
       if (!state.running) renderFrame(performance.now(), true);
