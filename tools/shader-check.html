@@ -9,6 +9,7 @@ notably reserved-keyword collisions, which silently blank the whole render.</p>
 <pre id="out">running…</pre>
 <script type="module">
 import { FRACTAL_WGSL } from '../src/shaders/fractal.wgsl.js';
+import { MATERIAL_WGSL } from '../src/shaders/material.wgsl.js';
 import { COMPOSITE_WGSL } from '../src/shaders/composite.wgsl.js';
 import { ATTRACTOR_WGSL } from '../src/shaders/attractor.wgsl.js';
 
@@ -20,6 +21,7 @@ try {
   const device = await adapter.requestDevice();
   const modules = [
     ['fractal.wgsl', FRACTAL_WGSL],
+    ['material.wgsl', MATERIAL_WGSL],
     ['composite.wgsl', COMPOSITE_WGSL],
     ['attractor.wgsl', ATTRACTOR_WGSL],
   ];
