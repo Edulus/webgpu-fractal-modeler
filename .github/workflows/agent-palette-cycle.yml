@@ -22,7 +22,9 @@ jobs:
           fetch-depth: 0
 
       - name: Apply asserted renderer migration
-        run: node tools/apply-palette-cycle-patch.mjs
+        run: |
+          node tools/apply-palette-cycle-patch.mjs
+          node tools/fix-palette-phase.mjs
 
       - name: JavaScript syntax
         run: |
@@ -45,6 +47,8 @@ jobs:
           grep -q "colorPhase: 63" src/fractal-bg.js
           grep -q "auxTex" src/fractal-bg.js
           grep -q "fs_material" src/fractal-bg.js
+          grep -q "state.colorPhase += (dt / 1000) \* state.colorCycle" src/fractal-bg.js
+          ! grep -q "state.colorPhase = .*% 1" src/fractal-bg.js
           ! grep -q "state\.pipelines\.accum" src/fractal-bg.js
           ! grep -q "accumParity" src/fractal-bg.js
           ! grep -q "hueRotate(hdr, TAU \* (.*color" src/shaders/composite.wgsl.js
