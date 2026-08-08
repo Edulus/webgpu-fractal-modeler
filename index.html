@@ -144,6 +144,14 @@
        shows every option in full regardless of this width. */
     #panel select { text-overflow: ellipsis; }
     #panel label { display: grid; gap: 4px; color: var(--muted); }
+    /* The cycle toggle is a checkbox beside its text, not a stacked field. */
+    #panel label.check {
+      grid-auto-flow: column;
+      justify-content: start;
+      align-items: center;
+      gap: 8px;
+    }
+    #panel label.check input { width: auto; accent-color: var(--accent); }
     #panel select, #panel button {
       appearance: none;
       background: rgba(6, 8, 16, 0.7);
@@ -414,6 +422,8 @@
       <div id="pal-swatches"></div>
       <div id="pal-msg"></div>
     </details>
+    <label class="check"><input type="checkbox" id="chk-cycle" checked />
+      Shift colours</label>
     <label>Quality
       <select id="sel-quality">
         <option value="auto">Auto</option>

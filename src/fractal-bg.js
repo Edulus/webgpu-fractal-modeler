@@ -56,7 +56,8 @@ const U = {
   _pad2: 59,
   paletteMode: 60,  // 0 = cosine preset, 1 = imported stop ramp
   rampCount: 61,
-  _pad3: 62,        // 62,63 pad the ramp array to a 16-byte boundary
+  colorCycle: 62,   // palette cycles per second; 0 = static
+  _pad3: 63,        // pads the ramp array to a 16-byte boundary
   ramp: 64,         // 8 * vec4 -> slots 64..95 (byte 256)
 };
 const UNIFORM_FLOATS = 96;
@@ -289,6 +290,8 @@ export async function initFractalBackground(canvas, options = {}) {
     probeAt: 0,          // last probe dispatch, for throttling
     // Progressive accumulation
     accumSamples: 0,
+    // Palette cycles per second. One full turn of hue every 40s by default.
+    colorCycle: opts.colorCycle ?? 0.025,
     accumParity: 0,
     accumOn: true,
     // active pointers for drag / pinch tracking
@@ -850,6 +853,11 @@ export async function initFractalBackground(canvas, options = {}) {
     d[U.mbScale] = -1.85;
     d[U.mbMinRadius] = 0.35;
     d[U.mbFixedRadius] = 1.0;
+
+    // Cycles per second. Read by the COMPOSITE pass, not the raymarch, so
+    // changing it never invalidates the accumulated image -- which is the whole
+    // point: the colour keeps moving on a frame that has already converged.
+    d[U.colorCycle] = state.colorCycle;
 
     const p = state.palette;
     const ramp = state.paletteRamp;
@@ -1700,6 +1708,15 @@ export async function initFractalBackground(canvas, options = {}) {
         if (!state.running) renderFrame(performance.now(), true);
       }
     },
+    /**
+     * Palette cycling rate, in full colour cycles per second. 0 stops it.
+     * Deliberately does NOT reset accumulation: the cycle lives in the post
+     * chain, so a converged image keeps its sharpness while the colour moves.
+     */
+    setColorCycle(rate) {
+      state.colorCycle = Math.max(0, Number(rate) || 0);
+      if (!state.running) renderFrame(performance.now(), true);
+    },
     setPalette(name) {
       state.palette = getPalette(name);
       state.paletteRamp = null;
@@ -1809,6 +1826,7 @@ export async function initFractalBackground(canvas, options = {}) {
         flyPos: state.fly ? state.flyCam.pos.map((v) => +v.toFixed(2)) : null,
         clearance: Number.isFinite(state.probeDist) ? +state.probeDist.toFixed(4) : null,
         samples: state.accumSamples,
+        colorCycle: state.colorCycle,
         zoom: +(state.orbit.dist / (CAM_RADIUS[state.fractalType] ?? 2.55)).toFixed(3),
         pinned: state.orbit.pinned,
         drifting: orbitDrifting(),

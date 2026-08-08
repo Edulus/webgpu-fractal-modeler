@@ -39,7 +39,8 @@ struct Uniforms {
   _pad2        : f32,
   paletteMode  : f32,
   rampCount    : f32,
-  _pad3        : vec2<f32>,
+  colorCycle   : f32,
+  _pad3        : f32,
   ramp         : array<vec4<f32>, 8>,
 };
 
@@ -149,12 +150,38 @@ fn fs_accum(in : VSOut) -> @location(0) vec4<f32> {
   return mix(prev, cur, clamp(u.accumWeight, 0.0, 1.0));
 }
 
+// Rotate a colour about the grey axis (1,1,1)/sqrt3 -- Rodrigues' formula.
+// Rotating about grey leaves the achromatic axis fixed, so whites, greys and
+// the overall brightness are untouched and only the hue travels. Exactly
+// periodic in 2*pi, which is what makes the cycle close seamlessly.
+fn hueRotate(c : vec3<f32>, a : f32) -> vec3<f32> {
+  const K : vec3<f32> = vec3<f32>(0.57735027, 0.57735027, 0.57735027);
+  let ca = cos(a);
+  return c * ca + cross(K, c) * sin(a) + K * dot(K, c) * (1.0 - ca);
+}
+
 @fragment
 fn fs_composite(in : VSOut) -> @location(0) vec4<f32> {
   let scene = textureSampleLevel(srcTex, samp, in.uv, 0.0);
   let bloom = textureSampleLevel(bloomTex, samp, in.uv, 0.0).rgb;
 
   var hdr = scene.rgb + bloom * 1.1;
+
+  // Colour cycling. Done here rather than in the raymarch so it costs nothing
+  // on a converged frame -- this pass runs every frame either way -- and so it
+  // never invalidates the accumulated image. fract() before scaling keeps the
+  // angle bounded, so a session running for hours has the same precision as one
+  // running for seconds rather than losing bits to a growing time value.
+  let rate = select(u.colorCycle, 0.0, u.reducedMotion > 0.5);
+  if (rate > 0.0) {
+    // Clamped because rotating about grey takes saturated colours OUT of the
+    // positive octant -- measured, a channel goes negative at 1999 of 2000
+    // angles for pure red. Negatives survive acesFilm and then reach
+    // pow(col, 1/2.2), which is NaN for a negative base: black or garbage
+    // pixels rather than a wrong hue. Clamping desaturates the few colours that
+    // leave the gamut, which is the usual and correct answer.
+    hdr = max(hueRotate(hdr, 6.28318531 * fract(u.time * rate)), vec3<f32>(0.0));
+  }
 
   // Tonemap + gamma.
   var col = acesFilm(hdr * 1.05);

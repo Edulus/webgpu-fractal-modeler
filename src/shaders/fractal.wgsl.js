@@ -51,7 +51,8 @@ const RAMP_MAX : u32 = 8u;
 //   236 _pad2        : f32
 //   240 paletteMode  : f32   (0 = cosine preset, 1 = imported stop ramp)
 //   244 rampCount    : f32   (live stops, 2..8)
-//   248 _pad3        : vec2<f32>
+//   248 colorCycle   : f32   (palette cycles per second; 0 = static)
+//   252 _pad3        : f32
 //   256 ramp         : array<vec4<f32>, 8>  (imported palette stops)
 struct Uniforms {
   resolution : vec2<f32>,
@@ -83,7 +84,8 @@ struct Uniforms {
   _pad2        : f32,
   paletteMode  : f32,
   rampCount    : f32,
-  _pad3        : vec2<f32>,
+  colorCycle   : f32,
+  _pad3        : f32,
   ramp         : array<vec4<f32>, RAMP_MAX>,
 };
 
@@ -1660,8 +1662,17 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
     // AO.
     let ao = mix(1.0, calcAO(pos, n), u.aoStrength);
 
-    // Orbit-trap -> palette. Fold in a slow time phase for color cycling.
-    let phase = select(u.time * 0.03, 0.0, u.reducedMotion > 0.5);
+    // Orbit-trap -> palette. NO time phase here, deliberately.
+    //
+    // Colour cycling used to live on this line, and it could only ever be seen
+    // while the view was moving: once progressive accumulation converges, the
+    // raymarch is skipped entirely and the stored frame is re-presented, so the
+    // colour froze at exactly the moment the picture became sharp. Anything
+    // time-varying baked in here also smears across the running average while
+    // it accumulates. The cycle now happens in the composite pass, which runs
+    // every frame regardless, so the colour moves on a converged image and
+    // convergence is never thrown away.
+    let phase = 0.0;
     let base = palette(trap * 1.6 + phase);
 
     // Fresnel rim for extra luminosity on silhouettes.
@@ -1700,7 +1711,10 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
 
   // Add a little of the glow into RGB too so filaments read even pre-bloom,
   // tinted by the palette for that iridescent thread look.
-  let glowTint = palette(u.time * 0.02 + 0.5) * glowOut;
+  // Fixed phase for the same reason: this fed u.time in, which made the
+  // accumulated buffer time-dependent and put the glow on a different cycle
+  // rate (0.02) from the surface (0.03), so the two drifted out of step.
+  let glowTint = palette(0.5) * glowOut;
   color = color + glowTint * 0.4;
 
   // Store straight (non-premultiplied) HDR color in RGB; emission/glow in .a

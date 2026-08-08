@@ -68,7 +68,9 @@ mathematicians named there.
 ├── tools/
 │   ├── shader-check.html         compiles every WGSL module and reports errors
 │   ├── camera.test.js            camera unit tests (node tools/camera.test.js)
-│   └── palette.test.js           palette import/persistence unit tests
+│   ├── palette.test.js           palette import/persistence unit tests
+│   ├── recovery.test.js          GPU device-loss recovery decisions
+│   └── colorcycle.test.js        hue-rotation maths for the colour cycle
 └── .github/workflows/pages.yml   deploys the demo to GitHub Pages
 ```
 
@@ -110,6 +112,12 @@ Explorer mode provides:
 - An opaque presentation background
 
 **Zoom dollies towards the surface, not the centroid.** The orbit camera keeps an explicit pivot and distance. Zooming in first re-pins the pivot onto whatever the centre of the view is pointing at, using a distance measured by the GPU probe along the view ray; the eye does not move, the pivot slides forward onto the surface and the distance shrinks to match. Closing in then approaches that surface asymptotically instead of sliding towards the model's centroid — which is what used to push the eye through the surface into the interior, where the frame washes out.
+
+**Colours cycle without costing sharpness.** The palette drifts continuously through a full turn of hue every forty seconds, and it keeps moving on a still, fully converged image. That combination needs the cycle to happen in the *post* chain rather than the raymarch.
+
+It used to live on the palette lookup inside the raymarch, where it could only be seen while the view was moving: once progressive accumulation converges the raymarch is skipped entirely and the stored frame is re-presented, so the colour froze at exactly the moment the picture became sharp. Anything time-varying baked in there also smears across the running average while it accumulates. Moving it to the composite pass — which runs every frame regardless — means the colour moves on a converged frame and convergence is never thrown away. `setColorCycle()` deliberately does not reset accumulation.
+
+The rotation is about the grey axis, by Rodrigues' formula, so the achromatic axis is fixed: greys, whites and specular highlights stay neutral, the channel sum is preserved so brightness holds steady, and a full turn returns exactly to the start, which is what makes the loop seamless. It is clamped afterwards, because rotating about grey takes saturated colours out of the positive octant — measured, a channel goes negative at 1999 of 2000 angles for pure red, and a negative reaching `pow(col, 1/2.2)` is NaN rather than merely a wrong hue. Pinned under `prefers-reduced-motion`.
 
 **Switching models carries the zoom as a ratio.** Each estimator lives at a different world scale, which is what the per-model orbit radius is for, so keeping the raw distance across a switch means arriving at a model framed by the previous one's size. The distance is rescaled by the ratio of the two radii and the pivot returns to the origin, since it described a surface that no longer exists.
 
