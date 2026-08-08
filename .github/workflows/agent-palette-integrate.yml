@@ -1,0 +1,96 @@
+name: Palette cycle integration validation
+
+on:
+  push:
+    branches: [agent/palette-faithful-cycle-main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: palette-faithful-cycle-main
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: ${{ !contains(github.event.head_commit.message, '[palette-integrated]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/palette-faithful-cycle-main
+          fetch-depth: 0
+
+      - name: Fetch validated palette branch
+        run: git fetch origin agent/palette-faithful-cycle:refs/remotes/origin/agent/palette-faithful-cycle
+
+      - name: Integrate with current main
+        run: node tools/integrate-palette-cycle.mjs
+
+      - name: JavaScript syntax
+        run: |
+          node --check src/fractal-bg.js
+          node --check src/shaders/fractal.wgsl.js
+          node --check src/shaders/material.wgsl.js
+          node --check src/shaders/composite.wgsl.js
+          node --check src/shaders/attractor.wgsl.js
+          node --check tools/colorcycle.test.js
+
+      - name: Validate WGSL with Naga
+        run: |
+          cargo install naga-cli --version 30.0.0 --locked
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { FRACTAL_WGSL } from './src/shaders/fractal.wgsl.js';
+          import { MATERIAL_WGSL } from './src/shaders/material.wgsl.js';
+          import { COMPOSITE_WGSL } from './src/shaders/composite.wgsl.js';
+          import { ATTRACTOR_WGSL } from './src/shaders/attractor.wgsl.js';
+          for (const [name, source] of [
+            ['fractal', FRACTAL_WGSL],
+            ['material', MATERIAL_WGSL],
+            ['composite', COMPOSITE_WGSL],
+            ['attractor', ATTRACTOR_WGSL],
+          ]) fs.writeFileSync(`/tmp/${name}.wgsl`, source);
+          NODE
+          for shader in fractal material composite attractor; do
+            echo "== $shader.wgsl =="
+            naga "/tmp/$shader.wgsl"
+          done
+
+      - name: Unit tests
+        run: |
+          total=0
+          for t in tools/*.test.js; do
+            echo "== $t =="
+            node "$t"
+          done
+
+      - name: Integration invariants
+        run: |
+          grep -q "MATERIAL_WGSL" src/fractal-bg.js
+          grep -q "colorPhase: 63" src/fractal-bg.js
+          grep -q "state.colorPhase += (dt / 1000) \* state.colorCycle" src/fractal-bg.js
+          ! grep -q "state\.pipelines\.accum" src/fractal-bg.js
+          ! grep -q "accumParity" src/fractal-bg.js
+          grep -q "palette(m.x / m.y + phase)" src/shaders/composite.wgsl.js
+          grep -q "let hueTurns = u.imageAdjust.w" src/shaders/composite.wgsl.js
+          grep -q "contrastCurve(col, toDisplay(bgHdr, hueTurns)" src/shaders/composite.wgsl.js
+          ! grep -q "hueTurns = u.imageAdjust.w +" src/shaders/composite.wgsl.js
+          grep -q "Palette-faithful colour cycling" README.md
+          grep -q "Contrast pivots on the backdrop" README.md
+          ! grep -q "Hue joins the cycle's phase" README.md
+          ! grep -q "full turn of hue every forty seconds" README.md
+          grep -q "for (const d of panel.querySelectorAll('details\[open\]')) d.open = false" index.html
+          grep -q "material.wgsl" tools/shader-check.html
+
+      - name: Commit integrated implementation
+        run: |
+          git config user.name "palette-cycle-integration"
+          git config user.email "actions@users.noreply.github.com"
+          git add README.md src/fractal-bg.js src/shaders/material.wgsl.js src/shaders/composite.wgsl.js src/shaders/attractor.wgsl.js tools/colorcycle.test.js tools/shader-check.html
+          if git diff --cached --quiet; then
+            echo "No integration changes"
+            exit 0
+          fi
+          git commit -m "[palette-integrated] Make colour cycling palette-faithful"
+          git push origin HEAD:agent/palette-faithful-cycle-main
