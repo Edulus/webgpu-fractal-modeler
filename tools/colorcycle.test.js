@@ -156,19 +156,29 @@ console.log('\nprogressive material accumulation');
   check('a hit mixed with a miss keeps its palette coordinate', near(mixed[0] / mixed[1], 0.91));
 }
 
-console.log('\nattractor circular palette coordinate');
+console.log('\nattractor palette coordinates');
 {
-  function lineMaterial(t, intensity = 1) {
+  function lineMaterial(t, intensity = 1, glow = 0.7) {
     const a = TAU * t;
-    return [Math.cos(a) * intensity, Math.sin(a) * intensity, intensity, 0];
+    return {
+      material: [t * intensity, intensity, intensity * glow, 0],
+      aux: [Math.cos(a) * intensity, Math.sin(a) * intensity, intensity, 0],
+    };
   }
   const x = lineMaterial(0.99);
   const y = lineMaterial(0.01);
-  const sum = add(x, y);
-  let t = Math.atan2(sum[1], sum[0]) / TAU;
-  if (t < 0) t += 1;
-  check('0.99 and 0.01 average around the palette seam, not opposite it', t < 0.02 || t > 0.98, `t=${t}`);
-  check('circular mean retains the summed line intensity', near(sum[2], 2));
+  const m = add(x.material, y.material);
+  const a = add(x.aux, y.aux);
+
+  const linearT = m[0] / m[1];
+  check('cosine palettes retain the unwrapped linear mean', near(linearT, 0.5), `t=${linearT}`);
+  check('linear representation retains the summed line intensity', near(m[1], 2));
+  check('line emission remains scalar and additive', near(m[2], 1.4));
+
+  let circularT = Math.atan2(a[1], a[0]) / TAU;
+  if (circularT < 0) circularT += 1;
+  check('imported ramps average around the palette seam', circularT < 0.02 || circularT > 0.98, `t=${circularT}`);
+  check('circular representation retains the summed line intensity', near(a[2], 2));
 }
 
 // ---- Explicit image adjustments ------------------------------------------
