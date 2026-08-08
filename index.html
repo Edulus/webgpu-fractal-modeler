@@ -510,7 +510,7 @@
       }
 
       document.getElementById('pal-coolors').addEventListener('click', () => {
-        window.open('https://coolors.co/', '_blank', 'noopener,noreferrer');
+        window.open('https://coolors.co/palettes', '_blank', 'noopener,noreferrer');
       });
       palInput.addEventListener('input', () => {
         if (PaletteIO.parseCoolorsUrl(palInput.value)) loadFromText(palInput.value);
