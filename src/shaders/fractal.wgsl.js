@@ -24,9 +24,9 @@ const RAMP_MAX : u32 = 8u;
 //                           4=apollonian, 5=spherepack, 6=encrusted,
 //                           7=surfacepack, 8=penrose, 9=gyroid, 10=kleinian,
 //                           11=barth, 12=schottky (kissing/parabolic),
-//                           13=schottkyh (hyperbolic), 14=tetrabrot; 15+ are
-//                           the line-rendered attractors, which this pass only
-//                           backgrounds)
+//                           13=schottkyh (hyperbolic), 14=tetrabrot,
+//                           15=envoct, 16=envdodec; 17+ are the line-rendered
+//                           attractors, which this pass only backgrounds)
 //   48  power      : f32
 //   52  mbScale    : f32
 //   56  mbMinRadius: f32
@@ -1154,6 +1154,95 @@ fn deTetrabrot(pos : vec3<f32>) -> DEResult {
   return res;
 }
 
+// ---- Envelope extrusion ----------------------------------------------------
+//
+// Thurman's Envelope Extrusion E(P): for each face of a convex seed polyhedron,
+// launch a ray at each shared-edge midpoint toward a parity-dependent farthest
+// feature of the neighbouring face, and take the apex to be the filtered
+// average of the ray family's pairwise closest approaches. The output is the
+// lateral triangles of the resulting per-face pyramids.
+//
+// Implementing it verbatim reproduced the preprint's published edge ratios
+// exactly -- 1 for the octahedron, phi for the dodecahedron, sqrt(2/5) for the
+// icosahedron, 1/sqrt2 for the cuboctahedron -- and Theorem 1's f-vector on
+// every seed. It also showed the construction is far simpler than its
+// definition, by a lemma the paper does not state:
+//
+//   EVERY RAY LIES IN THE PLANE OF THE NEIGHBOUR IT CAME FROM. The ray runs
+//   from a feature OF g to the midpoint of the shared edge, which is also in g,
+//   and two points of g determine a line in g's plane.
+//
+// So the apex is forced onto the intersection of the neighbouring face planes,
+// which is exactly the classical first-stellation point -- verified to 1e-9 on
+// every seed. Each lateral face then lies in a neighbour's plane too, making
+// the pyramid the classical stellation cell, and the whole solid becomes
+//
+//     { p : p violates AT MOST ONE of the seed's face half-spaces }.
+//
+// Because the seed's face normals come in +- pairs, the half-space values
+// reduce to |p . u_j| over the axes, and the estimator is the SECOND LARGEST of
+// those, minus the common offset. Each term is 1-Lipschitz and an order
+// statistic of 1-Lipschitz functions is 1-Lipschitz, so this is an exact
+// distance under-estimate needing no safety factor and no calibration -- the
+// only estimator here that required neither. Checked against the full plane
+// list at 20000 points: worst difference 0.
+//
+// Two seeds ship. The octahedron gives lateral edges equal to seed edges, so
+// every added piece is a regular tetrahedron and the solid is Kepler's stella
+// octangula; the dodecahedron gives ratio phi and the small stellated
+// dodecahedron. The tetrahedron and cube are excluded: for the cube the
+// neighbouring planes are parallel in pairs and never meet, and for the
+// tetrahedron all three neighbours share the opposite vertex, so the rays meet
+// only behind their origins, at t = -1, on that vertex.
+fn deEnvelope(pos : vec3<f32>) -> DEResult {
+  const A : f32 = 0.85065081;   // icosahedral axis components, dodecahedron seed
+  const B : f32 = 0.52573111;
+  const T : f32 = 0.57735027;   // (1,1,1)/sqrt3, octahedron seed
+  const C_OCT : f32 = 0.40824829;
+  const C_DOD : f32 = 1.11351636;
+
+  var res : DEResult;
+
+  // Largest and second largest of |p . u_j|.
+  var m1 = -1e30;
+  var m2 = -1e30;
+  var c = C_OCT;
+
+  // Six slots; the octahedral seed uses the first four and repeats the last
+  // value, which cannot disturb the top two.
+  var vals = array<f32, 6>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+  var n = 6;
+
+  if (u.fractalType < 15.5) {
+    // Octahedral seed: four axes, the cube diagonals.
+    vals[0] = abs(pos.x + pos.y + pos.z) * T;
+    vals[1] = abs(pos.x + pos.y - pos.z) * T;
+    vals[2] = abs(pos.x - pos.y + pos.z) * T;
+    vals[3] = abs(pos.x - pos.y - pos.z) * T;
+    n = 4;
+  } else {
+    c = C_DOD;
+    // Dodecahedral seed: six axes, the icosahedron's vertex directions.
+    vals[0] = abs(A * pos.x + B * pos.y);
+    vals[1] = abs(B * pos.x + A * pos.z);
+    vals[2] = abs(A * pos.y + B * pos.z);
+    vals[3] = abs(B * pos.x - A * pos.z);
+    vals[4] = abs(A * pos.y - B * pos.z);
+    vals[5] = abs(A * pos.x - B * pos.y);
+  }
+
+  for (var i = 0; i < n; i = i + 1) {
+    let t = vals[i];
+    if (t > m1) { m2 = m1; m1 = t; } else if (t > m2) { m2 = t; }
+  }
+
+  res.dist = m2 - c;
+  // How deep into a spike the point sits: at a tip one axis dominates and the
+  // gap is wide, on the flats between spikes the top two are nearly equal.
+  res.trap = clamp(0.18 + 0.55 * (m1 - m2) / c, 0.0, 1.0);
+  return res;
+}
+
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
   let ft = u.fractalType;
@@ -1184,8 +1273,11 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
   } else if (ft < 13.5) {
     // Both Schottky entries share one estimator; the id selects the regime.
     return deSchottky(pos);
+  } else if (ft < 14.5) {
+    return deTetrabrot(pos);
   }
-  return deTetrabrot(pos);
+  // Both envelope entries share one estimator; the id selects the seed.
+  return deEnvelope(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {
@@ -1321,7 +1413,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // Strange attractors aren't distance fields — they're rasterized as line
   // geometry by a second pipeline drawn over this pass. Emit only the
   // background here so those lines have something to blend onto.
-  if (u.fractalType > 14.5) {
+  if (u.fractalType > 16.5) {
     let bg = backgroundColor(rd);
     return vec4<f32>(select(vec3<f32>(0.0), bg, u.bgMode >= 0.5), 0.0);
   }

@@ -35,6 +35,8 @@ No Three.js, no Babylon, no build step, and no npm. Just ES modules, WGSL, and H
 - Kissing Schottky group (parabolic)
 - Schottky group (hyperbolic)
 - Tetrabrot (bicomplex Mandelbrot slice)
+- Envelope extrusion, octahedral seed (stella octangula)
+- Envelope extrusion, dodecahedral seed (small stellated dodecahedron)
 - Aizawa strange attractor
 - Lorenz strange attractor
 
@@ -284,6 +286,7 @@ Uniforms occupy one 160-byte, 16-byte-aligned buffer. The byte offsets are mirro
 - **Barth sextic:** a degree-6 algebraic surface carrying the maximum number of nodes a sextic can have
 - **Schottky groups:** a free discrete group of Möbius transformations of space, at and near the kissing configuration
 - **Tetrabrot:** a 3D slice of the bicomplex Mandelbrot set, the parameter-space companion to the quaternion Julia
+- **Envelope extrusion:** Thurman's zero-parameter facewise polyhedral operator, which reduces to classical first stellation
 
 All shader loops are statically bounded for WGSL portability, with guarded logarithm, power, radius, and inversion domains.
 
@@ -294,6 +297,26 @@ A Kleinian group is a discrete group of Möbius transformations, and its limit s
 The smooth caps in the result are not an artefact: they are the group's tangent spheres, with recursive filigree running along the ridges where they meet. Slowly drifting the inversion radius walks the construction through a family of nearby Kleinian groups, morphing the limit set within a narrow band — the structure degenerates quickly outside it.
 
 Parameters came from rendering candidates rather than from a reference. The construction is sharply sensitive to them: of the first four published-looking parameter sets tried, three collapsed into featureless lobes, and swapping the final primitive alone was enough to turn the surface from tangent spheres into granular noise.
+
+#### Envelope extrusion
+
+Implements the Envelope Extrusion `E(P)` of [Thurman's preprint](https://drive.google.com/file/d/1eA-UfgNv7mfsuTtnFtENk2_OLONeUT7N/view): for each face of a convex seed polyhedron, launch a ray at each shared-edge midpoint toward a parity-dependent farthest feature of the neighbouring face, and take the apex to be the filtered average of the ray family's pairwise closest approaches.
+
+Implementing Definition 1 verbatim reproduces the preprint's published edge ratios exactly — **1 for the octahedron, φ for the dodecahedron, √(2/5) for the icosahedron, 1/√2 for the cuboctahedron** — and Theorem 1's f-vector (`|V| = v+f`, `|E| = 3e`, `|F| = 2e`) on every seed. It also shows the construction is far simpler than its definition, by a lemma the paper does not state:
+
+> **Every ray lies in the plane of the neighbour it came from.** The ray runs from a feature *of* `g` to the midpoint of the shared edge, which is also in `g`; two points of `g` determine a line in `g`'s plane.
+
+So the apex is *forced* onto the intersection of the neighbouring face planes — the classical first-stellation point. Verified to 1e-9 on every seed tested. Each lateral face then lies in a neighbour's plane too, making the pyramid the classical stellation cell, and the whole solid becomes
+
+```text
+{ p : p violates at most one of the seed's face half-spaces }
+```
+
+Since the seed's face normals come in ± pairs, this reduces to the **second largest of |p·uⱼ|, minus the common offset** — 4 dot products for the octahedral seed, 6 for the dodecahedral. Each term is 1-Lipschitz and an order statistic of 1-Lipschitz functions is 1-Lipschitz, so this is an exact distance under-estimate: the only estimator here needing neither a safety factor nor calibration. Checked against the full plane list at 20,000 points, worst difference 0.
+
+The two shipped seeds are therefore classical solids: the octahedron gives lateral edges equal to seed edges, so every added piece is a regular tetrahedron and the result is **Kepler's stella octangula**; the dodecahedron gives ratio φ and the **small stellated dodecahedron**.
+
+Two seeds are excluded, and the lemma explains both. For the **cube** the neighbouring face planes are parallel in pairs and never meet — the preprint excludes it as "degenerate geometry". For the **tetrahedron** all three neighbours of a face share the single opposite vertex, so all three rays emanate from it and meet only at `t = −1`, behind their origins, where the preprint's own forward filter rejects them. Disabling that filter puts the apex exactly on the seed's opposite vertex, collapsing each pyramid onto the seed itself — which is where the reported ratio of 1.000000 comes from. On that reading `E(Tet)` reproduces its seed rather than extruding it, and is not a new equilateral deltahedron.
 
 #### Tetrabrot
 

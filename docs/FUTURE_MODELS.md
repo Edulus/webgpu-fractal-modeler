@@ -37,10 +37,12 @@ The renderer already includes, in menu order, matching `FRACTAL_IDS` in `src/fra
 - Kissing Schottky group (parabolic)
 - Schottky group (hyperbolic)
 - Tetrabrot (bicomplex Mandelbrot slice)
+- Envelope extrusion, octahedral seed
+- Envelope extrusion, dodecahedral seed
 - Aizawa attractor
 - Lorenz attractor
 
-All seventeen are reachable from the demo's model selector. The first fifteen are
+All nineteen are reachable from the demo's model selector. The first seventeen are
 distance-estimated surfaces sharing the raymarch pass; the two attractors are
 line geometry drawn by a second pipeline. The two Schottky entries share one
 estimator and differ only in regime.

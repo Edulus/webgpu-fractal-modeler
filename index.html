@@ -302,6 +302,8 @@
         <option value="schottky">Kissing Schottky group (parabolic)</option>
         <option value="schottkyh">Schottky group (hyperbolic)</option>
         <option value="tetrabrot">Tetrabrot (bicomplex Mandelbrot)</option>
+        <option value="envoct">Envelope extrusion (octahedral seed)</option>
+        <option value="envdodec">Envelope extrusion (dodecahedral seed)</option>
         <option value="attractor">Strange attractor (Aizawa)</option>
         <option value="lorenz">Strange attractor (Lorenz)</option>
       </select>
@@ -607,7 +609,7 @@
       const names = ['mandelbulb', 'mandelbox', 'menger', 'julia', 'apollonian',
         'spherepack', 'encrusted', 'surfacepack', 'penrose', 'gyroid',
         'kleinian', 'barth', 'schottky', 'schottkyh', 'tetrabrot',
-        'attractor', 'lorenz'];
+        'envoct', 'envdodec', 'attractor', 'lorenz'];
       setInterval(() => {
         const i = handle.info;
         hud.textContent = `${names[i.fractalType]} · q${i.qualityScale} · ${i.fps}fps` +
