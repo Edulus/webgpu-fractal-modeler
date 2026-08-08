@@ -146,15 +146,19 @@ fn resolveScene(uv : vec2<f32>) -> vec4<f32> {
   var color = bg * (a.x + missBg);
 
   if (u.fractalType > 22.5) {
-    // For additive line geometry, m.xy is the intensity-weighted circular mean
-    // of the palette coordinate and m.z is total line intensity.
-    if (m.z > 1e-7) {
-      let t = atan2(m.y, m.x) / TAU;
-      color = color + attractorPalette(t + phase) * m.z;
+    // Cosine presets use the unwrapped linear mean in material.xy. Imported
+    // ramps are period-1 by construction, so use the circular mean in aux.xyz
+    // to keep samples on either side of the 1->0 seam adjacent.
+    if (m.y > 1e-7) {
+      var t = m.x / m.y;
+      if (u.paletteMode > 0.5 && a.z > 1e-7) {
+        t = atan2(a.y, a.x) / TAU;
+      }
+      color = color + attractorPalette(t + phase) * m.y;
     }
     // Attractors did not have the raymarcher's pre-bloom glow tint; their alpha
     // is emission only, so preserve that behavior here.
-    return vec4<f32>(color, m.w);
+    return vec4<f32>(color, m.z);
   }
 
   if (m.y > 1e-7) {

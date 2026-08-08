@@ -138,7 +138,9 @@ fn fs_material(in : VSOut) -> MaterialOut {
     missWeight = 1.0;
   }
 
-  let glowOut = clamp(glow * u.glowStrength * 0.02, 0.0, 8.0);
+  // fs_main discarded near-miss glow when no surface was actually hit. Keep
+  // that static-image contract while moving the hit material into post.
+  let glowOut = select(0.0, clamp(glow * u.glowStrength * 0.02, 0.0, 8.0), hit);
 
   // Store weighted indices rather than bare indices. Miss samples then carry no
   // coordinate into the running average, so an antialiased silhouette does not

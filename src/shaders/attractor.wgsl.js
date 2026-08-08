@@ -80,14 +80,21 @@ fn fs_line(in : VSOut) -> LineOut {
   let a = TAU * t;
 
   var out : LineOut;
-  // A circular mean survives the cyclic 1->0 boundary: averaging bare t values
-  // would turn samples near 0.99 and 0.01 into 0.5, the opposite side of the
-  // palette. x/y carry the weighted unit circle; z carries total intensity.
-  out.material = vec4<f32>(cos(a) * intensity,
-                           sin(a) * intensity,
+  // Keep both coordinate representations. Cosine presets can have different
+  // per-channel frequencies and therefore are not necessarily period-1, so a
+  // linear weighted mean preserves their unwrapped t. Imported stop ramps are
+  // explicitly cyclic, so the auxiliary attachment carries a circular mean
+  // that treats 0.99 and 0.01 as neighbours instead of averaging them to 0.5.
+  // Emission is scalar and palette-independent, so it lives beside the linear
+  // coordinate rather than consuming another circular channel.
+  out.material = vec4<f32>(in.speed * 1.15 * intensity,
                            intensity,
-                           intensity * 0.7 * u.glowStrength);
-  out.aux = vec4<f32>(0.0);
+                           intensity * 0.7 * u.glowStrength,
+                           0.0);
+  out.aux = vec4<f32>(cos(a) * intensity,
+                      sin(a) * intensity,
+                      intensity,
+                      0.0);
   return out;
 }
 `;
