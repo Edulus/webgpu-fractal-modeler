@@ -62,15 +62,16 @@ mathematicians named there.
 │   ├── palette-io.js             palette import and persistence (pure)
 │   ├── palettes.js               Inigo Quilez cosine-palette presets
 │   └── shaders/
-│       ├── fractal.wgsl.js       vertex + fragment raymarcher, inlined as WGSL
-│       ├── composite.wgsl.js     bloom, ACES tonemap, vignette, and dithering
-│       └── attractor.wgsl.js     strange attractors drawn as line geometry
+│       ├── fractal.wgsl.js       distance estimators + clearance compute shader
+│       ├── material.wgsl.js      palette-independent raymarch material pass
+│       ├── composite.wgsl.js     palette resolve, bloom, image controls, tonemap
+│       └── attractor.wgsl.js     palette-independent strange-attractor lines
 ├── tools/
 │   ├── shader-check.html         compiles every WGSL module and reports errors
 │   ├── camera.test.js            camera unit tests (node tools/camera.test.js)
 │   ├── palette.test.js           palette import/persistence unit tests
 │   ├── recovery.test.js          GPU device-loss recovery decisions
-│   └── colorcycle.test.js        hue-rotation maths for the colour cycle
+│   └── colorcycle.test.js        palette-cycle and image-control arithmetic
 └── .github/workflows/pages.yml   deploys the demo to GitHub Pages
 ```
 
@@ -113,19 +114,19 @@ Explorer mode provides:
 
 **Zoom dollies towards the surface, not the centroid.** The orbit camera keeps an explicit pivot and distance. Zooming in first re-pins the pivot onto whatever the centre of the view is pointing at, using a distance measured by the GPU probe along the view ray; the eye does not move, the pivot slides forward onto the surface and the distance shrinks to match. Closing in then approaches that surface asymptotically instead of sliding towards the model's centroid — which is what used to push the eye through the surface into the interior, where the frame washes out.
 
-**Colours cycle without costing sharpness.** The palette drifts continuously through a full turn of hue every forty seconds, and it keeps moving on a still, fully converged image. That combination needs the cycle to happen in the *post* chain rather than the raymarch.
+**Colours cycle without costing sharpness.** The expensive model pass now stores palette coordinates and lighting weights instead of baking RGB into the converged frame. The post chain looks those coordinates up in the currently selected palette every frame, so a settled 96-sample model can keep changing colour without another raymarch.
 
-It used to live on the palette lookup inside the raymarch, where it could only be seen while the view was moving: once progressive accumulation converges the raymarch is skipped entirely and the stored frame is re-presented, so the colour froze at exactly the moment the picture became sharp. Anything time-varying baked in there also smears across the running average while it accumulates. Moving it to the composite pass — which runs every frame regardless — means the colour moves on a converged frame and convergence is never thrown away. `setColorCycle()` deliberately does not reset accumulation.
+That also makes the cycle palette-faithful. Aurora stays an Aurora lookup while the coordinate moves through it; an imported Coolors ramp stays within that ramp. Neutral specular light remains neutral. Bloom is calculated after the live palette lookup, so the glow moves with the surface colour instead of retaining an earlier hue. `setColorCycle()` deliberately does not reset accumulation, and switching palettes can recolour the converged material immediately.
 
-The rotation is about the grey axis, by Rodrigues' formula, so the achromatic axis is fixed: greys, whites and specular highlights stay neutral, the channel sum is preserved so brightness holds steady, and a full turn returns exactly to the start, which is what makes the loop seamless. It is clamped afterwards, because rotating about grey takes saturated colours out of the positive octant — measured, a channel goes negative at 1999 of 2000 angles for pure red, and a negative reaching `pow(col, 1/2.2)` is NaN rather than merely a wrong hue. Pinned under `prefers-reduced-motion`.
+The explicit **Hue** control is separate. It remains an RGB-space image adjustment for cases where the user intentionally wants to move away from the selected palette. Automatic palette motion is suppressed under `prefers-reduced-motion`; manual Hue remains available.
 
 **Brightness, contrast, saturation and hue are camera controls, not filters.** They live in the same post chain as the cycle, for the same reason: dragging a slider re-presents the frame that is already there instead of re-marching it, so the picture stays sharp under the drag rather than dissolving into noise and re-converging. Anything wired to the raymarch behaves the opposite way.
 
-Where each one sits in the chain is what makes it behave. Brightness is an exposure multiply *before* the tonemapper, so highlights roll off along the ACES curve the way a camera's do; the same multiply after the tonemap would clip them flat. Hue joins the cycle's phase by addition, so the slider offsets where the loop sits rather than fighting it, and with cycling off it is a plain hue control. Saturation comes after gamma, in display space. All four are neutral by default, so an unchanged installation renders exactly what it did before they existed.
+Where each one sits in the chain is what makes it behave. Brightness is an exposure multiply *before* the tonemapper, so highlights roll off along the ACES curve the way a camera's do; the same multiply after the tonemap would clip them flat. Hue is an independent RGB rotation after palette resolution. Saturation comes after gamma, in display space. Contrast is also a display-space control, but it pivots on the backdrop rather than on mid-grey. All four are neutral by default, so an unchanged installation renders exactly what it did before they existed.
 
-**Contrast pivots on the backdrop, not on mid-grey.** Mid-grey is what a photo editor pivots on, and it is the wrong choice here: the backdrop sits at about 0.06 in display space, so turning contrast down lifts it to a flat grey and turning it up crushes the gradient to dead black. The control is for the model; the space it sits in should hold still.
+**Contrast pivots on the backdrop, not on mid-grey.** The backdrop sits far below mid-grey, so a conventional photographic pivot visibly lifts it when contrast is reduced and crushes it when contrast is increased. The control is meant to shape the model while the space around it holds still.
 
-The composite pass therefore recomputes the bare backdrop for each pixel — the same gradient the raymarch would have written with nothing in front of the camera — and takes it through the identical chain, so a pixel showing only the backdrop lands exactly on itself. The channel is rescaled to put the backdrop at 0 and white at 1, and an S-curve is applied there: `xᵏ / (xᵏ + (1−x)ᵏ)` fixes both ends exactly and is the identity at `k = 1`. The backdrop and white are untouched at every setting, nothing can be clipped or crushed at either end, and the curve steepens through the middle of the model's own range instead. Away from the model the picture already equals the backdrop, so there is no seam anywhere for the effect to start at — and a crevice darker than the backdrop is passed through rather than raised to it.
+The composite pass therefore reconstructs the bare backdrop for each pixel and takes it through the same Hue, exposure, tonemap, gamma and saturation chain as the rendered scene. Contrast then rescales the channel so that backdrop is 0 and white is 1, and applies the S-curve `xᵏ / (xᵏ + (1−x)ᵏ)`. Both endpoints remain exact fixed points at every setting, the curve stays monotone, and a crevice darker than the backdrop passes through unchanged rather than being raised to it.
 
 **Switching models carries the zoom as a ratio.** Each estimator lives at a different world scale, which is what the per-model orbit radius is for, so keeping the raw distance across a switch means arriving at a model framed by the previous one's size. The distance is rescaled by the ratio of the two radii and the pivot returns to the origin, since it described a surface that no longer exists.
 
@@ -231,7 +232,7 @@ Recommended canvas CSS:
 | `setFractal(name)` | Switch the model at runtime without reinitializing WebGPU. |
 | `setPalette(name)` | Switch the cosine palette at runtime. |
 | `setPaletteColors(colors)` | Use an imported palette: `[[r,g,b], …]` in 0..1. `null` returns to the preset. |
-| `setColorCycle(rate)` | Hue cycles per second; `0` stops it. Does not reset accumulation. |
+| `setColorCycle(rate)` | Palette-coordinate shift rate per second; `0` stops it. Re-indexes the selected palette without resetting accumulation. |
 | `setImageAdjust({exposure, contrast, saturation, hue})` | Post-chain image controls, any subset. `hue` is in turns. Does not reset accumulation. |
 | `setQuality(mode)` | Select low, medium, high, or adaptive rendering quality. |
 | `setTransparent(bool)` | Toggle transparent embedding and opaque presentation modes. |
@@ -266,13 +267,21 @@ Fitting cosine coefficients to those swatches would reproduce most palettes only
 
 Parsing runs on untrusted input — pasted text, dropped files — so every parser returns null rather than throwing, and refuses input it only partly understands rather than importing wrong colours silently. `localStorage` is used over cookies: cookies cap near 4KB and travel with every request. Storage that is unavailable (private browsing, embedded webviews, quota) degrades to "could not save" instead of breaking the page. All of it is covered by `node tools/palette.test.js`.
 
+### Palette-faithful colour cycling
+
+Colour cycling re-indexes the palette rather than rotating the finished RGB image. The expensive model pass stores palette coordinates, scalar lighting weights, neutral specular light, fog/background coverage and emission in two `rgba16float` material attachments. The post chain looks those coordinates up in the currently selected cosine preset or imported stop ramp, and applies the live cycle phase before bloom and tonemapping.
+
+That separation has two useful consequences. A converged 96-sample image can keep cycling without another raymarch, and changing from one palette to another recolours the converged material immediately instead of throwing the accumulated geometry samples away. The explicit **Hue** image control remains a separate post-process rotation for users who deliberately want to move away from the selected palette.
+
+Imported stop ramps are cyclic by definition and wrap every palette-coordinate unit. Cosine presets may use different frequencies in their RGB channels, so their phase advances continuously rather than being forcibly wrapped at 1; that avoids a discontinuity in presets such as Ember and Iridescence.
+
 ## Progressive accumulation
 
 While the view is still, frames are re-rendered with a subpixel offset and averaged into a running mean, so the image resolves far past what a single sample can show. The high-frequency models benefit most — Penrose grooves and Kleinian filigree alias badly at one sample per pixel.
 
 Offsets walk an **R2 (Roberts) low-discrepancy sequence**, a two-dimensional golden-ratio analogue whose samples interleave evenly instead of clumping the way random jitter does, so the average converges in fewer frames.
 
-Sampling starts after a short pause in input and stops at a cap; past that the raymarch is skipped entirely and the converged image is re-presented, which drops idle GPU cost to the post-processing chain alone. Any input, or a change of model, palette, quality or size, resets the average.
+Sampling starts after a short pause in input and stops at a cap; past that the raymarch is skipped entirely and the converged material is re-presented through the post chain, which drops idle GPU cost to palette resolution, bloom and composite. Camera/model/quality/size changes reset the average because they change the sampled geometry. Palette changes and colour-cycle phase do not: they are resolved after accumulation.
 
 Two behaviours are suspended while averaging, because a moving image cannot converge: the animation clock stops, and explorer mode's gentle idle rotation is disabled. `handle.setAccumulate(false)` restores both and turns the feature off. The HUD reports the sample count as `48spp`.
 
@@ -282,21 +291,21 @@ Accumulation is confined to the interactive modes — background mode keeps anim
 
 The renderer uses two principal stages:
 
-1. **HDR model pass**
+1. **Palette-independent model/material pass**
    - Distance-estimated models are sphere-traced in a fullscreen fragment shader.
-   - Strange attractors are integrated on the CPU with RK4 and drawn as additively blended line geometry.
-   - Surface shading includes tetrahedron normals, directional lighting, soft shadows, ambient occlusion, orbit-trap colour, Fresnel rim light, near-miss glow, and distance fog.
+   - Strange attractors are integrated on the CPU with RK4 and drawn as weighted additive line geometry.
+   - Two `rgba16float` attachments carry palette coordinates and scalar shading terms rather than baked RGB.
+   - Progressive samples are averaged directly into those attachments with fixed-function blend constants, so no accumulation ping-pong textures or separate accumulation pass are required.
 
-2. **Composite pass**
-   - Separable Gaussian bloom
-   - ACES tonemapping
-   - Gamma correction
-   - Subtle vignette
-   - Dithering to reduce banding
+2. **Palette resolve + composite pass**
+   - The selected cosine palette or imported stop ramp is evaluated from the stored coordinates at the live cycle phase.
+   - Separable Gaussian bloom runs on the resolved HDR colour, so bloom follows the palette cycle too.
+   - The explicit Hue image adjustment, exposure, saturation and contrast follow as post controls.
+   - ACES tonemapping, gamma correction, vignette and dithering produce the final presentation image.
 
-The raymarch pass writes to an offscreen `rgba16float` texture. Lit colour occupies RGB, while emission and glow feed the alpha channel for post-processing.
+Surface shading still includes directional lighting, soft shadows, ambient occlusion, orbit-trap colour, Fresnel rim light, emission and distance fog; the difference is where colour is assigned. Geometry and lighting converge first, then the palette is looked up afterwards.
 
-Uniforms occupy one 160-byte, 16-byte-aligned buffer. The byte offsets are mirrored between the WGSL structs and the JavaScript `U` offset table in `fractal-bg.js`; keep both definitions synchronized when changing the layout.
+Uniforms occupy one 400-byte, 16-byte-aligned buffer. The byte offsets are mirrored between the WGSL structs and the JavaScript `U` offset table in `fractal-bg.js`; keep both definitions synchronized when changing the layout.
 
 ## Model implementations
 
