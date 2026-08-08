@@ -142,7 +142,8 @@ fn resolveScene(uv : vec2<f32>) -> vec4<f32> {
   let a = textureSampleLevel(auxTex, samp, uv, 0.0);
   let phase = select(u.colorPhase, 0.0, u.reducedMotion > 0.5);
   let bg = backgroundColor(uv);
-  var color = bg * a.x;
+  let missBg = select(0.0, a.w, u.bgMode >= 0.5);
+  var color = bg * (a.x + missBg);
 
   if (u.fractalType > 22.5) {
     // For additive line geometry, m.xy is the intensity-weighted circular mean

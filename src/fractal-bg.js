@@ -13,6 +13,7 @@
 // No build step, no dependencies. Runs from file://. See README.md.
 
 import { FRACTAL_WGSL } from './shaders/fractal.wgsl.js';
+import { MATERIAL_WGSL } from './shaders/material.wgsl.js';
 import { COMPOSITE_WGSL } from './shaders/composite.wgsl.js';
 import { ATTRACTOR_WGSL } from './shaders/attractor.wgsl.js';
 import { getPalette } from './palettes.js';
@@ -57,7 +58,7 @@ const U = {
   paletteMode: 60,  // 0 = cosine preset, 1 = imported stop ramp
   rampCount: 61,
   colorCycle: 62,   // palette cycles per second; 0 = static
-  _pad3: 63,        // pads the ramp array to a 16-byte boundary
+  colorPhase: 63,   // live palette-coordinate offset, in turns
   ramp: 64,         // 8 * vec4 -> slots 64..95 (byte 256)
   // Post-chain image adjustments, applied in the composite pass only, so
   // changing them never re-marches the scene or resets accumulation.
@@ -229,7 +230,7 @@ export async function initFractalBackground(canvas, options = {}) {
     uniformData: new Float32Array(UNIFORM_FLOATS),
     uniformU32: null, // aliased view (unused for now; all fields are f32)
     pipelines: {},
-    targets: null, // { sceneTex, bloomA, bloomB, w, h }
+    targets: null, // { sceneTex, auxTex, bloomA, bloomB, w, h }
     bindGroups: {},
     // config
     fractalType: FRACTAL_IDS[opts.fractal] ?? 0,
@@ -294,11 +295,12 @@ export async function initFractalBackground(canvas, options = {}) {
     probeAt: 0,          // last probe dispatch, for throttling
     // Progressive accumulation
     accumSamples: 0,
-    // Palette cycles per second. One full turn of hue every 40s by default.
+    // Palette cycles per second. Phase advances independently of the geometry
+    // clock so it keeps moving after progressive accumulation has converged.
     colorCycle: opts.colorCycle ?? 0.025,
+    colorPhase: 0,
     // Neutral by default, so the shipped image is unchanged.
     image: { exposure: 1, contrast: 1, saturation: 1, hue: 0 },
-    accumParity: 0,
     accumOn: true,
     // active pointers for drag / pinch tracking
     pointers: new Map(),
@@ -362,16 +364,18 @@ export async function initFractalBackground(canvas, options = {}) {
       addressModeV: 'clamp-to-edge',
     });
 
+    // Keep the original module for the clearance compute entry point. The
+    // material module contains the same estimators plus fs_material, which is
+    // the palette-independent fragment entry point used for drawing.
     const fractalModule = device.createShaderModule({ code: FRACTAL_WGSL });
+    const materialModule = device.createShaderModule({ code: MATERIAL_WGSL });
     const compositeModule = device.createShaderModule({ code: COMPOSITE_WGSL });
 
-    // Bind group layouts.
     const raymarchBGL = device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
       ],
     });
-    // The probe compute pass reads the same uniforms and writes one float.
     const probeBGL = device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
@@ -385,7 +389,7 @@ export async function initFractalBackground(canvas, options = {}) {
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
       ],
     });
-    const compositeBGL = device.createBindGroupLayout({
+    const resolveBGL = device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
@@ -393,23 +397,40 @@ export async function initFractalBackground(canvas, options = {}) {
         { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
       ],
     });
+    const compositeBGL = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      ],
+    });
 
-    state._bgl = { raymarchBGL, probeBGL, blurBGL, compositeBGL };
+    state._bgl = { raymarchBGL, probeBGL, blurBGL, resolveBGL, compositeBGL };
 
-    // Attractor line pipeline: additively blended trajectory over the HDR
-    // target, so overlapping filaments accumulate brightness and then bloom.
-    const attractorModule = device.createShaderModule({ code: ATTRACTOR_WGSL });
-    const addBlend = {
-      color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
-      alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+    // Progressive accumulation is done by fixed-function blending directly in
+    // the material targets. For sample n, source contributes 1/(n+1) and the
+    // existing average contributes n/(n+1). This is mathematically identical
+    // to the old ping-pong fs_accum pass but works for both MRT attachments and
+    // removes two full-resolution textures plus one fullscreen pass.
+    const averageBlend = {
+      color: { srcFactor: 'constant', dstFactor: 'one-minus-constant', operation: 'add' },
+      alpha: { srcFactor: 'constant', dstFactor: 'one-minus-constant', operation: 'add' },
     };
+    const weightedAddBlend = {
+      color: { srcFactor: 'constant', dstFactor: 'one', operation: 'add' },
+      alpha: { srcFactor: 'constant', dstFactor: 'one', operation: 'add' },
+    };
+
+    const attractorModule = device.createShaderModule({ code: ATTRACTOR_WGSL });
     state.pipelines.attractor = device.createRenderPipeline({
       layout: device.createPipelineLayout({ bindGroupLayouts: [raymarchBGL] }),
       vertex: {
         module: attractorModule,
         entryPoint: 'vs_line',
         buffers: [{
-          arrayStride: 16, // vec3 position + f32 age
+          arrayStride: 16,
           attributes: [
             { shaderLocation: 0, offset: 0, format: 'float32x3' },
             { shaderLocation: 1, offset: 12, format: 'float32' },
@@ -419,50 +440,40 @@ export async function initFractalBackground(canvas, options = {}) {
       fragment: {
         module: attractorModule,
         entryPoint: 'fs_line',
-        targets: [{ format: HDR_FORMAT, blend: addBlend }],
+        targets: [
+          { format: HDR_FORMAT, blend: weightedAddBlend },
+          { format: HDR_FORMAT, blend: weightedAddBlend },
+        ],
       },
       primitive: { topology: 'line-strip' },
     });
 
-    // Raymarch pipeline -> HDR target.
     state.pipelines.raymarch = device.createRenderPipeline({
       layout: device.createPipelineLayout({ bindGroupLayouts: [raymarchBGL] }),
-      vertex: { module: fractalModule, entryPoint: 'vs_main' },
+      vertex: { module: materialModule, entryPoint: 'vs_main' },
       fragment: {
-        module: fractalModule,
-        entryPoint: 'fs_main',
-        targets: [{ format: HDR_FORMAT }],
+        module: materialModule,
+        entryPoint: 'fs_material',
+        targets: [
+          { format: HDR_FORMAT, blend: averageBlend },
+          { format: HDR_FORMAT, blend: averageBlend },
+        ],
       },
       primitive: { topology: 'triangle-list' },
     });
 
-    // Camera clearance probe: one workgroup, one float out.
     state.pipelines.probe = device.createComputePipeline({
       layout: device.createPipelineLayout({ bindGroupLayouts: [probeBGL] }),
       compute: { module: fractalModule, entryPoint: 'cs_probe' },
     });
 
-    // Progressive accumulation: mix(prevHalf, scene, 1/(n+1)) -> other half.
-    state.pipelines.accum = device.createRenderPipeline({
-      layout: device.createPipelineLayout({ bindGroupLayouts: [compositeBGL] }),
-      vertex: { module: compositeModule, entryPoint: 'vs_main' },
-      fragment: {
-        module: compositeModule,
-        entryPoint: 'fs_accum',
-        targets: [{ format: HDR_FORMAT }],
-      },
-      primitive: { topology: 'triangle-list' },
-    });
-
-    // Bloom horizontal.
     state.pipelines.bloomH = device.createRenderPipeline({
-      layout: device.createPipelineLayout({ bindGroupLayouts: [blurBGL] }),
+      layout: device.createPipelineLayout({ bindGroupLayouts: [resolveBGL] }),
       vertex: { module: compositeModule, entryPoint: 'vs_main' },
       fragment: { module: compositeModule, entryPoint: 'fs_bloom_h', targets: [{ format: HDR_FORMAT }] },
       primitive: { topology: 'triangle-list' },
     });
 
-    // Bloom vertical.
     state.pipelines.bloomV = device.createRenderPipeline({
       layout: device.createPipelineLayout({ bindGroupLayouts: [blurBGL] }),
       vertex: { module: compositeModule, entryPoint: 'vs_main' },
@@ -470,7 +481,6 @@ export async function initFractalBackground(canvas, options = {}) {
       primitive: { topology: 'triangle-list' },
     });
 
-    // Composite -> swapchain (premultiplied output; canvas composites over page).
     state.pipelines.composite = device.createRenderPipeline({
       layout: device.createPipelineLayout({ bindGroupLayouts: [compositeBGL] }),
       vertex: { module: compositeModule, entryPoint: 'vs_main' },
@@ -484,10 +494,9 @@ export async function initFractalBackground(canvas, options = {}) {
     const device = state.device;
     if (state.targets) {
       state.targets.sceneTex.destroy();
+      state.targets.auxTex.destroy();
       state.targets.bloomA.destroy();
       state.targets.bloomB.destroy();
-      state.targets.accumA.destroy();
-      state.targets.accumB.destroy();
     }
     const bw = Math.max(1, Math.floor(renderW / 2));
     const bh = Math.max(1, Math.floor(renderH / 2));
@@ -499,36 +508,31 @@ export async function initFractalBackground(canvas, options = {}) {
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
       });
 
+    // Two full-resolution material attachments replace RGB + two accumulation
+    // ping-pong textures. They are averaged in place by blend constants.
     const sceneTex = mk(renderW, renderH);
+    const auxTex = mk(renderW, renderH);
     const bloomA = mk(bw, bh);
     const bloomB = mk(bw, bh);
-    // Accumulation ping-pong, full resolution.
-    const accumA = mk(renderW, renderH);
-    const accumB = mk(renderW, renderH);
 
-    // Cache views once — reused as render-pass attachments every frame so we
-    // don't allocate per-frame.
     const sceneView = sceneTex.createView();
+    const auxView = auxTex.createView();
     const bloomAView = bloomA.createView();
     const bloomBView = bloomB.createView();
-    const accumAView = accumA.createView();
-    const accumBView = accumB.createView();
 
     state.targets = {
-      sceneTex, bloomA, bloomB, accumA, accumB,
-      sceneView, bloomAView, bloomBView, accumAView, accumBView,
+      sceneTex, auxTex, bloomA, bloomB,
+      sceneView, auxView, bloomAView, bloomBView,
       w: renderW, h: renderH,
     };
-    // A new size invalidates whatever had been averaged.
     state.accumSamples = 0;
 
-    // (Re)build bind groups that reference these views.
     const ub = { buffer: state.uniformBuffer };
     state.bindGroups.raymarch = device.createBindGroup({
       layout: state._bgl.raymarchBGL,
       entries: [{ binding: 0, resource: ub }],
     });
-    // Two floats: clearance at the camera, and the centre-ray surface distance.
+
     state.probeBuffer = device.createBuffer({
       size: 8,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
@@ -545,38 +549,16 @@ export async function initFractalBackground(canvas, options = {}) {
         { binding: 1, resource: { buffer: state.probeBuffer } },
       ],
     });
+
     state.bindGroups.bloomH = device.createBindGroup({
-      layout: state._bgl.blurBGL,
+      layout: state._bgl.resolveBGL,
       entries: [
         { binding: 0, resource: ub },
         { binding: 1, resource: state.sampler },
         { binding: 2, resource: sceneView },
+        { binding: 3, resource: auxView },
       ],
     });
-    // Accumulation variants. `accum[k]` reads the scene plus half k and writes
-    // the other half; `bloomHFrom[k]` / `compositeFrom[k]` then read half k as
-    // the source instead of the raw scene.
-    const mkAccum = (prevView) => device.createBindGroup({
-      layout: state._bgl.compositeBGL,
-      entries: [
-        { binding: 0, resource: ub },
-        { binding: 1, resource: state.sampler },
-        { binding: 2, resource: sceneView },
-        { binding: 3, resource: prevView },
-      ],
-    });
-    state.bindGroups.accum = [mkAccum(accumAView), mkAccum(accumBView)];
-
-    const mkBloomH = (srcView) => device.createBindGroup({
-      layout: state._bgl.blurBGL,
-      entries: [
-        { binding: 0, resource: ub },
-        { binding: 1, resource: state.sampler },
-        { binding: 2, resource: srcView },
-      ],
-    });
-    state.bindGroups.bloomHFrom = [mkBloomH(accumBView), mkBloomH(accumAView)];
-
     state.bindGroups.bloomV = device.createBindGroup({
       layout: state._bgl.blurBGL,
       entries: [
@@ -591,20 +573,10 @@ export async function initFractalBackground(canvas, options = {}) {
         { binding: 0, resource: ub },
         { binding: 1, resource: state.sampler },
         { binding: 2, resource: sceneView },
-        { binding: 3, resource: bloomBView },
+        { binding: 3, resource: auxView },
+        { binding: 4, resource: bloomBView },
       ],
     });
-
-    const mkComposite = (srcView) => device.createBindGroup({
-      layout: state._bgl.compositeBGL,
-      entries: [
-        { binding: 0, resource: ub },
-        { binding: 1, resource: state.sampler },
-        { binding: 2, resource: srcView },
-        { binding: 3, resource: bloomBView },
-      ],
-    });
-    state.bindGroups.compositeFrom = [mkComposite(accumBView), mkComposite(accumAView)];
   }
 
   // ---- Strange attractors: integrate the trajectory into line geometry ----
@@ -860,10 +832,11 @@ export async function initFractalBackground(canvas, options = {}) {
     d[U.mbMinRadius] = 0.35;
     d[U.mbFixedRadius] = 1.0;
 
-    // Cycles per second. Read by the COMPOSITE pass, not the raymarch, so
-    // changing it never invalidates the accumulated image -- which is the whole
-    // point: the colour keeps moving on a frame that has already converged.
+    // The rate remains public API state; the composite shader consumes the
+    // integrated phase. Separating this clock from animTime is what lets colour
+    // keep moving while geometry is frozen for progressive accumulation.
     d[U.colorCycle] = state.colorCycle;
+    d[U.colorPhase] = rm ? 0.0 : state.colorPhase;
     const im = state.image;
     d[U.imageAdjust] = im.exposure;
     d[U.imageAdjust + 1] = im.contrast;
@@ -968,42 +941,43 @@ export async function initFractalBackground(canvas, options = {}) {
       encoder.copyBufferToBuffer(state.probeBuffer, 0, state.probeStaging, 0, 8);
     }
 
-    // Pass 1: raymarch -> sceneTex
+    // Pass 1: raymarch -> palette-independent material attachments. While
+    // accumulating, blend the new jitter sample into the running average in
+    // place. The first sample clears; subsequent samples load the prior mean.
     if (drawScene) {
+      const continuing = acc && state.accumSamples > 0;
+      const blendWeight = acc ? 1 / (state.accumSamples + 1) : 1;
+      const loadOp = continuing ? 'load' : 'clear';
       const pass = encoder.beginRenderPass({
         colorAttachments: [
           {
             view: T.sceneView,
             clearValue: { r: 0, g: 0, b: 0, a: 0 },
-            loadOp: 'clear',
+            loadOp,
+            storeOp: 'store',
+          },
+          {
+            view: T.auxView,
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp,
             storeOp: 'store',
           },
         ],
       });
+      pass.setBlendConstant({ r: blendWeight, g: blendWeight, b: blendWeight, a: blendWeight });
       pass.setPipeline(state.pipelines.raymarch);
       pass.setBindGroup(0, state.bindGroups.raymarch);
       pass.draw(3);
 
-      // Attractors: rasterize the trajectory as additive line geometry over
-      // the background the raymarch pass just wrote.
+      // Attractor line material is weighted-additive. The raymarch draw above
+      // has already averaged the background sample; every segment now adds its
+      // current sample contribution with the same 1/(n+1) weight.
       if (state.fractalType >= FRACTAL_IDS.attractor && state.trajBuffer) {
         pass.setPipeline(state.pipelines.attractor);
         pass.setBindGroup(0, state.bindGroups.raymarch);
         pass.setVertexBuffer(0, state.trajBuffer);
         pass.draw(state.trajCount);
       }
-      pass.end();
-    }
-
-    // Pass 1b: fold the jittered frame into the running average.
-    if (acc && drawScene) {
-      const dst = state.accumParity === 0 ? T.accumBView : T.accumAView;
-      const pass = encoder.beginRenderPass({
-        colorAttachments: [{ view: dst, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
-      });
-      pass.setPipeline(state.pipelines.accum);
-      pass.setBindGroup(0, state.bindGroups.accum[state.accumParity]);
-      pass.draw(3);
       pass.end();
     }
 
@@ -1014,7 +988,7 @@ export async function initFractalBackground(canvas, options = {}) {
         colorAttachments: [{ view: T.bloomAView, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
       });
       pass.setPipeline(state.pipelines.bloomH);
-      pass.setBindGroup(0, acc ? state.bindGroups.bloomHFrom[par] : state.bindGroups.bloomH);
+      pass.setBindGroup(0, state.bindGroups.bloomH);
       pass.draw(3);
       pass.end();
     }
@@ -1040,7 +1014,7 @@ export async function initFractalBackground(canvas, options = {}) {
         colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
       });
       pass.setPipeline(state.pipelines.composite);
-      pass.setBindGroup(0, acc ? state.bindGroups.compositeFrom[par] : state.bindGroups.composite);
+      pass.setBindGroup(0, state.bindGroups.composite);
       pass.draw(3);
       pass.end();
     }
@@ -1049,7 +1023,6 @@ export async function initFractalBackground(canvas, options = {}) {
 
     if (acc && drawScene) {
       state.accumSamples += 1;
-      state.accumParity ^= 1;
     }
 
     if (doProbe) {
@@ -1105,33 +1078,32 @@ export async function initFractalBackground(canvas, options = {}) {
 
     const dt = state.lastFrameTime ? nowMs - state.lastFrameTime : 16.7;
     state.lastFrameTime = nowMs;
-
     state.frameDt = dt;
 
-    // Averaging a moving image smears it, so the animation clock stops once the
-    // view settles and resumes the moment anything is touched.
-    if (accumulating(nowMs)) {
+    const acc = accumulating(nowMs);
+    if (!reducedMotion()) {
+      // Palette phase has its own clock: it remains live on a converged frame.
+      // Geometry time still freezes while accumulating, so the material samples
+      // describe one stable scene instead of smearing animation together.
+      state.colorPhase = (state.colorPhase + (dt / 1000) * state.colorCycle) % 1;
+      if (!acc) {
+        state.animTime += dt / 1000;
+        state.parallax.x += (state.parallax.tx - state.parallax.x) * 0.05;
+        state.parallax.y += (state.parallax.ty - state.parallax.y) * 0.05;
+      }
+    }
+
+    if (acc) {
       renderFrame(nowMs, false);
       // Deliberately not sampled by adaptQuality. A converged frame skips the
-      // raymarch entirely, so its cost says nothing about whether the renderer
-      // can sustain the interactive frame rate. Feeding those frames to the
-      // controller reads as headroom, raises quality, and the resize that
-      // follows resets the average -- which drops the frame rate again and
-      // oscillates, flickering on every change.
+      // raymarch entirely, so its post-chain cost is not an interactive FPS
+      // measurement and must not drive the adaptive-resolution controller.
       state.rafId = requestAnimationFrame(loop);
       return;
     }
 
-    if (!reducedMotion()) {
-      state.animTime += dt / 1000;
-      // Ease parallax toward target.
-      state.parallax.x += (state.parallax.tx - state.parallax.x) * 0.05;
-      state.parallax.y += (state.parallax.ty - state.parallax.y) * 0.05;
-    }
-
     renderFrame(nowMs, false);
     adaptQuality(dt);
-
     state.rafId = requestAnimationFrame(loop);
   }
 
@@ -1512,6 +1484,7 @@ export async function initFractalBackground(canvas, options = {}) {
     try {
       if (state.targets) {
         state.targets.sceneTex.destroy();
+        state.targets.auxTex.destroy();
         state.targets.bloomA.destroy();
         state.targets.bloomB.destroy();
       }
@@ -1744,7 +1717,8 @@ export async function initFractalBackground(canvas, options = {}) {
     setPalette(name) {
       state.palette = getPalette(name);
       state.paletteRamp = null;
-      state.accumSamples = 0;
+      // Material accumulation is palette-independent: recolour the converged
+      // frame immediately rather than throwing away 96 geometry samples.
       if (!state.running) renderFrame(performance.now(), true);
     },
     setQuality(mode) {
@@ -1805,7 +1779,8 @@ export async function initFractalBackground(canvas, options = {}) {
         const mean = averageColor(stops);
         state.palette = { ...state.palette, a: mean };
       }
-      state.accumSamples = 0;
+      // Imported ramps are resolved from the same stored coordinates as cosine
+      // presets, so changing one also preserves a converged material buffer.
       nudgeRender();
       return true;
     },
