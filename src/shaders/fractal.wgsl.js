@@ -25,8 +25,9 @@ const RAMP_MAX : u32 = 8u;
 //                           7=surfacepack, 8=penrose, 9=gyroid, 10=kleinian,
 //                           11=barth, 12=schottky (kissing/parabolic),
 //                           13=schottkyh (hyperbolic), 14=tetrabrot,
-//                           15=envoct, 16=envdodec; 17+ are the line-rendered
-//                           attractors, which this pass only backgrounds)
+//                           15=envoct, 16=envdodec, 17=hyp534, 18=hyp435;
+//                           19+ are the line-rendered attractors, which this
+//                           pass only backgrounds)
 //   48  power      : f32
 //   52  mbScale    : f32
 //   56  mbMinRadius: f32
@@ -1243,6 +1244,120 @@ fn deEnvelope(pos : vec3<f32>) -> DEResult {
   return res;
 }
 
+// ---- Hyperbolic honeycomb --------------------------------------------------
+//
+// A regular tessellation {p,q,r} of HYPERBOLIC 3-space, drawn in the Poincare
+// ball. This is the first model here whose ambient space is not Euclidean:
+// everything else is an object sitting in Euclidean 3-space, or a limit set on
+// the boundary of hyperbolic space. Here what fills the ball is space itself.
+//
+// The symmetry group [p,q,r] is a Coxeter group on four mirrors, with dihedral
+// angles pi/p, pi/q, pi/r along the chain and right angles otherwise. Three of
+// them can be taken as Euclidean planes through the origin -- they generate the
+// finite group [p,q] of a single cell -- and the fourth as a sphere orthogonal
+// to the unit sphere, which is what carries one cell into the next:
+//
+//   n0 = (1, 0, 0)
+//   n1 = (-cos(pi/p), sin(pi/p), 0)
+//   n2 = (0, -cos(pi/q)/sin(pi/p), sqrt(1 - cos^2(pi/q)/sin^2(pi/p)))
+//
+// The sphere is orthogonal to the first two, so its centre lies on u = n0 x n1,
+// and meets the third at pi/r. With |c|^2 - s^2 = 1 for orthogonality to the
+// unit sphere, that gives t^2 = cos^2(pi/r) / (cos^2(pi/r) - (u.n2)^2). The
+// denominator is positive exactly for the four compact hyperbolic honeycombs:
+// it vanishes for the Euclidean {4,3,4} and goes negative for the spherical
+// {5,3,3}, so the construction rejects those for the right reason.
+//
+// The centre goes on the NEGATIVE side of n2, the side the fundamental cone
+// lies on. Placed the other way the sphere never meets the cone: the fold
+// reduces by plane reflections alone, the conformal factor stays exactly 1, and
+// what renders is one cell rather than a tessellation. The measured reflection
+// count is what exposes it -- it should climb toward the boundary (4 to 11 as
+// |p| goes to 0.99, with the factor reaching 48), and instead sat flat.
+//
+// What is drawn is the edge skeleton. The honeycomb's vertex and edge-midpoint
+// both lie in n2 and on the mirror sphere, so the geodesic edge between them is
+// an arc of their intersection circle, which is cheap in closed form. Cell walls
+// were the first attempt and are the wrong choice: they fill the ball, so from
+// outside they render as a featureless sphere.
+//
+// Clipped well inside the unit ball, not at it. The edges accumulate on the
+// sphere at infinity, so near |p| = 1 the structure is finer than any finite
+// reflection budget resolves.
+fn deHoneycomb(pos : vec3<f32>) -> DEResult {
+  const HC_ITERS : i32 = 40;
+  const R_CLIP : f32 = 0.85;
+  const THICK : f32 = 0.02;
+
+  var res : DEResult;
+
+  let r = length(pos);
+  let clip = r - R_CLIP;
+  if (r >= 0.999) {
+    // Outside the ball the fold is not valid. The clip is a safe step and is
+    // far enough above zero here that it cannot itself register as a surface.
+    res.dist = clip;
+    res.trap = 0.4;
+    return res;
+  }
+
+  // {5,3,4} and {4,3,5}; both cells are spherical so the same code serves.
+  var n0 = vec3<f32>(1.0, 0.0, 0.0);
+  var n1 = vec3<f32>(-0.80901699, 0.58778525, 0.0);   // p = 5
+  var n2 = vec3<f32>(0.0, -0.85065081, 0.52573111);
+  var cen = vec3<f32>(0.0, 0.0, -1.49534878);          // r = 4
+  var sph = 1.11178595;
+  if (u.fractalType > 17.5) {
+    n1 = vec3<f32>(-0.70710678, 0.70710678, 0.0);      // p = 4
+    n2 = vec3<f32>(0.0, -0.70710678, 0.70710678);
+    cen = vec3<f32>(0.0, 0.0, -2.05817103);            // r = 5
+    sph = 1.79890744;
+  }
+
+  // The edge circle: the mirror sphere cut by the plane n2.
+  let h = dot(cen, n2);
+  let orig = cen - n2 * h;
+  let rad = sqrt(max(sph * sph - h * h, 1e-12));
+
+  var p = pos;
+  var factor = 1.0;
+  var word = 0.0;
+  let s2 = sph * sph;
+
+  for (var i = 0; i < HC_ITERS; i = i + 1) {
+    var moved = false;
+    let d0 = dot(p, n0);
+    if (d0 > 0.0) { p = p - n0 * (2.0 * d0); moved = true; }
+    let d1 = dot(p, n1);
+    if (d1 > 0.0) { p = p - n1 * (2.0 * d1); moved = true; }
+    let d2 = dot(p, n2);
+    if (d2 > 0.0) { p = p - n2 * (2.0 * d2); moved = true; }
+    let v = p - cen;
+    let q2 = dot(v, v);
+    if (q2 < s2) {
+      let k = s2 / max(q2, 1e-18);
+      p = cen + v * k;
+      factor = factor * k;
+      moved = true;
+    }
+    if (!moved) { break; }
+    word = word + 1.0;
+  }
+
+  // Distance to the edge circle, carried back through the conformal factor --
+  // rays are marched in the Euclidean ball, so the estimate must be Euclidean.
+  let w = p - orig;
+  let axial = dot(w, n2);
+  let radial = sqrt(max(dot(w, w) - axial * axial, 0.0)) - rad;
+  let tube = (sqrt(radial * radial + axial * axial) - THICK) / max(factor, 1e-9);
+
+  res.dist = max(tube, clip);
+  // Reflection depth: cells near the boundary took far more folding than the
+  // one around the origin, so this reads as hyperbolic distance from the centre.
+  res.trap = clamp(0.12 + 0.055 * word, 0.0, 1.0);
+  return res;
+}
+
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
   let ft = u.fractalType;
@@ -1275,9 +1390,12 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
     return deSchottky(pos);
   } else if (ft < 14.5) {
     return deTetrabrot(pos);
+  } else if (ft < 16.5) {
+    // Both envelope entries share one estimator; the id selects the seed.
+    return deEnvelope(pos);
   }
-  // Both envelope entries share one estimator; the id selects the seed.
-  return deEnvelope(pos);
+  // Both honeycomb entries share one estimator; the id selects {p,q,r}.
+  return deHoneycomb(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {
@@ -1413,7 +1531,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // Strange attractors aren't distance fields — they're rasterized as line
   // geometry by a second pipeline drawn over this pass. Emit only the
   // background here so those lines have something to blend onto.
-  if (u.fractalType > 16.5) {
+  if (u.fractalType > 18.5) {
     let bg = backgroundColor(rd);
     return vec4<f32>(select(vec3<f32>(0.0), bg, u.bgMode >= 0.5), 0.0);
   }

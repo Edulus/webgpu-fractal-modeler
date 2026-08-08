@@ -39,10 +39,12 @@ The renderer already includes, in menu order, matching `FRACTAL_IDS` in `src/fra
 - Tetrabrot (bicomplex Mandelbrot slice)
 - Envelope extrusion, octahedral seed
 - Envelope extrusion, dodecahedral seed
+- Hyperbolic honeycomb {5,3,4}
+- Hyperbolic honeycomb {4,3,5}
 - Aizawa attractor
 - Lorenz attractor
 
-All nineteen are reachable from the demo's model selector. The first seventeen are
+All twenty-one are reachable from the demo's model selector. The first nineteen are
 distance-estimated surfaces sharing the raymarch pass; the two attractors are
 line geometry drawn by a second pipeline. The two Schottky entries share one
 estimator and differ only in regime.
@@ -247,7 +249,7 @@ Simple tubes alone are insufficient. Knot models should expose invariants, spann
 | **Icosahedral quasicrystal** | 3D cut-and-project set derived from a six-dimensional lattice |
 | **Ammann rhombohedral tiling** | Quasiperiodic filling by prolate and oblate golden rhombohedra |
 | **3D Penrose tiling** | Genuine quasiperiodic rhombohedral structure rather than an extruded 2D pattern |
-| **Hyperbolic honeycombs** | Regular cells filling hyperbolic 3-space, viewed in a Poincaré ball |
+| ~~**Hyperbolic honeycombs**~~ | **Shipped**, {5,3,4} and {4,3,5}: the first model whose ambient space is not Euclidean |
 | **Weaire–Phelan foam** | Low-area equal-volume cellular partition |
 | **Kelvin foam** | Truncated-octahedral foam structure |
 | **Weighted Voronoi / Laguerre foam** | Parameterized cellular volumes with controllable seeds and weights |
@@ -352,7 +354,7 @@ These establish 4D rotation, projection, and generated-geometry controls on top 
 
 1. Icosahedral quasicrystal / Ammann rhombohedral tiling
 2. Quaternion Mandelbrot set
-3. Hyperbolic honeycomb
+3. ~~Hyperbolic honeycomb~~ — shipped
 
 These should be prototyped separately and admitted to the main model list only after they are visually convincing, mathematically faithful, and scalable across devices. The quasicrystal is the best understood of the three, being a dimensional lift of code already in the repository.
 

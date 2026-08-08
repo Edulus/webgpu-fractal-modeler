@@ -37,6 +37,8 @@ No Three.js, no Babylon, no build step, and no npm. Just ES modules, WGSL, and H
 - Tetrabrot (bicomplex Mandelbrot slice)
 - Envelope extrusion, octahedral seed (stella octangula)
 - Envelope extrusion, dodecahedral seed (small stellated dodecahedron)
+- Hyperbolic honeycomb {5,3,4}
+- Hyperbolic honeycomb {4,3,5}
 - Aizawa strange attractor
 - Lorenz strange attractor
 
@@ -287,6 +289,7 @@ Uniforms occupy one 160-byte, 16-byte-aligned buffer. The byte offsets are mirro
 - **Schottky groups:** a free discrete group of Möbius transformations of space, at and near the kissing configuration
 - **Tetrabrot:** a 3D slice of the bicomplex Mandelbrot set, the parameter-space companion to the quaternion Julia
 - **Envelope extrusion:** Thurman's zero-parameter facewise polyhedral operator, which reduces to classical first stellation
+- **Hyperbolic honeycomb:** a regular tessellation of hyperbolic 3-space, drawn in the Poincaré ball
 
 All shader loops are statically bounded for WGSL portability, with guarded logarithm, power, radius, and inversion domains.
 
@@ -297,6 +300,30 @@ A Kleinian group is a discrete group of Möbius transformations, and its limit s
 The smooth caps in the result are not an artefact: they are the group's tangent spheres, with recursive filigree running along the ridges where they meet. Slowly drifting the inversion radius walks the construction through a family of nearby Kleinian groups, morphing the limit set within a narrow band — the structure degenerates quickly outside it.
 
 Parameters came from rendering candidates rather than from a reference. The construction is sharply sensitive to them: of the first four published-looking parameter sets tried, three collapsed into featureless lobes, and swapping the final primitive alone was enough to turn the surface from tangent spheres into granular noise.
+
+#### Hyperbolic honeycomb
+
+**The first model here whose ambient space is not Euclidean.** Everything else is an object sitting in Euclidean 3-space, or a limit set on the *boundary* of hyperbolic space — the Kleinian and Schottky sets are limit sets *of* hyperbolic isometries. A honeycomb `{p,q,r}` is a regular tessellation *of* hyperbolic 3-space, so what fills the ball is space itself, seen through a conformal chart.
+
+The symmetry group `[p,q,r]` is a Coxeter group on four mirrors, with dihedral angles π/p, π/q, π/r along the chain and right angles otherwise. Three can be taken as Euclidean planes through the origin — generating the finite group `[p,q]` of one cell — and the fourth as a sphere orthogonal to the unit sphere, which carries each cell into the next:
+
+```text
+n0 = (1, 0, 0)
+n1 = (−cos(π/p), sin(π/p), 0)
+n2 = (0, −cos(π/q)/sin(π/p), √(1 − cos²(π/q)/sin²(π/p)))
+```
+
+The sphere is orthogonal to the first two, so its centre lies on `u = n0 × n1`, and meets the third at π/r. With `|c|² − s² = 1` for orthogonality to the unit sphere, `t² = cos²(π/r) / (cos²(π/r) − (u·n2)²)`.
+
+**That denominator is the hyperbolicity condition, and it discriminates exactly.** It is positive for precisely the four compact hyperbolic honeycombs, vanishes identically for the Euclidean `{4,3,4}` (0.5 ≤ 0.5, exactly on the boundary), and goes negative for the spherical `{5,3,3}` and `{3,3,3}` — so the construction rejects those for the right reason rather than by accident. All four hyperbolic cases build with their angles exact and orthogonality at machine zero.
+
+Three things had to be got right, and each was caught by measurement rather than by looking:
+
+- **The sphere goes on the negative side of `n2`,** the side the fundamental cone lies on. Placed the other way it never meets the cone at all: the fold reduces by plane reflections alone, the conformal factor stays *exactly* 1, and one cell renders instead of a tessellation. The reflection count exposes it — it should climb toward the boundary (median 4 → 11 as `|p|` goes to 0.99, factor reaching 48) and instead sat flat.
+- **The edge skeleton, not the cell walls.** Walls fill the ball, so from outside they render as a featureless sphere. The honeycomb's vertex and edge-midpoint both lie in `n2` and on the mirror sphere, so the geodesic edge between them is an arc of their intersection circle — closed form and cheap.
+- **Clipped well inside the ball, not at it.** The edges accumulate on the sphere at infinity, so near `|p| = 1` the structure is finer than any finite reflection budget resolves. Returning the clip distance on its own also makes the clip a surface, since it falls to zero there and trips the hit test; taking `max` with the tube means it only shows where it actually cuts an edge.
+
+Rays are marched in the Euclidean ball, so the estimate must be Euclidean: the conformal factor is accumulated through the inversions and divided out at the end, exactly as the Apollonian and Kleinian estimators do. Fly-through mode is the natural way to see these — a tessellation of space is something to be inside.
 
 #### Envelope extrusion
 
