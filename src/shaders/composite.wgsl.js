@@ -162,12 +162,87 @@ fn hueRotate(c : vec3<f32>, a : f32) -> vec3<f32> {
   return c * ca + cross(K, c) * sin(a) + K * dot(K, c) * (1.0 - ca);
 }
 
+// ---- The backdrop, recomputed -----------------------------------------------
+// Copies of the raymarch pass's camera and background, so this pass can work
+// out what a pixel would have held with no model in front of it. They are
+// copies rather than shared code because the two shaders are separate modules;
+// if the background in fractal.wgsl changes, change it here too.
+fn cameraRay(uv : vec2<f32>, ro : vec3<f32>, ta : vec3<f32>, fov : f32) -> vec3<f32> {
+  let aspect = u.resolution.x / max(u.resolution.y, 1.0);
+  var p = (uv * 2.0 - 1.0);
+  p.x = p.x * aspect;
+  let fwd = normalize(ta - ro);
+  let right = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), fwd));
+  let up = cross(fwd, right);
+  let focal = 1.0 / tan(fov * 0.5);
+  return normalize(p.x * right + p.y * up + focal * fwd);
+}
+
+fn backgroundColor(rd : vec3<f32>) -> vec3<f32> {
+  let t = clamp(rd.y * 0.5 + 0.5, 0.0, 1.0);
+  let lo = u.paletteA.rgb * 0.008;
+  let hi = u.paletteA.rgb * 0.022 + vec3<f32>(0.002, 0.003, 0.006);
+  return mix(lo, hi, t);
+}
+
+// Scene HDR -> display: hue, exposure, tonemap, gamma, saturation. Everything
+// bar the contrast curve, which needs two values that have come this far.
+fn toDisplay(hdr : vec3<f32>, hueTurns : f32) -> vec3<f32> {
+  var c = hdr;
+  if (hueTurns != 0.0) {
+    // Clamped because rotating about grey takes saturated colours OUT of the
+    // positive octant -- measured, a channel goes negative at 1999 of 2000
+    // angles for pure red. Negatives survive acesFilm and then reach
+    // pow(col, 1/2.2), which is NaN for a negative base: black or garbage
+    // pixels rather than a wrong hue. Clamping desaturates the few colours that
+    // leave the gamut, which is the usual and correct answer.
+    c = max(hueRotate(c, 6.28318531 * hueTurns), vec3<f32>(0.0));
+  }
+  // Exposure BEFORE the tonemapper, which is what makes it behave like a
+  // camera: highlights roll off along the ACES curve instead of clipping flat,
+  // which is what a brightness multiply after the tonemap would do. The 1.05
+  // was already here as a fixed exposure; the slider scales it.
+  c = acesFilm(c * 1.05 * u.imageAdjust.x);
+  c = pow(c, vec3<f32>(1.0 / 2.2));
+  // Saturation in DISPLAY space, after gamma.
+  return mix(vec3<f32>(luma(c)), c, u.imageAdjust.z);
+}
+
+// Contrast, pivoting on the BACKDROP rather than on mid-grey.
+//
+// Mid-grey is what a photo editor pivots on, and it is wrong here: the backdrop
+// sits around 0.06 in display space, so turning contrast down lifts it to a
+// flat grey and turning it up crushes the gradient to dead black. The model is
+// what the control is for; the space it sits in should hold still.
+//
+// So the channel is rescaled to put the backdrop at 0 and white at 1, and an
+// S-curve is applied there. u^k / (u^k + (1-u)^k) fixes both ends exactly and
+// is the identity at k=1, so the backdrop and white are untouched at every
+// setting and nothing can be clipped or crushed at either end -- the curve
+// steepens through the middle of the model's own range instead. Away from the
+// model the picture already equals the backdrop, so it lands on itself and
+// there is no seam anywhere for the effect to start at.
+fn contrastCurve(c : vec3<f32>, bg : vec3<f32>, k : f32) -> vec3<f32> {
+  let span = max(vec3<f32>(1.0) - bg, vec3<f32>(1e-4));
+  let x = (c - bg) / span;
+  let xc = clamp(x, vec3<f32>(0.0), vec3<f32>(1.0));
+  let a = pow(xc, vec3<f32>(k));
+  let b = pow(vec3<f32>(1.0) - xc, vec3<f32>(k));
+  let curved = bg + span * (a / max(a + b, vec3<f32>(1e-6)));
+  // A channel darker than the backdrop -- a deep crevice in shadow -- is left
+  // exactly as it is. Clamping it into the curve instead would raise it to the
+  // backdrop's own brightness, which is a visible change at every setting
+  // including the neutral one. Continuous at the join, since the curve starts
+  // at the backdrop.
+  return select(c, curved, x > vec3<f32>(0.0));
+}
+
 @fragment
 fn fs_composite(in : VSOut) -> @location(0) vec4<f32> {
   let scene = textureSampleLevel(srcTex, samp, in.uv, 0.0);
   let bloom = textureSampleLevel(bloomTex, samp, in.uv, 0.0).rgb;
 
-  var hdr = scene.rgb + bloom * 1.1;
+  let hdr = scene.rgb + bloom * 1.1;
 
   // Colour cycling. Done here rather than in the raymarch so it costs nothing
   // on a converged frame -- this pass runs every frame either way -- and so it
@@ -179,30 +254,20 @@ fn fs_composite(in : VSOut) -> @location(0) vec4<f32> {
   // the two compose instead of one overriding the other. With cycling off this
   // is a plain hue control.
   let hueTurns = u.imageAdjust.w + select(0.0, fract(u.time * rate), rate > 0.0);
-  if (hueTurns != 0.0) {
-    // Clamped because rotating about grey takes saturated colours OUT of the
-    // positive octant -- measured, a channel goes negative at 1999 of 2000
-    // angles for pure red. Negatives survive acesFilm and then reach
-    // pow(col, 1/2.2), which is NaN for a negative base: black or garbage
-    // pixels rather than a wrong hue. Clamping desaturates the few colours that
-    // leave the gamut, which is the usual and correct answer.
-    hdr = max(hueRotate(hdr, 6.28318531 * hueTurns), vec3<f32>(0.0));
-  }
 
-  // Exposure BEFORE the tonemapper, which is what makes it behave like a
-  // camera: highlights roll off along the ACES curve instead of clipping flat,
-  // which is what a brightness multiply after the tonemap would do. The 1.05
-  // was already here as a fixed exposure; the slider scales it.
-  var col = acesFilm(hdr * 1.05 * u.imageAdjust.x);
-  col = pow(col, vec3<f32>(1.0 / 2.2));
+  // The bare backdrop for this pixel: the same gradient the raymarch pass would
+  // have written with nothing in front of the camera, or black in transparent
+  // mode. Taken through the identical chain so it can serve as the contrast
+  // pivot -- a pixel showing only the backdrop then lands exactly on itself.
+  let rd = cameraRay(vec2<f32>(in.uv.x, 1.0 - in.uv.y), u.camPos, u.camTarget, u.fov);
+  let bgHdr = select(vec3<f32>(0.0), backgroundColor(rd), u.bgMode >= 0.5);
 
-  // Saturation and contrast in DISPLAY space, after gamma. Contrast pivots on
-  // mid-grey; pivot anywhere else and the picture visibly brightens or darkens
-  // as the control is turned. Applied before the vignette so that stays an
+  var col = toDisplay(hdr, hueTurns);
+  // Contrast last, and pivoted on the backdrop, so it works on the model and
+  // leaves the space around it alone. Before the vignette, so that stays an
   // even frame effect rather than being amplified along with everything else.
-  col = mix(vec3<f32>(luma(col)), col, u.imageAdjust.z);
-  col = (col - vec3<f32>(0.5)) * u.imageAdjust.y + vec3<f32>(0.5);
-  col = max(col, vec3<f32>(0.0));
+  col = max(contrastCurve(col, toDisplay(bgHdr, hueTurns), u.imageAdjust.y),
+            vec3<f32>(0.0));
 
   // Vignette — subtle, keeps edges dark for text legibility.
   let q = in.uv - vec2<f32>(0.5);

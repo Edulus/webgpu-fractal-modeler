@@ -83,15 +83,38 @@ const acesFilm = (c) => c.map((x) =>
   clamp01((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)));
 const luma = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
 
-// hue is in turns; phase is what the cycle contributes at this instant.
-function adjust(hdr, { exposure = 1, contrast = 1, saturation = 1, hue = 0 } = {}, phase = 0) {
-  const turns = hue + phase;
+// Everything bar the contrast curve, which needs two values in display space.
+function toDisplay(hdr, { exposure = 1, saturation = 1 } = {}, turns = 0) {
   let c = turns !== 0 ? hueRotate(hdr, TAU * turns).map((v) => Math.max(v, 0)) : hdr;
   c = acesFilm(c.map((v) => v * 1.05 * exposure)).map((v) => Math.pow(v, 1 / 2.2));
   const L = luma(c);
-  c = c.map((v) => L + (v - L) * saturation);
-  c = c.map((v) => (v - 0.5) * contrast + 0.5);
-  return c.map((v) => Math.max(v, 0));
+  return c.map((v) => L + (v - L) * saturation);
+}
+
+// Contrast pivots on the backdrop, not on mid-grey: the channel is rescaled to
+// put the backdrop at 0 and white at 1, and an S-curve that fixes both ends is
+// applied there.
+function contrastCurve(c, bg, k) {
+  return c.map((v, i) => {
+    const span = Math.max(1 - bg[i], 1e-4);
+    const x = (v - bg[i]) / span;
+    if (!(x > 0)) return v;          // darker than the backdrop: left alone
+    const xc = Math.min(x, 1);
+    const a = Math.pow(xc, k), b = Math.pow(1 - xc, k);
+    return bg[i] + span * (a / Math.max(a + b, 1e-6));
+  });
+}
+
+// The backdrop the raymarch writes where nothing is hit: a very dark gradient
+// in presentation mode, exactly black in transparent mode.
+const BACKDROP = [0.0102, 0.0126, 0.0138];
+
+// hue is in turns; phase is what the cycle contributes at this instant.
+function adjust(hdr, opts = {}, phase = 0, bg = BACKDROP) {
+  const { contrast = 1, hue = 0 } = opts;
+  const turns = hue + phase;
+  const c = toDisplay(hdr, opts, turns);
+  return contrastCurve(c, toDisplay(bg, opts, turns), contrast).map((v) => Math.max(v, 0));
 }
 
 // The shipped defaults must leave the picture exactly as it was before the
@@ -123,19 +146,71 @@ const flat = adjust(mixed, { saturation: 0 });
 check('saturation 0 is achromatic', near(flat[0], flat[1]) && near(flat[1], flat[2]));
 check('and holds the luminance it started from', near(luma(flat), luma(adjust(mixed)), 1e-6));
 
-// Contrast pivots on mid-grey. Pivot anywhere else and the picture visibly
-// brightens or darkens as the control is turned, which reads as a broken
-// slider rather than a contrast one.
-// The scene value that lands on display 0.5 through exposure, ACES and gamma.
-const midHdr = [0.1441075, 0.1441075, 0.1441075];
-const mid = adjust(midHdr)[0];
-let pivotDrift = 0;
-for (const k of [0.5, 0.8, 1.3, 2.0]) {
-  pivotDrift = Math.max(pivotDrift, Math.abs(adjust(midHdr, { contrast: k })[0] - mid));
+// Contrast pivots on the BACKDROP, which is the whole point of the curve: the
+// space around the model must hold still while the model gains contrast.
+// Mid-grey, which is what a photo editor pivots on, lifts a 0.06 backdrop to a
+// flat grey at k<1 and crushes it to dead black at k>1.
+const KS = [0.5, 0.7, 1, 1.3, 2, 3];
+let bgDrift = 0, whiteDrift = 0;
+for (const k of KS) {
+  const bgOut = adjust(BACKDROP, { contrast: k });
+  const ref = adjust(BACKDROP);
+  bgDrift = Math.max(bgDrift, ...bgOut.map((v, i) => Math.abs(v - ref[i])));
+  // ...and with the other three sliders moved as well, since the pivot has to
+  // follow the backdrop through exposure, hue and saturation to stay on it.
+  for (const o of [{ exposure: 2.2 }, { saturation: 0 }, { hue: 0.31 }]) {
+    const a = adjust(BACKDROP, { ...o, contrast: k });
+    const b = adjust(BACKDROP, o);
+    bgDrift = Math.max(bgDrift, ...a.map((v, i) => Math.abs(v - b[i])));
+  }
+  const w = adjust([40, 40, 40], { contrast: k });   // far into the highlights
+  whiteDrift = Math.max(whiteDrift, ...w.map((v) => Math.abs(v - 1)));
 }
-check('contrast holds mid-grey within 2/255', pivotDrift < 2 / 255);
-check('contrast > 1 pushes a bright value brighter',
-      adjust([1.2, 1.2, 1.2], { contrast: 1.8 })[0] > adjust([1.2, 1.2, 1.2])[0]);
+check('contrast leaves the backdrop exactly where it is', bgDrift < 1e-9);
+check('and leaves white where it is', whiteDrift < 1e-6);
+
+// The curve is an S about the middle of the model's own range: k > 1 steepens
+// it, k < 1 flattens it, and both are monotone in the input, so no ordering of
+// brightnesses is ever inverted.
+const objMid = adjust([0.1441075, 0.1441075, 0.1441075]);
+check('contrast > 1 pushes an upper mid-tone brighter',
+      adjust([0.35, 0.35, 0.35], { contrast: 2 })[0] > adjust([0.35, 0.35, 0.35])[0]);
+check('contrast > 1 pushes a lower mid-tone darker',
+      adjust([0.05, 0.05, 0.05], { contrast: 2 })[0] < adjust([0.05, 0.05, 0.05])[0]);
+check('contrast < 1 flattens towards the middle',
+      adjust([0.35, 0.35, 0.35], { contrast: 0.6 })[0] < adjust([0.35, 0.35, 0.35])[0] &&
+      adjust([0.05, 0.05, 0.05], { contrast: 0.6 })[0] > adjust([0.05, 0.05, 0.05])[0]);
+
+let inv = 0, outOfRange = 0;
+for (const k of KS) {
+  let prev = -1;
+  for (let v = 0; v <= 3.0001; v += 0.01) {
+    const out = adjust([v, v, v], { contrast: k })[0];
+    if (out < prev - 1e-9) inv++;
+    if (out < 0 || out > 1 + 1e-9) outOfRange++;
+    prev = out;
+  }
+}
+check('contrast is monotone at every setting', inv === 0);
+check('and cannot crush to black or blow out to white', outOfRange === 0);
+
+// In transparent mode the raymarch writes black where nothing is hit, so the
+// pivot is black and the same properties have to hold there.
+const BLACK = [0, 0, 0];
+let tDrift = 0;
+for (const k of KS) {
+  tDrift = Math.max(tDrift, adjust(BLACK, { contrast: k }, 0, BLACK)[0]);
+}
+check('black stays black in transparent mode', tDrift < 1e-9);
+check('and the model still gains contrast there',
+      adjust([0.35, 0.35, 0.35], { contrast: 2 }, 0, BLACK)[0] >
+      adjust([0.35, 0.35, 0.35], {}, 0, BLACK)[0]);
+
+// A crevice darker than the backdrop is passed through untouched rather than
+// being raised to the backdrop's own brightness.
+const deep = [0.002, 0.002, 0.002];
+check('values below the backdrop are left alone',
+      nearV(adjust(deep, { contrast: 2.5 }), adjust(deep), 1e-12));
 
 // The hue slider and the cycle are added together, so one offsets the loop
 // rather than overriding it -- and a whole turn of slider is no turn at all.

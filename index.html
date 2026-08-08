@@ -540,6 +540,13 @@
       const collapsed = panel.classList.toggle('collapsed');
       panelToggle.setAttribute('aria-expanded', String(!collapsed));
       panelToggle.setAttribute('aria-label', collapsed ? 'Expand controls' : 'Collapse controls');
+      // Collapsing means collapsing. Without this the open sections keep their
+      // state while hidden, so re-opening the panel brings back whatever height
+      // it had -- the compact panel can only be got back by folding each
+      // section away by hand as well.
+      if (collapsed) {
+        for (const d of panel.querySelectorAll('details[open]')) d.open = false;
+      }
     });
 
     let handle = null;
