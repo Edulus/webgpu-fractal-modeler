@@ -228,9 +228,22 @@
       backdrop-filter: blur(10px);
       opacity: 0;
       pointer-events: none;
-      transition: opacity 0.35s ease;
+      cursor: pointer;
+      transition: opacity 0.35s ease, border-color 0.2s ease;
     }
-    body.explorer #model-note, body.flying #model-note { opacity: 1; }
+    /* Visible in the modes that hide the page content -- and only then does it
+       take pointer events, so it never blocks a drag on the canvas while it is
+       invisible or dismissed. */
+    body.explorer #model-note, body.flying #model-note {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    #model-note:hover { border-color: var(--accent); }
+    /* Read and dismissed. Stays dismissed until another shape is chosen. */
+    body.explorer #model-note.dismissed, body.flying #model-note.dismissed {
+      opacity: 0;
+      pointer-events: none;
+    }
     #model-note b {
       display: block;
       color: var(--fg);
@@ -388,7 +401,8 @@
   </div>
 
   <!-- Navigation hint (shown only in explorer mode) -->
-  <aside id="model-note" aria-live="polite"><b></b><span></span></aside>
+  <aside id="model-note" aria-live="polite" role="button" tabindex="0"
+         title="Click to dismiss — reappears when you pick another shape"><b></b><span></span></aside>
 
   <div id="nav-hint">Drag to rotate · pinch or scroll to zoom · double-tap to freeze the view</div>
   <div id="fly-hint">WASD to move · Q/E down·up · drag to look · shift to sprint · scroll for speed</div>
@@ -659,6 +673,20 @@
         el.style.display = '';
         el.querySelector('b').textContent = n[0];
         el.querySelector('span').textContent = n[1];
+        // A new shape is a new label, so an earlier dismissal does not carry
+        // over -- otherwise picking something else would silently tell you
+        // nothing about it.
+        el.classList.remove('dismissed');
+      }
+
+      {
+        const note = document.getElementById('model-note');
+        const dismiss = () => note.classList.add('dismissed');
+        note.addEventListener('click', dismiss);
+        // Same for the keyboard, since it is exposed as a button.
+        note.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); dismiss(); }
+        });
       }
       showNote(document.getElementById('sel-fractal').value);
 
