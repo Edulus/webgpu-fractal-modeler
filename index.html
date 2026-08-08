@@ -121,7 +121,28 @@
       backdrop-filter: blur(10px);
       font-size: 13px;
       width: 210px;
+      max-width: calc(100vw - 20px);
+      /* Grid and flex items default to min-width:auto, so they refuse to shrink
+         below their content's intrinsic width. The longest model name then sets
+         a floor far wider than the panel and the controls spill off-screen --
+         measured at 284px of content in a 168px panel on a phone. Every track
+         below is allowed to shrink instead, and the controls are held to the
+         panel's width. */
+      min-width: 0;
     }
+    #panel > *, #panel label, #panel .row > *, #panel #pal-io > * { min-width: 0; }
+    /* A text input carries an intrinsic size of ~20 characters regardless of
+       its container, which pushed the Save button past the panel edge even
+       after the grid tracks were freed. */
+    #panel input[type="text"] { min-width: 0; flex: 1 1 0; }
+    #panel .row button { flex: 0 1 auto; white-space: nowrap; }
+    #panel select, #panel button, #panel textarea, #panel input {
+      width: 100%;
+      max-width: 100%;
+    }
+    /* A closed select truncates; tapping it opens the platform picker, which
+       shows every option in full regardless of this width. */
+    #panel select { text-overflow: ellipsis; }
     #panel label { display: grid; gap: 4px; color: var(--muted); }
     #panel select, #panel button {
       appearance: none;
@@ -166,7 +187,13 @@
 
     #fallback-note {
       position: fixed;
-      bottom: 16px;
+      /* Top-left: the panel holds top-right, the shape label bottom-left and
+         the navigation hint bottom-centre. Sharing the bottom-left corner made
+         this overlap the label, and gating the label on the unsupported
+         callback was worse -- that callback fires spuriously, once while the
+         renderer was running at 136fps, which would hide the label on machines
+         where everything works. */
+      top: 16px;
       left: 16px;
       z-index: 10;
       max-width: 320px;
@@ -238,6 +265,7 @@
       opacity: 1;
       pointer-events: auto;
     }
+
     #model-note:hover { border-color: var(--accent); }
     /* Read and dismissed. Stays dismissed until another shape is chosen. */
     body.explorer #model-note.dismissed, body.flying #model-note.dismissed {
@@ -315,7 +343,7 @@
     body.explorer #bg { z-index: 0; } /* bring canvas above the (hidden) content */
 
     @media (max-width: 640px) {
-      #panel { width: 168px; top: 10px; right: 10px; padding: 10px 12px; }
+      #panel { width: 208px; top: 10px; right: 10px; padding: 10px 12px; }
       #nav-hint, #fly-hint { font-size: 11px; padding: 7px 12px; bottom: 12px; }
       /* Sit above the bottom-centre hint rather than beside it. */
       #model-note { left: 10px; right: 10px; bottom: 56px; max-width: none; }
@@ -371,7 +399,7 @@
     </label>
     <details id="pal-io">
       <summary>Load palette…</summary>
-      <textarea id="pal-input" rows="2" placeholder="Paste a coolors.co link, hex list, or .gpl contents"></textarea>
+      <textarea id="pal-input" rows="3" placeholder="Paste a coolors.co link, hex list, or .gpl contents"></textarea>
       <div class="row">
         <button id="pal-coolors" title="copy palette URL">Coolors</button>
         <button id="pal-load">Load</button>

@@ -14,6 +14,11 @@ background.
 *For developers:* built from ES modules and WGSL alone, and runs straight from a
 file. See [Project structure](#project-structure) and the model notes below.
 
+Released under the [MIT licence](LICENSE). Every model is implemented from the
+published mathematics, cited in its own section below; no code is ported from
+another project. The constructions themselves are the work of the
+mathematicians named there.
+
 ## Uses
 
 - Exploring mathematical objects interactively, on screen or in a lecture
