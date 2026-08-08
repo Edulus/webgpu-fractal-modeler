@@ -20,10 +20,10 @@ struct MaterialOut {
   // z = neutral specular weight
   // w = emission/glow
   @location(0) material : vec4<f32>,
-  // x = background weight
+  // x = fog/background weight on surface hits
   // y = seam palette coordinate * seam weight
   // z = seam palette weight
-  // w = reserved
+  // w = miss/background coverage (resolved as opaque or transparent later)
   @location(1) aux : vec4<f32>,
 };
 
@@ -42,10 +42,10 @@ fn fs_material(in : VSOut) -> MaterialOut {
   out.aux = vec4<f32>(0.0);
 
   // Attractors are rasterized as line geometry after this draw. The raymarch
-  // contributes only the optional opaque background; the line shader adds its
-  // own palette coordinate and intensity into these same two attachments.
+  // contributes one full background/miss sample; the post chain decides whether
+  // that sample is opaque or transparent from the live bgMode.
   if (u.fractalType > 22.5) {
-    out.aux.x = select(0.0, 1.0, u.bgMode >= 0.5);
+    out.aux.w = 1.0;
     return out;
   }
 
@@ -90,6 +90,7 @@ fn fs_material(in : VSOut) -> MaterialOut {
   var bgWeight = 0.0;
   var seamIndex = 0.0;
   var seamWeight = 0.0;
+  var missWeight = 0.0;
 
   if (hit) {
     let pos = ro2 + rd * t;
@@ -132,8 +133,9 @@ fn fs_material(in : VSOut) -> MaterialOut {
     seamWeight = seamWeight * visible;
     bgWeight = fog;
   } else {
-    // A miss is empty in transparent mode and pure background in opaque mode.
-    bgWeight = select(0.0, 1.0, u.bgMode >= 0.5);
+    // Keep a miss independent of presentation mode. Opaque/transparent is a
+    // post decision, so toggling it on a converged image needs no re-march.
+    missWeight = 1.0;
   }
 
   let glowOut = clamp(glow * u.glowStrength * 0.02, 0.0, 8.0);
@@ -142,7 +144,7 @@ fn fs_material(in : VSOut) -> MaterialOut {
   // coordinate into the running average, so an antialiased silhouette does not
   // drag the palette lookup toward zero merely because some jitter samples miss.
   out.material = vec4<f32>(baseIndex * baseWeight, baseWeight, specWeight, glowOut);
-  out.aux = vec4<f32>(bgWeight, seamIndex * seamWeight, seamWeight, 0.0);
+  out.aux = vec4<f32>(bgWeight, seamIndex * seamWeight, seamWeight, missWeight);
   return out;
 }
 `;
