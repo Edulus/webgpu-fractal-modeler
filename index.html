@@ -299,6 +299,8 @@
         <option value="gyroid">Gyroid (minimal surface labyrinth)</option>
         <option value="kleinian">Kleinian limit set (inversion group)</option>
         <option value="barth">Barth sextic (65 nodes, icosahedral)</option>
+        <option value="schottky">Kissing Schottky group (parabolic)</option>
+        <option value="schottkyh">Schottky group (hyperbolic)</option>
         <option value="attractor">Strange attractor (Aizawa)</option>
         <option value="lorenz">Strange attractor (Lorenz)</option>
       </select>
@@ -603,7 +605,7 @@
       // HUD: show live fractal/quality/fps (+ zoom while exploring).
       const names = ['mandelbulb', 'mandelbox', 'menger', 'julia', 'apollonian',
         'spherepack', 'encrusted', 'surfacepack', 'penrose', 'gyroid',
-        'kleinian', 'barth', 'attractor', 'lorenz'];
+        'kleinian', 'barth', 'schottky', 'schottkyh', 'attractor', 'lorenz'];
       setInterval(() => {
         const i = handle.info;
         hud.textContent = `${names[i.fractalType]} · q${i.qualityScale} · ${i.fps}fps` +

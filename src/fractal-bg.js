@@ -61,14 +61,21 @@ const U = {
 const UNIFORM_FLOATS = 96;
 const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 384
 
-// Distance-estimated fractals occupy ids 0..11; the volumetric/line-rendered
-// attractors follow at 12+. The shader keys off that split (see the
-// `fractalType > 11.5` test in fractal.wgsl.js), so keep DE types contiguous at
+// Distance-estimated fractals occupy ids 0..13; the volumetric/line-rendered
+// attractors follow at 14+. The shader keys off that split (see the
+// `fractalType > 13.5` test in fractal.wgsl.js), so keep DE types contiguous at
 // the front when adding new ones and move the attractors up to match.
+//
+// The two Schottky entries share a single estimator and differ only in regime:
+// `schottky` is the kissing configuration, where all five spheres are tangent
+// and every generator is parabolic, and `schottkyh` separates them so every
+// generator becomes hyperbolic. deSchottky keys off the id to pick the regime,
+// so these two must stay adjacent and in this order.
 const FRACTAL_IDS = {
   mandelbulb: 0, mandelbox: 1, menger: 2, julia: 3, apollonian: 4,
   spherepack: 5, encrusted: 6, surfacepack: 7, penrose: 8, gyroid: 9,
-  kleinian: 10, barth: 11, attractor: 12, lorenz: 13,
+  kleinian: 10, barth: 11, schottky: 12, schottkyh: 13,
+  attractor: 14, lorenz: 15,
 };
 
 // Quality tiers -> internal-resolution scale factor.
@@ -78,12 +85,16 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 // world scale, so a single radius would sit inside the larger ones.
 // Indexed by fractal id (see FRACTAL_IDS).
 // mandelbulb, mandelbox, menger, julia, apollonian, spherepack, encrusted,
-// surfacepack, penrose, gyroid, kleinian, barth, attractor(Aizawa), lorenz
+// surfacepack, penrose, gyroid, kleinian, barth, schottky, schottkyh,
+// attractor(Aizawa), lorenz
 // The Penrose disc is wide and flat, so it needs a little more room than the
 // roughly ball-shaped estimators to sit inside the frame edge-on. The Barth
 // sextic clips at radius 2.0, the largest here, and its 4.6 keeps the same
 // fraction of the frame the others use at this field of view.
-const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.1, 3.0, 3.5, 3.2, 3.6, 4.6, 3.2, 3.0];
+// The Schottky orbit is compact -- measured extent is radius 0.6 at tangency,
+// 0.76 separated -- so it needs a much closer orbit than anything else here.
+const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.1, 3.0, 3.5, 3.2, 3.6, 4.6,
+                    1.55, 1.75, 3.2, 3.0];
 
 // Number of integrated trajectory samples drawn as a line strip per attractor.
 // These are exact float positions (vector geometry), so the curve stays crisp
@@ -908,7 +919,7 @@ export async function initFractalBackground(canvas, options = {}) {
                     // Every distance-estimated surface, which is all ids up to
                     // and including the last one before the attractors. The
                     // attractors are line geometry with no field to probe.
-                    && state.fractalType <= FRACTAL_IDS.barth;
+                    && state.fractalType <= FRACTAL_IDS.schottkyh;
     if (doProbe) {
       state.probeAt = nowMs;
       const cpass = encoder.beginComputePass();
