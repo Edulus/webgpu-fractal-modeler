@@ -18,7 +18,7 @@ import { COMPOSITE_WGSL } from './shaders/composite.wgsl.js';
 import { ATTRACTOR_WGSL } from './shaders/attractor.wgsl.js';
 import {
   LADDER, TOP, PRESET_RUNG, BUDGET_MS,
-  govInit, govSample, rung, clampIndex, showcaseIndex, planMode,
+  govInit, govSample, rung, clampIndex, showcaseIndex, planMode, maxRungForLimit,
 } from './quality.js';
 import { getPalette } from './palettes.js';
 import { clampStops, averageColor, MAX_STOPS } from './palette-io.js';
@@ -271,6 +271,8 @@ export async function initFractalBackground(canvas, options = {}) {
     // pure, so it can be unit-tested without a GPU.
     gov: null,
     detailRung: PRESET_RUNG.medium,
+    // Highest rung this display can actually allocate; set by resize().
+    rungCap: TOP,
     showcaseRung: -1,
     fpsEMA: 60,
     slowFrames: 0,
@@ -745,9 +747,31 @@ export async function initFractalBackground(canvas, options = {}) {
     state.cssW = cssW;
     state.cssH = cssH;
 
-    // Swapchain is full device-pixel resolution; internal raymarch res scales.
-    const pxW = Math.max(1, Math.round(cssW * dpr));
-    const pxH = Math.max(1, Math.round(cssH * dpr));
+    // Every texture here is bounded by the adapter's 2D limit, which WebGPU only
+    // guarantees to be 8192. That was unreachable while the internal scale was
+    // capped at 1.0; supersampling makes it reachable, so both the swapchain and
+    // the internal targets are fitted to it. The fit is a single factor applied
+    // to BOTH axes, because scaling them independently would stretch the image.
+    const texLimit = state.device?.limits?.maxTextureDimension2D ?? 8192;
+    let pxW = Math.max(1, Math.round(cssW * dpr));
+    let pxH = Math.max(1, Math.round(cssH * dpr));
+    const swapFit = Math.min(1, texLimit / pxW, texLimit / pxH);
+    if (swapFit < 1) {
+      pxW = Math.max(1, Math.floor(pxW * swapFit));
+      pxH = Math.max(1, Math.floor(pxH * swapFit));
+    }
+    // Cap the ladder to what can actually be allocated, so the governor cannot
+    // climb into a rung that would be quietly clamped -- which costs no more
+    // than the rung below and therefore reads as free headroom.
+    state.rungCap = maxRungForLimit(pxW, pxH, texLimit);
+    if (state.detailRung > state.rungCap) {
+      state.detailRung = state.rungCap;
+      state.qualityScale = LADDER[state.rungCap].scale;
+    }
+    if (state.gov) {
+      state.gov.ceiling = Math.min(state.gov.ceiling, state.rungCap);
+      state.gov.index = Math.min(state.gov.index, state.rungCap);
+    }
     // Only touch the backing store when it actually changes. Assigning
     // canvas.width resets the WebGPU swapchain and clears the canvas even when
     // the value is unchanged, which shows as a black frame -- and a quality
@@ -755,8 +779,15 @@ export async function initFractalBackground(canvas, options = {}) {
     if (canvas.width !== pxW) canvas.width = pxW;
     if (canvas.height !== pxH) canvas.height = pxH;
 
-    const renderW = Math.max(1, Math.round(pxW * state.qualityScale));
-    const renderH = Math.max(1, Math.round(pxH * state.qualityScale));
+    let renderW = Math.max(1, Math.round(pxW * state.qualityScale));
+    let renderH = Math.max(1, Math.round(pxH * state.qualityScale));
+    // Belt and braces: the rung cap should already have prevented this, but a
+    // failed allocation here takes the whole renderer down, so clamp anyway.
+    const renderFit = Math.min(1, texLimit / renderW, texLimit / renderH);
+    if (renderFit < 1) {
+      renderW = Math.max(1, Math.floor(renderW * renderFit));
+      renderH = Math.max(1, Math.floor(renderH * renderFit));
+    }
 
     createTargets(renderW, renderH);
 
@@ -1094,7 +1125,7 @@ export async function initFractalBackground(canvas, options = {}) {
   // The decision logic is in quality.js and is pure; this is only the plumbing
   // that hands it frame times and applies the rung it returns.
   function applyRung(index, why) {
-    const i = clampIndex(index);
+    const i = Math.min(clampIndex(index), state.rungCap ?? TOP);
     if (i === state.detailRung) return false;
     state.detailRung = i;
     state.qualityScale = LADDER[i].scale;

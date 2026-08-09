@@ -206,6 +206,30 @@ function applyDrop(g, to) {
 }
 
 /**
+ * The highest rung whose internal targets fit within a texture-dimension limit.
+ *
+ * Supersampling made this necessary: at rung 9 an ultrawide 5120 CSS px display
+ * at DPR 2 asks for 10240 internal pixels across, past the 8192 that WebGPU
+ * only guarantees, and texture creation fails. Clamping the allocation alone is
+ * not enough -- a rung that is silently clamped costs no more than the one
+ * below it, so the governor reads the unchanged frame time as headroom and
+ * climbs again, settling at the top of the ladder while delivering the pixels
+ * of a lower rung. The ladder itself has to be capped.
+ *
+ * Scale increases monotonically, so the first rung that does not fit ends it.
+ */
+export function maxRungForLimit(pxW, pxH, limit) {
+  const px = Math.max(pxW, pxH);
+  if (!(px > 0) || !(limit > 0)) return TOP;
+  let best = 0;
+  for (let i = 0; i <= TOP; i++) {
+    if (Math.round(px * LADDER[i].scale) <= limit) best = i;
+    else break;
+  }
+  return best;
+}
+
+/**
  * How a quality MODE becomes a starting rung and a governor. Both the
  * constructor and setQuality() go through this, because they used not to: init
  * tested only for 'auto', so a renderer built with quality:'max' took the fixed

@@ -15,7 +15,7 @@
 import {
   LADDER, TOP, BUDGET_MS, PRESET_RUNG,
   govInit, govSample, rung, clampIndex, showcaseIndex, accumTarget, planMode,
-  MAX_BUDGET_FACTOR,
+  MAX_BUDGET_FACTOR, maxRungForLimit,
 } from '../src/quality.js';
 
 let passed = 0, failed = 0;
@@ -342,6 +342,45 @@ check('accumulation targets rise with the rung',
   const m = run('max');
   check('max settles no lower than auto on the same device', m >= a,
         `auto ${a}, max ${m}`);
+}
+
+// ---- texture limits ---------------------------------------------------------
+// Supersampling made the adapter's 2D texture limit reachable for the first
+// time. WebGPU only guarantees 8192, and an ultrawide at DPR 2 asks for more
+// than that at the top rung, so the ladder has to be capped to what can be
+// allocated -- not merely clamped at allocation time, because a silently
+// clamped rung costs no more than the one below it and so reads as headroom.
+{
+  const L = 8192;
+  check('a 1080p display can use the whole ladder',
+        maxRungForLimit(1920, 1080, L) === TOP);
+  check('4K at DPR 2 still reaches the top',
+        maxRungForLimit(3840, 2160, L) === TOP,
+        `got ${maxRungForLimit(3840, 2160, L)}`);
+  check('an 8192-wide swapchain is capped at 1.0 scale',
+        rung(maxRungForLimit(8192, 4320, L)).scale === 1.0,
+        `scale ${rung(maxRungForLimit(8192, 4320, L)).scale}`);
+  check('an ultrawide at DPR 2 is capped well below the top',
+        maxRungForLimit(10240, 2880, L) < TOP,
+        `got ${maxRungForLimit(10240, 2880, L)}`);
+
+  // The cap must be honest in both directions.
+  for (const [w, h] of [[1920, 1080], [3840, 2160], [8192, 4320], [10240, 2880], [16384, 8192]]) {
+    const i = maxRungForLimit(w, h, L);
+    const px = Math.round(Math.max(w, h) * rung(i).scale);
+    check(`the capped rung fits for ${w}x${h}`, px <= L || i === 0, `${px} > ${L}`);
+    if (i < TOP) {
+      const next = Math.round(Math.max(w, h) * rung(i + 1).scale);
+      check(`and the next rung would not, for ${w}x${h}`, next > L, `${next} <= ${L}`);
+    }
+  }
+
+  check('a limit larger than anything asked for caps nothing',
+        maxRungForLimit(1024, 768, 65536) === TOP);
+  check('nonsense dimensions do not cap to zero',
+        maxRungForLimit(0, 0, L) === TOP && maxRungForLimit(1920, 1080, 0) === TOP);
+  check('a limit smaller than even the lowest rung returns the lowest',
+        maxRungForLimit(10000, 10000, 100) === 0);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
