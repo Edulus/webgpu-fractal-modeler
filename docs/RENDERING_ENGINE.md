@@ -4,173 +4,132 @@ This document describes the architecture, performance strategy, and engineering 
 
 It is an implementation document rather than an API tutorial. The README explains how to use the library and describes the mathematical models. This file explains how the renderer turns those models into an image, how it adapts to the device it is running on, and which design decisions should be preserved when the engine changes.
 
-The adaptive-quality system described here was introduced in commit `9f0d024`.
+The adaptive-quality ladder was introduced in commit `9f0d024`. Commit `104eb59` corrected the governor to use a signal that remains meaningful under vsync and added thermal re-probe backoff.
 
 ## 1. Design goals
 
-The renderer has to serve two different roles without maintaining two separate engines:
+The renderer serves two roles without maintaining two engines:
 
 1. a lightweight animated background that should be frugal with battery and GPU time; and
 2. an interactive mathematical explorer that should use available hardware aggressively enough to produce the best image the device can sustain.
 
-The resulting design follows several principles:
+The design follows several principles:
 
-- **Measure capability instead of identifying hardware.** The adaptive governor learns from observed frame cost rather than from GPU model names or a device database.
-- **Spend headroom on visible quality.** A fast GPU should receive more pixels, more raymarch steps, deeper mathematical iteration, and full shading rather than simply rendering the same picture at a higher unused frame rate.
-- **Protect interaction first.** While the camera is moving, quality is governed by a frame-time budget. Once the view is still, the renderer can spend much more time per frame because responsiveness is no longer the limiting requirement.
-- **Keep fixed modes deterministic.** Low, Medium, and High select known quality rungs. High is deliberately the former pre-governor ceiling, so adding adaptive quality did not reduce or redefine the old high-quality mode.
-- **Do expensive geometry work once when possible.** Progressive accumulation stores palette-independent material information. Palette animation and image controls can then remain live without throwing away a converged raymarch.
-- **Keep decision logic testable without WebGPU.** Camera rate maths, device-loss policy, palette parsing, and the adaptive-quality governor live in pure modules where practical.
+- **Measure capability instead of identifying hardware.** Runtime behavior is authoritative; GPU names and device classes are not.
+- **Spend headroom on visible quality.** Strong hardware should receive more pixels, more raymarch steps, deeper iteration, and full shading rather than merely producing unused frame rate.
+- **Protect interaction first.** While the camera is moving, the controller protects presentation cadence. Once the view is still, the renderer can spend much more time per sample.
+- **Keep fixed modes deterministic.** Low, Medium, and High select known rungs. High remains the historical `1.0 / 160 / 12` quality point.
+- **Do expensive geometry work once when possible.** Progressive accumulation stores palette-independent material information so palette animation and image controls can remain live without re-marching.
+- **Keep decision logic testable without WebGPU.** Quality, camera-rate, recovery, and palette parsing logic are pure where practical.
 
 ## 2. Main source files
 
-The renderer is split into a small orchestration layer and specialized shader/modules:
-
-- `src/fractal-bg.js` — WebGPU device acquisition, pipelines, render targets, uniforms, cameras, render loop, lifecycle, quality plumbing, progressive accumulation, and the public handle.
-- `src/quality.js` — pure adaptive-quality governor and the quality ladder.
-- `src/camera.js` — pure camera-rate, fly-through, drift, zoom, and device-loss decision logic.
+- `src/fractal-bg.js` — device acquisition, pipelines, render targets, uniforms, cameras, render loop, lifecycle, quality plumbing, progressive accumulation, and public API.
+- `src/quality.js` — pure adaptive-quality governor and quality ladder.
+- `src/camera.js` — pure orbit/fly mathematics, drift, zoom-rate helpers, and device-loss policy.
 - `src/palettes.js` — built-in cosine palettes.
-- `src/palette-io.js` — imported palette parsing, clamping, and persistence.
-- `src/shaders/fractal.wgsl.js` — distance estimators and the GPU clearance/centre-hit probe.
-- `src/shaders/material.wgsl.js` — palette-independent surface/material rendering.
-- `src/shaders/attractor.wgsl.js` — line rendering for strange attractors.
+- `src/palette-io.js` — imported palette parsing and persistence.
+- `src/shaders/fractal.wgsl.js` — distance estimators and the clearance/centre-hit compute probe.
+- `src/shaders/material.wgsl.js` — palette-independent surface/material pass.
+- `src/shaders/attractor.wgsl.js` — strange-attractor line rendering.
 - `src/shaders/composite.wgsl.js` — palette resolution, bloom, image controls, tonemapping, and final presentation.
 - `src/shaders/engel.wgsl.js` — generated Engel plesiohedron data and estimator.
 
-The important separation is that `quality.js` decides **how much work should be done**, while `fractal-bg.js` applies that decision to the WebGPU resources and uniforms.
+`quality.js` decides **how much work should be done**. `fractal-bg.js` applies that decision to render-target size and shader uniforms.
 
 ## 3. Two geometry families
 
-The catalogue contains two fundamentally different rendering families.
-
 ### Distance-estimated and implicit surfaces
 
-Most models expose a distance estimator or signed-distance-like field. They are rendered by sphere tracing / raymarching in the fullscreen material pass.
-
-The fragment shader advances a ray through the field until it either reaches a surface threshold or passes the maximum travel distance. Surface hits then receive normal, lighting, shadow, ambient-occlusion, fog, palette-coordinate, and glow information.
-
-The adaptive ladder controls the live raymarch step ceiling and, where applicable, fractal iteration depth.
+Most models expose a distance estimator or signed-distance-like field and are sphere-traced in the fullscreen material pass. The adaptive ladder controls live raymarch step ceiling and, where applicable, fractal iteration depth.
 
 ### Strange attractors
 
-Aizawa, Lorenz, and Rössler do not have a closed-form distance field suitable for sphere tracing. Their trajectories are integrated on the CPU using RK4 and uploaded as line-strip geometry.
+Aizawa, Lorenz, and Rössler do not expose a closed-form distance field suitable for sphere tracing. Their trajectories are integrated on the CPU with RK4 and uploaded as line-strip geometry. Each currently uses 600,000 trajectory points.
 
-Each attractor currently uses 600,000 trajectory points. The per-vertex scalar is derived from velocity and later used as a palette coordinate. Because the geometry is stored as floating-point vertices rather than as a voxel volume, the curve remains geometrically crisp under zoom.
-
-The line renderer writes the same kind of palette-independent summary used by the surface pipeline so attractor colour can also remain live after accumulation.
+Their line material is also palette-independent, so attractor colour can remain live after accumulation.
 
 ## 4. Frame architecture
 
-A frame is built from one optional compute operation followed by the rendering pipeline.
+A frame consists of an optional compute probe followed by the render pipeline.
 
 ### 4.1 Clearance / centre-hit probe
 
-In Explorer and Fly modes the renderer may dispatch a one-workgroup compute probe before the render passes. The probe evaluates the field at the camera and along the centre ray and reports values used by navigation.
+In Explorer and Fly modes the renderer can dispatch a one-workgroup compute probe before rendering. It evaluates camera clearance and the centre ray.
 
 It is deliberately:
 
-- dispatched **before** render passes, because inserting compute between render passes can force tile-memory resolve/reload on tile-based mobile GPUs;
-- throttled to `PROBE_INTERVAL_MS = 50`, or about 20 Hz; and
-- read back asynchronously, accepting a frame or two of latency because camera speed control and surface re-pinning do not require same-frame precision.
+- dispatched **before** render passes, avoiding expensive tile-memory resolve/reload patterns on tile-based GPUs;
+- throttled to `PROBE_INTERVAL_MS = 50`, about 20 Hz; and
+- read back asynchronously, accepting a frame or two of latency.
 
-The probe drives two major navigation features:
-
-- fly-through movement scales with measured clearance, so travel covers a fraction of the remaining gap instead of a fixed world-space distance;
-- orbit zoom can re-pin the camera pivot to the surface under the crosshair, allowing deep zoom toward a visible surface rather than pushing the camera through it toward the model centroid.
+The probe supports clearance-relative fly movement and orbit surface re-pinning for deep zoom.
 
 ### 4.2 Material pass
 
-The first render pass draws the scene into two full-resolution `rgba16float` attachments:
+The first render pass writes two full-resolution `rgba16float` attachments, `sceneTex` and `auxTex`. The pass stores material summaries rather than final RGB.
 
-- `sceneTex`
-- `auxTex`
+### 4.3 Bloom
 
-For implicit models this is a fullscreen triangle using `fs_material`. For attractors, the line strip is added in the same pass after the background/material draw.
+Bloom is a two-pass 9-tap Gaussian blur. Palette resolution and bright/emissive extraction occur before the horizontal blur. Bloom runs at half internal resolution.
 
-The material pass does **not** store final RGB. It stores enough scalar information to reconstruct the scene later through whichever palette is currently active.
+### 4.4 Composite
 
-### 4.3 Bloom horizontal
+The final pass resolves material through the live palette, combines bloom, applies explicit Hue, exposure, ACES tonemapping, gamma, saturation, backdrop-relative contrast, and then writes to the swapchain.
 
-The first bloom pass resolves the live palette, extracts bright/emissive material, and performs the horizontal half of a 9-tap Gaussian blur.
-
-Bloom operates at half the internal render resolution.
-
-### 4.4 Bloom vertical
-
-The second bloom pass completes the vertical blur into the second half-resolution bloom target.
-
-### 4.5 Composite
-
-The final fullscreen pass:
-
-1. resolves material through the current palette and colour-cycle phase;
-2. combines bloom;
-3. applies the explicit Hue image adjustment when requested;
-4. applies exposure before the ACES filmic tonemapper;
-5. applies display gamma;
-6. applies saturation;
-7. applies contrast relative to the reconstructed backdrop rather than conventional mid-grey; and
-8. writes to the current swapchain texture with the configured alpha mode.
-
-This ordering matters. Moving palette cycling or image controls back into the raymarch pass would make those controls invalidate expensive accumulated geometry samples.
+The ordering is deliberate: palette cycling and image controls stay out of the raymarch so they do not invalidate accumulated geometry samples.
 
 ## 5. Palette-independent material representation
 
-The central rendering optimization is the separation of geometry/material sampling from palette presentation.
+Built-in cosine palettes and imported colour-stop ramps are both resolved in the post chain from stored palette coordinates.
 
-Built-in palettes are Inigo Quilez-style cosine palettes. Imported palettes are explicit colour-stop ramps. These are different mathematical representations, but both are resolved in the post chain from stored palette coordinates.
+This allows:
 
-The material targets store weighted palette-coordinate summaries, neutral specular contribution, fog/background contribution, seam contribution where required, glow/emission, and miss/background coverage.
+- immediate recolouring of a converged image;
+- imported ramps without fitting them to cosine coefficients;
+- palette-faithful colour cycling by shifting palette coordinates;
+- a separate explicit Hue control that may intentionally rotate final RGB; and
+- bloom that follows the current palette because palette resolution happens before bloom extraction.
 
-This gives the engine several useful properties:
-
-- switching between built-in palettes can recolour a fully converged image immediately;
-- switching to an imported ramp does not require a new raymarch;
-- automatic colour cycling shifts **palette coordinates**, so a selected palette remains recognizably itself throughout the cycle;
-- the explicit Hue control remains separate and is allowed to rotate the finished RGB image away from the chosen palette;
-- bloom follows the live palette because palette resolution happens before bloom extraction.
-
-The distinction between palette cycling and Hue is intentional and should be preserved.
+The distinction between **palette cycling** and **Hue** is an invariant.
 
 ## 6. Progressive accumulation
 
-When an interactive view becomes genuinely still, the renderer begins progressive subpixel accumulation.
+When an interactive view becomes genuinely still, progressive subpixel accumulation begins. Current conditions include no active pointer, no fly movement keys, stopped orbit drift, and at least `ACCUM_IDLE_MS = 400` since interaction.
 
-Current conditions include:
+Samples use an R2 low-discrepancy jitter sequence and are averaged directly into the material targets with fixed-function blending.
 
-- interactive controls are enabled;
-- no pointer is down;
-- no fly-through movement key is held;
-- orbit drift has been stopped; and
-- no interaction has occurred for `ACCUM_IDLE_MS = 400`.
-
-Each sample uses an R2 low-discrepancy subpixel jitter. R2 samples distribute more evenly than independent random jitter, so the running average converges without random clumping.
-
-Accumulation is performed directly in the two material render targets using fixed-function blending. For sample `n`, the new sample contributes `1/(n+1)` and the existing accumulated result contributes the remainder. This replaces an older ping-pong accumulation pass and avoids two additional full-resolution textures and a fullscreen pass.
-
-The live renderer currently uses a fixed convergence cap of:
+The live convergence cap is still:
 
 ```text
 ACCUM_CAP = 96 samples
 ```
 
-Once a still view reaches the cap, the raymarch/material draw is skipped entirely. The already-converged material is simply re-presented through the post chain. That makes an idle converged view much cheaper than a moving view while still allowing palette cycling and post controls to remain live.
+After convergence, the raymarch/material draw is skipped and the stored material is simply re-presented through the post chain.
 
-`quality.js` contains an `accumTarget()` helper for rung-dependent accumulation targets, but the renderer does **not** currently use it; `fractal-bg.js` still governs convergence with the fixed 96-sample cap. Do not describe adaptive accumulation counts as implemented until that helper is wired into the render loop.
+`quality.js` contains `accumTarget()` for rung-dependent targets, but `fractal-bg.js` does **not** currently use it. Adaptive accumulation counts are therefore not implemented yet.
 
 ## 7. Adaptive quality governor
 
-Adaptive quality is based on **frame time in milliseconds**, not on an average of FPS values.
-
-A frame-time budget is the quantity being controlled directly, and averaging reciprocal frame times biases the result toward fast frames because:
+The governor controls a **deadline**, not a maximum frame rate. Its normal moving-view budget is:
 
 ```text
-mean(1 / t) != 1 / mean(t)
+BUDGET_MS = 16.7 ms
 ```
 
-The governor therefore maintains an exponential moving average of frame milliseconds and decides when to move between quality rungs.
+The first adaptive implementation correctly moved away from averaged FPS, but initially made a second mistake: it tried to infer headroom from mean `requestAnimationFrame` frame time. That signal is quantised by vsync.
 
-### 7.1 Quality ladder
+### 7.1 Why mean frame time failed under vsync
+
+At 60 Hz, a frame that finishes before the next refresh is generally observed by the animation loop as roughly 16.7 ms whether the GPU work took 1 ms, 8 ms, or 16 ms. A missed refresh is observed near 33.3 ms, then 50 ms, and so on.
+
+Therefore a rule such as “climb when mean frame time falls below 12 ms” can never see headroom on a vsync-locked 60 Hz display. A workstation doing 1 ms of rendering work looks identical to a device doing 15 ms as long as both hit the next refresh.
+
+The old FPS thresholds happened to survive this because `1000 / 16.7` is about 59.9 FPS, just over the previous 58 FPS climb threshold. That was accidental, not a sound measurement model.
+
+The current governor instead uses the signal the display actually exposes reliably: **the fraction of frames that missed the presentation budget**.
+
+### 7.2 Quality ladder
 
 `src/quality.js` defines ten rungs:
 
@@ -187,104 +146,115 @@ The governor therefore maintains an exponential moving average of frame millisec
 | 8 | 1.75× | 260 | 16 | Yes |
 | 9 | 2.00× | 300 | 18 | Yes |
 
-Rung 5 is intentionally the former high-quality ceiling: `1.0 / 160 / 12`.
+Rung 5 is deliberately the former high-quality ceiling.
 
-The WGSL compile-time ceilings are higher than the current live ladder maximum:
+WGSL keeps higher compile-time bounds:
 
 ```text
 MAX_STEPS = 320
 DE_ITERS  = 20
 ```
 
-The shader loops remain statically bounded for WGSL, but break when the live values in `u.detail` are reached. Raising the compile-time ceilings therefore does not force a low rung to execute the full high-end workload.
+The loops break at the live values in `u.detail`, so raising the static ceiling does not force low rungs to execute high-rung work.
 
-### 7.2 Fixed modes
+### 7.3 Fixed modes and starting estimate
 
-Named fixed presets map onto the same ladder:
+Fixed presets map onto the same ladder:
 
 | Mode | Rung |
 | --- | ---: |
 | Low | 1 |
 | Medium | 3 |
 | High | 5 |
-| Max fixed rung | 9 |
+| Max preset rung | 9 |
 
-Using one ladder for both named and adaptive quality prevents two independent definitions of what “high” means.
-
-### 7.3 Starting estimate
-
-Before useful frame measurements exist, Auto makes only a coarse starting guess based on viewport/device characteristics:
+Before Auto has measurements, it makes a disposable starting guess:
 
 - coarse pointer or less than about 900 device pixels across: rung 1;
 - less than about 1700 device pixels across: rung 3;
 - otherwise: rung 4.
 
-This guess is deliberately disposable. Runtime measurement is the authority.
+Runtime evidence is authoritative after that.
 
-### 7.4 Interactive budget
+### 7.4 Miss-rate signal
 
-The normal interactive budget is:
+A frame counts as having met the budget when it is within a small tolerance:
 
 ```text
-BUDGET_MS = 16.7 ms
+MET_TOLERANCE = 1.05
 ```
 
-This corresponds roughly to a 60 Hz frame interval.
-
-The governor does not climb merely because a frame is under budget. It requires substantial margin:
+The miss indicator is exponentially smoothed into `missRate`. The controller currently uses:
 
 ```text
-CLIMB_FRACTION = 0.72
-```
-
-So the moving average must be below about 72% of the budget before frames count as evidence for an upward move.
-
-The current hysteresis values are:
-
-```text
+CLIMB_MISS    = 0.02
+DROP_MISS     = 0.12
 CLIMB_SAMPLES = 90
 DROP_SAMPLES  = 20
-STALL_FACTOR  = 2.0
+STALL_FACTOR  = 2.5
 ```
 
-A normal climb therefore requires sustained headroom. Sustained over-budget operation causes a drop. A single frame above twice the budget is treated as a stall and triggers an immediate larger retreat.
+Interpretation:
 
-### 7.5 Remembered ceiling
+- an essentially all-on-time run sustained for 90 samples is evidence to try a higher rung;
+- a sustained miss rate above 12% is overload and causes a drop after 20 samples; and
+- a single catastrophic frame beyond `2.5 × budget` triggers an immediate larger retreat.
 
-A key anti-oscillation mechanism is the remembered ceiling.
+The governor still maintains `emaMs`, but the EMA is no longer the climb/drop signal. It remains useful for reporting and for the approximate still-frame cost model in `showcaseIndex()`.
 
-When a rung proves too expensive, the governor does two things:
+### 7.5 Remembered failed rung and thermal backoff
 
-1. drops quality; and
-2. records one rung below the failed level as the highest currently trusted rung.
+When a rung proves too expensive, the governor:
 
-Without this memory, a controller tends to repeat the same loop indefinitely: climb, stall, drop, rediscover apparent headroom, climb back into the same stall.
+1. drops below it;
+2. records the **rung that failed** in `lastFail`; and
+3. lowers the trusted ceiling to one rung below the failed rung.
 
-The ceiling is not permanent. After `CEILING_RESET_MS = 20000` of healthy operation, it can lift by one rung so the renderer can discover that a cheaper scene, a zoomed-out view, or a changed thermal state now permits more work.
+The distinction between “failed rung” and “current ceiling” matters. The periodic ceiling reset lifts the ceiling before a retry. Comparing a new failure against the lifted ceiling made repeat-failure detection permanently false in the first implementation.
 
-This also means thermal throttling does not require special device detection: if a phone or laptop becomes slower after sustained load, the measured frame time rises and the governor backs down.
+A failed ceiling is eventually re-probed because the scene may have become cheaper or the device may have cooled. The base retry interval is:
 
-### 7.6 Sample robustness
+```text
+CEILING_RESET_MS = 20000
+```
 
-The governor rejects non-finite and non-positive frame samples.
+If the same rung fails again, the retry delay is multiplied by:
 
-Long pauses such as tab switches or garbage-collection events are clamped before entering the exponential moving average. One multi-second pause should not depress rendering quality for the next minute.
+```text
+CEILING_BACKOFF = 2.0
+```
 
-### 7.7 Converged frames are not benchmark samples
+up to:
 
-This is an important invariant.
+```text
+CEILING_RESET_MAX_MS = 300000
+```
 
-Once accumulation converges, the raymarch is skipped. Those frames are therefore dramatically cheaper than the workload the governor is supposed to control.
+This makes thermal behavior self-correcting without device-specific thermal APIs. A hot phone or laptop can back down and re-probe increasingly rarely while remaining capable of recovering later.
+
+The intended stability property is therefore **not “the rung never moves once settled.”** Re-probing is deliberate. The property is that repeated probes of a still-bad ceiling become rarer rather than producing continuous climb/stall/drop chatter.
+
+### 7.6 Robustness to bad samples
+
+Non-positive and non-finite samples are ignored. Very long pauses such as tab switches or GC stalls are clamped before entering the running statistics so one multi-second interruption does not dominate subsequent quality decisions.
+
+### 7.7 Converged frames are not governor evidence
+
+This remains a strict invariant, but the reason is more precise under the miss-rate controller than it was under the discarded mean-time controller.
+
+A converged frame skips the expensive raymarch and will usually meet the presentation deadline. Feeding those cheap frames into the governor **dilutes evidence of overload** from interactive frames.
+
+A 50/50 mixture of late interactive frames and cheap converged frames is still detected by the current miss-rate rule. The failure appears at the ratio that is realistic once the accumulator is doing most of the work: for example, if nine out of ten samples are cheap post-only frames, their on-time results can hold the smoothed miss rate below the drop threshold even while every true interactive raymarch frame is late.
+
+Therefore:
 
 **Never feed converged-frame timing into the adaptive governor.**
 
-Doing so creates false evidence of unlimited headroom. The governor would climb into a quality rung that the device cannot sustain and the failure would only become visible when interaction restarts and raymarching resumes.
-
-`tools/quality.test.js` contains a test that deliberately demonstrates this failure mode.
+`fractal-bg.js` already enforces this by returning through the accumulation branch without calling `adaptQuality()`. `tools/quality.test.js` records both the 50/50 non-failure and the realistic high-dilution failure so the boundary is explicit rather than assumed.
 
 ## 8. Auto and Max
 
-The quality selector exposes:
+The selector exposes:
 
 ```text
 Low -> Medium -> High -> Auto -> Max
@@ -292,59 +262,41 @@ Low -> Medium -> High -> Auto -> Max
 
 ### Auto
 
-Auto is the normal adaptive mode. It targets the 16.7 ms interactive budget and searches for the highest rung the current device and scene can sustain with adequate margin.
-
-Its purpose is to be unobtrusive: interaction should remain responsive while strong hardware is allowed to exceed the old 1.0-resolution ceiling.
+Auto is the normal adaptive mode. It protects the 16.7 ms moving-view budget and searches for the highest rung that can keep presentation misses acceptably rare.
 
 ### Max
 
-Max is intentionally more aggressive.
+When selected through `setQuality('max')`, Max is deliberately more aggressive:
 
-When selected through the public `setQuality('max')` path it:
+- it starts one rung above the normal Auto estimate; and
+- its interactive budget is `BUDGET_MS * 1.35`, about 22.5 ms.
 
-- begins one rung above the usual automatic starting estimate; and
-- gives the interactive governor a budget of `BUDGET_MS * 1.35`, roughly 22.5 ms.
+When the view becomes still, Max can use `showcaseIndex()` with an approximate still-frame budget of 220 ms and escalate beyond the interactive rung.
 
-Once the view is still, Max can escalate beyond the interactive rung using `showcaseIndex()`.
+`showcaseIndex()` estimates higher-rung cost mainly from resolution area, with secondary march-step and iteration factors. It is a useful global approximation, not a per-model performance model.
 
-The current still-frame estimate allows up to approximately:
+### Current initialization caveat
 
-```text
-220 ms per showcase frame
-```
+At commit `104eb59`, initial construction with `quality: 'max'` does not follow the same path as later `setQuality('max')`: `init()` creates a governor only for `qualityMode === 'auto'`, while other initial modes use preset rungs. This means Max is fully adaptive when selected through the public setter, but initial `quality: 'max'` currently starts as the rung-9 preset without a governor.
 
-A still view does not need 60 Hz responsiveness. The engine can therefore trade latency for better resolution and mathematical detail while progressive accumulation refines the picture.
-
-`showcaseIndex()` currently estimates higher-rung cost mainly from pixel area, then adjusts for march-step and iteration ratios. This is a useful first model, not a per-model performance oracle.
+Until that code path is unified, documentation and tests should preserve this distinction rather than implying the two paths are identical.
 
 ## 9. Resolution, supersampling, and DPR
 
-The swapchain remains at full device-pixel resolution.
-
-The renderer caps device pixel ratio at:
-
-```text
-dprCap = 2
-```
-
-Internal material resolution is then:
+The swapchain remains at full device-pixel resolution. DPR is capped at 2, and internal material resolution is:
 
 ```text
 render width  = device-pixel width  * quality scale
 render height = device-pixel height * quality scale
 ```
 
-A scale below 1.0 reduces internal workload. A scale above 1.0 is true supersampling: the internal material buffers are larger than the swapchain and are filtered back to presentation resolution in the post chain.
+Scales above 1.0 are true supersampling. At 2× scale, material pixel count is roughly four times rung 5 before additional march and iteration work is considered.
 
-Because pixel cost grows with area, 2× resolution scale can represent roughly four times as many material pixels before accounting for the simultaneously increased raymarch and iteration work. The governor therefore treats supersampling as expensive and only reaches it on devices with measured headroom.
-
-One current limitation: `resize()` does not explicitly clamp supersampled target dimensions against `device.limits.maxTextureDimension2D`. Very large high-DPI canvases therefore rely on the requested targets remaining within device limits. If the application is expanded toward very large displays, explicit limit-aware sizing should be added.
+A current limitation is that `resize()` does not explicitly clamp supersampled target dimensions against `device.limits.maxTextureDimension2D`.
 
 ## 10. Mathematical detail controls
 
-Adaptive quality changes more than resolution.
-
-The current rung is sent to WGSL through the `detail` uniform:
+The selected rung reaches WGSL through:
 
 ```text
 detail.x = live raymarch step ceiling
@@ -353,178 +305,142 @@ detail.z = cheap/full shading selector
 detail.w = spare
 ```
 
-This design makes mathematical complexity a runtime resource budget.
+Higher iteration depth can reveal genuine iterative structure. Higher march-step ceilings reduce missed thin geometry. These dimensions solve different visual failure modes than supersampling.
 
-A higher iteration count can reveal genuine additional structure in iterative models. A higher march-step ceiling can prevent thin geometry from being skipped before the maximum travel distance is reached. These controls therefore improve different failure modes than supersampling.
-
-The relative value and cost of each control varies by model. The current ladder raises them together in a global order rather than maintaining per-model quality recipes.
+The current ladder raises resolution, step count, iteration depth, and shading together. Their value and cost vary by model.
 
 ## 11. Shading and surface precision
 
 The surface pass includes diffuse lighting, neutral specular, soft shadow, ambient occlusion, fresnel contribution, fog, and model-specific seam/glow terms.
 
-The first two ladder rungs use the cheaper shading path. Full shading is enabled from rung 2 upward.
+The first two rungs use the cheaper shading path. Full shading begins at rung 2.
 
-Surface hit precision also responds to quality scale. Higher quality tightens the hit threshold, while lower-quality modes permit a larger epsilon so inexpensive rendering does not spend disproportionate work resolving subpixel surface precision.
-
-The purpose of this is perceptual allocation: a low-resolution moving image should not pay high-end numerical cost for detail it cannot display.
+Surface hit precision also responds to quality scale so low-resolution moving frames do not spend disproportionate numerical effort resolving detail they cannot display.
 
 ## 12. Camera architecture
 
 ### Orbit / Explorer
 
-The orbit camera stores an explicit pivot and distance rather than merely orbiting the global origin.
+The orbit camera stores an explicit pivot and distance. Zooming in can re-pin the pivot onto the surface under the centre ray using the GPU probe, allowing asymptotic approach toward visible geometry rather than pushing through it toward the centroid.
 
-Zooming in attempts to re-pin the pivot onto the surface under the centre ray using the GPU probe. The eye remains where it is while the pivot slides forward to the measured hit. Subsequent zoom then approaches that surface asymptotically.
-
-This prevents the common failure where deep orbit zoom eventually moves through the visible shell because the camera is actually dollying toward the model centroid.
-
-Orbit movement has momentum. A throw decays toward a small directional drift rather than automatically reaching zero. Double-tap/double-click or `freezeView()` clears the drift and allows the view to become truly still, which in turn enables progressive accumulation.
+A throw decays toward a subtle directional drift. Double-tap/double-click or `freezeView()` clears the drift and permits progressive accumulation.
 
 ### Fly-through
 
-Fly-through separates camera position and look direction from the origin.
-
-Movement is clearance-relative rather than based on a fixed number of world units:
+Fly-through decouples position and look direction from the origin. Travel is clearance-relative:
 
 ```text
 step = clearance * (1 - exp(-k * dt))
 ```
 
-That gives two important properties:
-
-- movement is frame-rate independent; and
-- approaching a surface is asymptotic, so one frame cannot consume more than the remaining gap.
-
-Pinch dolly uses the same proximity philosophy.
+This is frame-rate independent and asymptotic near surfaces.
 
 ## 13. Device and power selection
 
-The library defaults to requesting a low-power WebGPU adapter:
-
-```js
-navigator.gpu.requestAdapter({ powerPreference: 'low-power' })
-```
-
-This preserves its original background-effect use case.
-
-Callers that explicitly want maximum visual capability can pass:
+The library defaults to a low-power adapter request so the original background-effect use remains frugal. Callers can pass:
 
 ```js
 power: 'high'
 ```
 
-which requests:
+to request `high-performance`. The Explorer demo opts into this preference.
 
-```text
-high-performance
-```
-
-The Explorer demo opts into the high-performance preference.
-
-The preference remains a request rather than a guarantee; browser/OS WebGPU implementation ultimately chooses the adapter. Runtime frame measurement is therefore still required even after requesting high performance.
+Power preference is only a request; runtime measurement remains necessary.
 
 ## 14. Reduced motion and lifecycle
 
-`prefers-reduced-motion` suppresses automatic animation such as background motion, colour-cycle phase motion, and orbit drift where appropriate.
+`prefers-reduced-motion` suppresses automatic animation where appropriate while leaving manual navigation available.
 
-Manual navigation remains available. In interactive modes the render loop can stay alive under reduced motion so drag, pinch, wheel, and fly controls continue to work.
-
-The renderer also gates work using page visibility and canvas intersection. Hidden or non-intersecting canvases stop the animation loop instead of consuming GPU time off-screen.
+Visibility and intersection gating stop the animation loop when the page or canvas is not meaningfully visible.
 
 ## 15. Device-loss recovery
 
-WebGPU device loss is treated as potentially transient.
+Device loss is treated as potentially transient. `planDeviceLoss()` distinguishes bursts of repeated failures from separate incidents after a healthy run. Quick repeated failures eventually fall back; a later isolated loss may be retried again.
 
-The renderer records how long the device had been healthy and uses the pure `planDeviceLoss()` policy in `camera.js` to distinguish a burst of repeated failures from separate incidents far apart in time.
-
-A loss after a healthy interval resets the incident count and may be retried again. Repeated quick losses eventually stop retrying and call the unsupported/fallback path.
-
-This behavior is covered by `tools/recovery.test.js` because device loss cannot be reliably provoked on demand in normal browser testing.
+The policy is pure and covered by `tools/recovery.test.js`.
 
 ## 16. Testing strategy
 
-The project intentionally moves decision logic out of GPU-only code when it can be expressed as pure arithmetic.
+The project moves control logic out of GPU-only code whenever practical.
 
-Relevant suites include:
+`tools/quality.test.js` now covers, among other things:
 
-- `tools/quality.test.js` — synthetic phone/laptop/workstation cost models, stability, expensive-scene reaction, catastrophic stalls, remembered ceilings, converged-frame contamination, invalid samples, long pauses, and showcase escalation.
-- `tools/camera.test.js` — orbit/fly camera mathematics.
-- `tools/recovery.test.js` — device-loss retry policy.
-- `tools/colorcycle.test.js` — palette-cycle and image-adjustment arithmetic.
-- `tools/palette.test.js` — imported palette parsing and persistence.
-- `tools/attractor.test.js` — attractor fits, step quality, and Lyapunov behavior.
-- `tools/kleinpack.test.js` and `tools/engel.test.js` — construction/estimator-specific mathematical checks.
-- `tools/shader-check.html` — compilation of WGSL modules in a WebGPU-capable browser.
+- phone, laptop, and workstation synthetic devices;
+- **vsync-quantised** frame reporting rather than only continuous timing;
+- a strong device climbing under vsync-locked timing;
+- occasional missed-vsync jitter without rung chatter;
+- scene cost becoming abruptly more expensive;
+- catastrophic single-frame stalls;
+- remembered failed-rung ceilings;
+- increasingly rare re-probes;
+- simulated thermal throttling;
+- converged-frame dilution at both 50/50 and realistic high-converged ratios;
+- invalid samples and long pauses; and
+- showcase escalation.
 
-Synthetic governor tests prove controller behavior under known cost curves. They do **not** replace observation on real GPUs. The constants governing climb margin and showcase estimates still require empirical calibration.
+The quality suite contains 42 assertions as of `104eb59`; the project-wide suite reported 369 assertions at that revision.
+
+Synthetic tests prove controller arithmetic against known models. They do not answer perceptual questions such as whether 2× supersampling is the best use of the top-rung budget.
 
 ## 17. Important invariants
 
-The following are easy to accidentally simplify away and should be treated as deliberate architecture:
-
-1. **Do not feed converged frame times into the quality governor.** They omit the raymarch and are not representative workload samples.
-2. **Keep the remembered bad-rung ceiling.** Hysteresis alone does not prevent repeated climb/stall/drop cycles.
-3. **Use frame time, not averaged FPS, as the governor's controlled quantity.**
-4. **Keep compile-time WGSL loop ceilings separate from live rung limits.** A high static ceiling should not make low quality execute high-quality work.
-5. **Keep palette lookup after material accumulation.** Moving palette resolution into the geometry pass would make palette animation and palette switching invalidate convergence.
-6. **Keep explicit Hue separate from palette cycling.** Palette cycling changes coordinates within the selected palette; Hue intentionally transforms final RGB.
-7. **Keep the clearance probe before render passes and throttled.** Its synchronization cost matters especially on tile-based mobile GPUs.
-8. **Keep interaction and showcase quality conceptually separate.** A still image can spend hundreds of milliseconds per sample without harming camera responsiveness.
-9. **High must remain the historical 1.0 / 160 / 12 quality point unless a deliberate compatibility change is made.**
-10. **A quality-rung change invalidates accumulation.** Samples gathered at another resolution/detail rung do not describe the same rendered signal.
+1. **Use presentation deadline misses as the adaptive climb/drop signal.** Mean `requestAnimationFrame` frame time cannot observe sub-refresh headroom under vsync.
+2. **Do not feed converged frames into the governor.** Cheap post-only frames dilute overload evidence from interactive raymarch frames.
+3. **Remember the rung that failed, not merely the current ceiling.** Ceiling reset changes the ceiling before a retry.
+4. **Back off repeated failed-rung probes.** Thermal throttling should lead to increasingly rare retries, not periodic stalls forever.
+5. **Re-probing is intentional.** Stability means probes get rarer, not that the rung can never change after settling.
+6. **Keep compile-time WGSL loop ceilings separate from live rung limits.**
+7. **Keep palette lookup after material accumulation.**
+8. **Keep explicit Hue separate from palette cycling.**
+9. **Keep the clearance probe before render passes and throttled.**
+10. **Keep interaction and showcase quality conceptually separate.**
+11. **High remains the historical `1.0 / 160 / 12` point unless compatibility is deliberately changed.**
+12. **A quality-rung change invalidates accumulation.**
 
 ## 18. Known limitations and next measurements
 
-The adaptive engine is deliberately measurement-driven, but several decisions are still global approximations.
-
 ### Per-model cost learning
 
-`showcaseIndex()` currently estimates cost primarily by resolution area with a secondary step/iteration factor. That is reasonable globally, but individual models have different bottlenecks.
+The engine still has a global ladder and global showcase cost model. A better long-term direction is online per-device, per-model learning from actual observed model/rung cost rather than guessed constants.
 
-For example, a model dominated by expensive estimator iteration can react differently from one dominated by pixel fill or post-processing.
+This should wait for real timings. Inventing per-model constants without measurements would turn the governor back into theoretical tuning.
 
-A better long-term design is **online per-device, per-model cost learning** rather than hard-coded model constants. The engine can observe actual cost for model/rung combinations and gradually learn which dimension of quality that particular device can afford for that model.
+### Top-rung quality allocation
 
-### Separate quality dimensions
+The largest unresolved perceptual question is whether the top of the ladder spends too much on pixels.
 
-The current ladder raises resolution, march steps, iteration depth, and shading together. That is simple and robust, but eventually leaves performance on the table.
+Rung 9 uses 2× resolution scale, roughly quadrupling material-pixel work relative to rung 5 before its larger step and iteration limits are counted. On a normal display the visual return from that final supersampling increase may be smaller than the return from tighter surface precision, deeper iteration, or additional accumulation.
 
-A mature governor could choose among several upgrade actions based on measured visual benefit per millisecond:
-
-- resolution / supersampling;
-- march-step ceiling;
-- fractal iteration depth;
-- surface epsilon / normal quality;
-- shadow and AO quality;
-- progressive accumulation target.
-
-That would allow a model whose iteration depth is expensive to spend spare GPU time on supersampling instead, while another model might make the opposite trade.
+This cannot be decided from synthetic timing tests. It should be judged on real hardware and real models. If 2× supersampling is visually inefficient, the top three rungs can be reordered in the single `LADDER` array so mathematical detail or accumulation receives the budget before additional pixels.
 
 ### Adaptive accumulation count
 
-`quality.js` already contains `accumTarget()`, but `fractal-bg.js` still uses the fixed 96-sample convergence cap. Wiring the two together should be treated as a separate change with visual and thermal testing rather than assumed to be active today.
+`accumTarget()` exists but remains unwired. Connecting it should be a separate, visually tested change.
 
-### Hardware timestamps
+### Showcase cost model
 
-The current controller observes browser frame intervals, which measure the outcome users care about but also include CPU scheduling, presentation cadence, and other work.
+`showcaseIndex()` still assumes resolution area dominates and adjusts globally for steps/iterations. Models such as the Barth sextic or Tetrabrot may be disproportionately iteration-bound. Real measurements should determine whether the estimator needs model-aware learned costs.
 
-If broadly available and worth the complexity, GPU timestamp queries could provide a second signal that distinguishes GPU saturation from CPU/presentation effects. They should complement rather than replace user-visible frame-time behavior.
+### GPU timestamps
 
-### Thermal behavior
-
-The governor should already respond naturally to thermal throttling because it continuously measures frame cost. Real-device testing should verify that its ceiling-reset behavior does not re-probe expensive rungs too aggressively on a device that remains thermally constrained.
+The current controller intentionally uses user-visible presentation outcome. GPU timestamp queries could eventually provide a complementary diagnostic signal for distinguishing GPU work from CPU/presentation effects, but they should not replace the presentation signal the user actually experiences.
 
 ### Very large render targets
 
-Supersampling up to 2× combined with a DPR cap of 2 can produce large offscreen textures. Explicit clamping against WebGPU texture limits should be added if the renderer is expected to target unusually large canvases or display walls.
+Supersampling combined with DPR 2 can request very large offscreen textures. Limit-aware sizing should be added for unusually large canvases or display walls.
+
+### Max initialization path
+
+Unify initial `quality: 'max'` with `setQuality('max')` so both create the same adaptive governor and showcase behavior.
 
 ## 19. Performance philosophy
 
-The rendering engine should not aim to make every device render the same workload.
+The renderer should not make every device perform the same workload.
 
 The goal is for every device to render the **best version of the same mathematical scene that it can comfortably sustain**.
 
-On a phone that may mean reduced internal resolution, shallower iteration, and cheaper shading while the user moves. On a workstation it may mean supersampling beyond native resolution with a much deeper mathematical search. When either device becomes still, progressive accumulation can turn spare time into image quality rather than unused frame rate.
+A phone may use reduced internal resolution, shallower iteration, and cheaper shading while moving. A workstation may supersample and search deeper mathematics. When either device becomes still, spare time can be converted into fidelity rather than unused frame rate.
 
-That distinction — responsiveness while interacting, maximal fidelity while observing — is the organizing principle behind the current engine.
+The controlling distinction is therefore:
+
+**responsiveness while interacting; maximal fidelity while observing.**
