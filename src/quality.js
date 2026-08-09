@@ -78,6 +78,11 @@ export const CEILING_RESET_MS = 20000;
 // Each time a rung re-confirms it is too expensive, wait longer before probing
 // it again. A thermally throttled device would otherwise climb back into the
 // same stall every reset interval, for as long as it stayed hot.
+// Max's personality: a wider budget and more tolerance for a late frame, so it
+// reaches higher than auto and is allowed to be visibly ambitious.
+export const MAX_BUDGET_FACTOR = 1.35;
+export const MAX_CLIMB_MISS = 0.06;
+export const MAX_DROP_MISS = 0.30;
 export const CEILING_BACKOFF = 2.0;
 export const CEILING_RESET_MAX_MS = 300000;
 
@@ -198,6 +203,34 @@ function applyDrop(g, to) {
   g.changed = g.index !== from;
   g.emaMs = g.budgetMs * 0.9;
   return g;
+}
+
+/**
+ * How a quality MODE becomes a starting rung and a governor. Both the
+ * constructor and setQuality() go through this, because they used not to: init
+ * tested only for 'auto', so a renderer built with quality:'max' took the fixed
+ * branch and started at the top rung with no governor, while setQuality('max')
+ * started near the heuristic guess with a wider budget. Same mode, two
+ * behaviours, depending on how you got there. One function, one answer.
+ *
+ * Returns { rung, gov }, with gov null for the fixed presets.
+ */
+export function planMode(mode, autoRung = 3) {
+  if (mode === 'auto' || mode === 'max') {
+    // Max starts one rung higher, since it is asking to be pushed, and is given
+    // a wider budget: it accepts an occasional late frame in exchange for
+    // quality, where auto should stay invisible.
+    const start = clampIndex(autoRung + (mode === 'max' ? 1 : 0));
+    const opts = mode === 'max'
+      ? {
+          budgetMs: BUDGET_MS * MAX_BUDGET_FACTOR,
+          climbMiss: MAX_CLIMB_MISS,
+          dropMiss: MAX_DROP_MISS,
+        }
+      : {};
+    return { rung: start, gov: govInit(start, opts) };
+  }
+  return { rung: clampIndex(PRESET_RUNG[mode] ?? PRESET_RUNG.high), gov: null };
 }
 
 /**

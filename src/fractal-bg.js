@@ -18,7 +18,7 @@ import { COMPOSITE_WGSL } from './shaders/composite.wgsl.js';
 import { ATTRACTOR_WGSL } from './shaders/attractor.wgsl.js';
 import {
   LADDER, TOP, PRESET_RUNG, BUDGET_MS,
-  govInit, govSample, rung, clampIndex, showcaseIndex,
+  govInit, govSample, rung, clampIndex, showcaseIndex, planMode,
 } from './quality.js';
 import { getPalette } from './palettes.js';
 import { clampStops, averageColor, MAX_STOPS } from './palette-io.js';
@@ -1107,7 +1107,8 @@ export async function initFractalBackground(canvas, options = {}) {
 
   function adaptQuality(dtMs) {
     if (state.qualityMode !== 'auto' && state.qualityMode !== 'max') return;
-    if (!state.gov) state.gov = govInit(state.detailRung);
+    if (!state.gov) state.gov = planMode(state.qualityMode, state.detailRung).gov;
+    if (!state.gov) return;
     // Kept for the HUD; the governor itself works in frame TIME, because the
     // budget is a time and averaging reciprocals biases towards fast frames.
     state.fpsEMA = state.fpsEMA * 0.9 + (1000 / Math.max(dtMs, 1)) * 0.1;
@@ -1492,13 +1493,14 @@ export async function initFractalBackground(canvas, options = {}) {
     });
 
     // Pick starting quality tier.
-    if (state.qualityMode === 'auto') {
-      state.detailRung = pickAutoRung();
-      state.gov = govInit(state.detailRung);
-      state.qualityScale = LADDER[state.detailRung].scale;
-    } else {
-      state.detailRung = PRESET_RUNG[state.qualityMode] ?? PRESET_RUNG.high;
-      state.qualityScale = LADDER[state.detailRung].scale;
+    // Same decision the selector makes, from the same function: init used to
+    // have its own copy that only recognised 'auto', so quality:'max' at
+    // construction behaved differently from choosing Max later.
+    {
+      const plan = planMode(state.qualityMode, pickAutoRung());
+      state.detailRung = plan.rung;
+      state.gov = plan.gov;
+      state.qualityScale = LADDER[plan.rung].scale;
     }
 
     createStaticResources();
@@ -1789,16 +1791,9 @@ export async function initFractalBackground(canvas, options = {}) {
       state.qualityMode = mode;
       state.accumSamples = 0;
       state.showcaseRung = -1;
-      if (mode === 'auto' || mode === 'max') {
-        // Start from the heuristic guess and let measurement take over. Max
-        // starts one rung higher, since it is asking to be pushed.
-        const start = pickAutoRung() + (mode === 'max' ? 1 : 0);
-        state.gov = govInit(start, { budgetMs: mode === 'max' ? BUDGET_MS * 1.35 : BUDGET_MS });
-        applyRung(start);
-      } else {
-        state.gov = null;
-        applyRung(PRESET_RUNG[mode] ?? PRESET_RUNG.high);
-      }
+      const plan = planMode(mode, pickAutoRung());
+      state.gov = plan.gov;
+      applyRung(plan.rung);
       resize();
     },
     setTransparent(v) { applyTransparent(v); },

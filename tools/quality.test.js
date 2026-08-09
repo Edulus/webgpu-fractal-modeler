@@ -14,7 +14,8 @@
 
 import {
   LADDER, TOP, BUDGET_MS, PRESET_RUNG,
-  govInit, govSample, rung, clampIndex, showcaseIndex, accumTarget,
+  govInit, govSample, rung, clampIndex, showcaseIndex, accumTarget, planMode,
+  MAX_BUDGET_FACTOR,
 } from '../src/quality.js';
 
 let passed = 0, failed = 0;
@@ -288,6 +289,59 @@ check('accumulation targets rise with the rung',
         `${changesWhileHot} rung changes over ${Math.round(tMs / 1000)}s while hot`);
   check('the retry backoff grew, which is what stops the probing',
         g.resetMs > 20000, `resetMs ${Math.round(g.resetMs)}`);
+}
+
+// ---- one decision, however you arrive at it ---------------------------------
+// The constructor and the selector used to decide this separately, and the
+// constructor only recognised 'auto'. A renderer built with quality:'max'
+// therefore started at the top rung with no governor, while choosing Max from
+// the selector started near the heuristic guess with a wider budget: the same
+// mode behaving two ways depending on how you got there.
+{
+  for (const mode of ['auto', 'max']) {
+    const p = planMode(mode, 4);
+    check(`${mode} is adaptive however it is entered`, p.gov !== null);
+    check(`${mode} starts on the ladder`, p.rung >= 0 && p.rung <= TOP);
+  }
+  for (const mode of ['low', 'medium', 'high', 'screenshot']) {
+    const p = planMode(mode, 4);
+    check(`${mode} is fixed, with no governor`, p.gov === null);
+    check(`${mode} maps to its preset rung`, p.rung === PRESET_RUNG[mode]);
+  }
+
+  const auto = planMode('auto', 4);
+  const max = planMode('max', 4);
+  check('max starts above auto', max.rung > auto.rung, `${auto.rung} vs ${max.rung}`);
+  check('max carries the wider budget',
+        max.gov.budgetMs > auto.gov.budgetMs * 1.2,
+        `${auto.gov.budgetMs.toFixed(1)}ms vs ${max.gov.budgetMs.toFixed(1)}ms`);
+  check('and tolerates more late frames, which is its personality',
+        max.gov.dropMiss > auto.gov.dropMiss);
+  check('the budget factor is the documented one',
+        Math.abs(max.gov.budgetMs / auto.gov.budgetMs - MAX_BUDGET_FACTOR) < 1e-9);
+
+  // An unknown mode must not produce a broken renderer.
+  const junk = planMode('nonsense', 4);
+  check('an unknown mode falls back to a fixed rung', junk.gov === null
+        && junk.rung >= 0 && junk.rung <= TOP, `rung ${junk.rung}`);
+
+  // The heuristic start is only a starting point, but it must be respected.
+  check('the starting rung follows the heuristic', planMode('auto', 1).rung === 1);
+  check('and is clamped at the top', planMode('max', TOP).rung === TOP);
+}
+
+// Max should reach higher than auto on the same hardware, which is the whole
+// reason for it being a separate mode.
+{
+  const run = (mode) => {
+    let g = planMode(mode, 3).gov;
+    for (let f = 0; f < 12000; f++) g = govSample(g, LAPTOP(g.index));
+    return g.index;
+  };
+  const a = run('auto');
+  const m = run('max');
+  check('max settles no lower than auto on the same device', m >= a,
+        `auto ${a}, max ${m}`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
