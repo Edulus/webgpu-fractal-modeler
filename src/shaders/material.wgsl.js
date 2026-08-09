@@ -101,8 +101,14 @@ fn fs_material(in : VSOut) -> MaterialOut {
     let diffKey = max(dot(n, keyDir), 0.0);
     let diffFill = max(dot(n, fillDir), 0.0) * 0.35;
 
-    let sh = mix(1.0, softShadow(pos + n * 0.002, keyDir, u.shadowSoftness), 0.9);
-    let ao = mix(1.0, calcAO(pos, n), u.aoStrength);
+    // Soft shadows and occlusion are the first thing dropped on a weak device:
+    // they are extra marches per pixel, and a branch really does skip them.
+    var sh = 1.0;
+    var ao = 1.0;
+    if (u.detail.z > 0.5) {
+      sh = mix(1.0, softShadow(pos + n * 0.002, keyDir, u.shadowSoftness), 0.9);
+      ao = mix(1.0, calcAO(pos, n), u.aoStrength);
+    }
     let fres = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
 
     // Palette-independent form of the old base shading:

@@ -94,6 +94,11 @@ struct Uniforms {
   ramp         : array<vec4<f32>, RAMP_MAX>,
   // (exposure, contrast, saturation, hue turns) -- composite pass only.
   imageAdjust  : vec4<f32>,
+  // (march steps, iteration depth, full shading, spare): the adaptive-quality
+  // governor's current rung. These were compile-time constants; making them
+  // uniforms is what lets a capable device be given more mathematical work
+  // rather than only more pixels.
+  detail       : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;
@@ -122,10 +127,13 @@ fn vs_main(@builtin(vertex_index) vid : u32) -> VSOut {
 
 // ---- Constants ------------------------------------------------------------
 const PI : f32 = 3.14159265359;
-const MAX_STEPS : i32 = 160;
+// Compile-time CEILINGS. The governor picks the live values below them through
+// u.detail, so raising these costs nothing at a low rung -- the loop simply
+// breaks earlier -- while leaving headroom for a device that can use it.
+const MAX_STEPS : i32 = 320;
 const MAX_DIST  : f32 = 30.0;
 const BASE_EPS  : f32 = 0.00035;
-const DE_ITERS  : i32 = 12;   // fractal iteration count (static bound)
+const DE_ITERS  : i32 = 20;   // fractal iteration ceiling; u.detail.y selects
 
 // Imported palette: linear interpolation across the stops.
 //
@@ -165,7 +173,9 @@ fn deMandelbulb(pos : vec3<f32>) -> DEResult {
   var r = 0.0;
   var trap = 1e10;
   let power = u.power;
+  let deIters = i32(u.detail.y);
   for (var i = 0; i < DE_ITERS; i = i + 1) {
+    if (i >= deIters) { break; }
     r = length(z);
     if (r > 2.2) { break; }
     // Orbit trap against origin (and a plane) for iridescent banding.
@@ -201,7 +211,9 @@ fn deMandelbox(pos : vec3<f32>) -> DEResult {
   var z = pos;
   var dr = 1.0;
   var trap = 1e10;
+  let deIters = i32(u.detail.y);
   for (var i = 0; i < DE_ITERS; i = i + 1) {
+    if (i >= deIters) { break; }
     // box fold
     z = clamp(z, vec3<f32>(-1.0), vec3<f32>(1.0)) * 2.0 - z;
     // sphere fold
@@ -1758,7 +1770,9 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   var glow = 0.0;
 
   // Sphere tracing with a small relaxation factor and glow from near-misses.
+  let maxSteps = i32(u.detail.x);
   for (var i = 0; i < MAX_STEPS; i = i + 1) {
+    if (i >= maxSteps) { break; }
     let pos = ro2 + rd * t;
     let de = mapDE(pos);
     let d = de.dist;
@@ -1794,9 +1808,13 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
     let diffFill = max(dot(n, fillDir), 0.0) * 0.35;
 
     // Soft shadow on the key light.
-    let sh = mix(1.0, softShadow(pos + n * 0.002, keyDir, u.shadowSoftness), 0.9);
+    var sh = 1.0;
+    if (u.detail.z > 0.5) {
+      sh = mix(1.0, softShadow(pos + n * 0.002, keyDir, u.shadowSoftness), 0.9);
+    }
     // AO.
-    let ao = mix(1.0, calcAO(pos, n), u.aoStrength);
+    var ao = 1.0;
+    if (u.detail.z > 0.5) { ao = mix(1.0, calcAO(pos, n), u.aoStrength); }
 
     // Orbit-trap -> palette. NO time phase here, deliberately.
     //

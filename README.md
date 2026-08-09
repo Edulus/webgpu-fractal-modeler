@@ -64,6 +64,7 @@ mathematicians named there.
 │   ├── camera.js                 camera rate maths (pure, no WebGPU)
 │   ├── palette-io.js             palette import and persistence (pure)
 │   ├── palettes.js               Inigo Quilez cosine-palette presets
+│   ├── quality.js                adaptive-quality governor (pure, no WebGPU)
 │   └── shaders/
 │       ├── fractal.wgsl.js       distance estimators + clearance compute shader
 │       ├── engel.wgsl.js         generated plesiohedron tables + its estimator
@@ -78,7 +79,8 @@ mathematicians named there.
 │   ├── colorcycle.test.js        palette-cycle and image-control arithmetic
 │   ├── kleinpack.test.js         sphere-packing construction and estimator
 │   ├── attractor.test.js         attractor fits and Lyapunov exponents
-│   └── engel.test.js             plesiohedron tables, tiling and Lipschitz bound
+│   ├── engel.test.js             plesiohedron tables, tiling and Lipschitz bound
+│   └── quality.test.js           governor behaviour against simulated devices
 └── .github/workflows/pages.yml   deploys the demo to GitHub Pages
 ```
 
@@ -241,7 +243,7 @@ Recommended canvas CSS:
 | `setPaletteColors(colors)` | Use an imported palette: `[[r,g,b], …]` in 0..1. `null` returns to the preset. |
 | `setColorCycle(rate)` | Palette-coordinate shift rate per second; `0` stops it. Re-indexes the selected palette without resetting accumulation. |
 | `setImageAdjust({exposure, contrast, saturation, hue})` | Post-chain image controls, any subset. `hue` is in turns. Does not reset accumulation. |
-| `setQuality(mode)` | Select low, medium, high, or adaptive rendering quality. |
+| `setQuality(mode)` | `low`, `medium`, `high`, `auto` or `max`. See [Adaptive quality](#adaptive-quality). |
 | `setTransparent(bool)` | Toggle transparent embedding and opaque presentation modes. |
 | `setExplorer(bool)` | Toggle the full model-viewer preset. |
 | `setFly(bool)` | Toggle free flight; interior models drop their bounding clip. |
@@ -254,7 +256,7 @@ Recommended canvas CSS:
 | `pause()` | Stop the render loop. |
 | `resume()` | Resume rendering while respecting visibility gating. |
 | `destroy()` | Tear down observers, listeners, textures, and the WebGPU device. |
-| `info` | Model, quality, FPS, reduced-motion, explorer, fly, speed, position, zoom, whether the orbit pivot is pinned, camera clearance, accumulated sample count, cycle rate, and the image settings. |
+| `info` | Model, quality, ladder rung, march steps, iteration depth, smoothed frame time, FPS, reduced-motion, explorer, fly, speed, position, zoom, whether the orbit pivot is pinned, camera clearance, accumulated sample count, cycle rate, and the image settings. |
 
 ## Loading palettes
 
@@ -533,7 +535,21 @@ Available presets:
 
 ## Adaptive quality
 
-Adaptive mode uses a rolling FPS estimate to adjust internal rendering resolution and raymarch epsilon. Hysteresis prevents constant quality changes. Coarse-pointer and small-viewport devices begin at a lower tier, while explicit quality settings pin the scale.
+`quality` takes **low**, **medium**, **high**, **auto** or **max**. The three fixed modes pin a rung of a ladder; the two adaptive ones measure the device and choose one.
+
+**The ladder spends headroom on mathematics, not only on pixels.** The previous controller moved a single dial — internal resolution between 0.4 and 1.0 — which answers "is this device keeping up" but never "how much has it got left". March steps and iteration depth were compile-time constants, so a workstation rendered exactly what a laptop did, only less blurry. Both are now uniforms, and each rung of the ladder raises resolution, step ceiling, iteration depth and shading quality together, in the order that buys the most visible detail per millisecond: resolution first, because aliasing is the most obvious defect; then steps, which is what stops thin structures being missed; then iteration depth; then soft shadows and occlusion. The top rung is 2× supersampling with 300 steps and 18 iterations, against the old ceiling of 1.0/160/12 — which is still on the ladder, as **high**.
+
+**It works to a budget, not a race.** The governor targets a frame time rather than maximum speed: comfortably inside budget it climbs, at budget it stops. Frame time is used directly rather than converted to FPS, because the budget *is* a time and averaging reciprocals is a trap — the mean of `1/t` is not `1/mean(t)`, so an FPS average is biased by its fastest frames.
+
+**A rung that misbehaves is remembered.** On a drop the governor settles one rung *below* the level that stalled and records it, instead of climbing straight back into the same stall and oscillating. The ceiling lifts again only after a long quiet stretch, so a view that has become cheaper is not punished forever by a measurement taken somewhere expensive. A single frame far over budget is acted on at once rather than waiting out the hysteresis.
+
+**Converged frames are still excluded**, and the tests show why it matters: fed the cheap frames of an already-converged image, the governor climbs two rungs past what the device can sustain, then stalls the moment the view moves.
+
+**Interactive and showcase quality are different.** While you move, responsiveness wins. In **max**, once the view is still there is no responsiveness left to protect: a single frame may take a quarter of a second, and the accumulator keeps refining it, so the governor steps up to whatever that longer budget allows. The estimate uses the measured interactive cost and the fact that cost scales with area.
+
+**Max also asks for the strong GPU.** The library requests a `low-power` adapter by default, which is right for a background effect; passing `power: 'high'` requests `high-performance` instead, and the demo page does.
+
+The governor is pure — no WebGPU, no DOM, no clock of its own — so `tools/quality.test.js` can drive it with synthetic frame times from simulated devices. Against those models it settles at rung 2 on a phone, rung 5 on a laptop and rung 9 on a workstation, in every case inside the frame budget, and does not oscillate: two or fewer rung changes over the last 5000 frames.
 
 ## Lifecycle and battery behaviour
 

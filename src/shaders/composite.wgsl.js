@@ -50,6 +50,7 @@ struct Uniforms {
   // (exposure, contrast, saturation, hue turns). Hue is deliberately a
   // separate image adjustment; palette cycling is handled before bloom.
   imageAdjust  : vec4<f32>,
+  detail       : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;

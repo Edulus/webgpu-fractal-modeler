@@ -16,6 +16,10 @@ import { FRACTAL_WGSL } from './shaders/fractal.wgsl.js';
 import { MATERIAL_WGSL } from './shaders/material.wgsl.js';
 import { COMPOSITE_WGSL } from './shaders/composite.wgsl.js';
 import { ATTRACTOR_WGSL } from './shaders/attractor.wgsl.js';
+import {
+  LADDER, TOP, PRESET_RUNG, BUDGET_MS,
+  govInit, govSample, rung, clampIndex, showcaseIndex,
+} from './quality.js';
 import { getPalette } from './palettes.js';
 import { clampStops, averageColor, MAX_STOPS } from './palette-io.js';
 import {
@@ -64,9 +68,10 @@ const U = {
   // changing them never re-marches the scene or resets accumulation.
   // (exposure, contrast, saturation, hue turns). Byte 384, 16-byte aligned.
   imageAdjust: 96,
+  detail: 100,
 };
-const UNIFORM_FLOATS = 100;
-const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 400
+const UNIFORM_FLOATS = 104;
+const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 416
 
 // Distance-estimated fractals occupy ids 0..23; the volumetric/line-rendered
 // attractors follow at 24+ and must stay contiguous at the end. The shader keys off that split (see the
@@ -102,7 +107,10 @@ const FRACTAL_IDS = {
 };
 
 // Quality tiers -> internal-resolution scale factor.
-const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
+// The named presets pin a rung of the ladder in quality.js, so a fixed mode and
+// an adaptive one describe quality in the same units.
+const QUALITY_SCALE = Object.fromEntries(
+  Object.entries(PRESET_RUNG).map(([k, i]) => [k, LADDER[i].scale]));
 
 // Camera orbit distance per fractal — each estimator lives at a different
 // world scale, so a single radius would sit inside the larger ones.
@@ -259,7 +267,11 @@ export async function initFractalBackground(canvas, options = {}) {
     dpr: 1,
     cssW: 1,
     cssH: 1,
-    // adaptive quality
+    // adaptive quality: the governor's own state lives in quality.js and is
+    // pure, so it can be unit-tested without a GPU.
+    gov: null,
+    detailRung: PRESET_RUNG.medium,
+    showcaseRung: -1,
     fpsEMA: 60,
     slowFrames: 0,
     fastFrames: 0,
@@ -338,7 +350,11 @@ export async function initFractalBackground(canvas, options = {}) {
   async function acquireDevice() {
     let adapter;
     try {
-      adapter = await navigator.gpu.requestAdapter({ powerPreference: 'low-power' });
+      // A background effect should be frugal; an explorer being asked to show
+      // what the machine can do should not be. Default stays low-power so the
+      // library's original use is unchanged, and the demo opts in.
+      const pref = opts.power === 'high' ? 'high-performance' : 'low-power';
+      adapter = await navigator.gpu.requestAdapter({ powerPreference: pref });
     } catch (e) {
       adapter = null;
     }
@@ -867,6 +883,12 @@ export async function initFractalBackground(canvas, options = {}) {
     d[U.colorCycle] = state.colorCycle;
     d[U.colorPhase] = rm ? 0.0 : state.colorPhase;
     const im = state.image;
+    const rg = LADDER[clampIndex(state.detailRung)];
+    d[U.detail] = rg.steps;
+    d[U.detail + 1] = rg.iters;
+    d[U.detail + 2] = rg.shade;
+    d[U.detail + 3] = 0;
+
     d[U.imageAdjust] = im.exposure;
     d[U.imageAdjust + 1] = im.contrast;
     d[U.imageAdjust + 2] = im.saturation;
@@ -1068,37 +1090,44 @@ export async function initFractalBackground(canvas, options = {}) {
     }
   }
 
-  // ---- Adaptive quality (auto mode only) ----
+  // ---- Adaptive quality ----
+  // The decision logic is in quality.js and is pure; this is only the plumbing
+  // that hands it frame times and applies the rung it returns.
+  function applyRung(index, why) {
+    const i = clampIndex(index);
+    if (i === state.detailRung) return false;
+    state.detailRung = i;
+    state.qualityScale = LADDER[i].scale;
+    // Resolution changed, so the accumulated image is the wrong size and any
+    // samples gathered at the old rung no longer describe this one.
+    state.accumSamples = 0;
+    resize();
+    return true;
+  }
+
   function adaptQuality(dtMs) {
-    if (state.qualityMode !== 'auto') return;
-    const fps = 1000 / Math.max(dtMs, 1);
-    // EMA smoothing.
-    state.fpsEMA = state.fpsEMA * 0.9 + fps * 0.1;
+    if (state.qualityMode !== 'auto' && state.qualityMode !== 'max') return;
+    if (!state.gov) state.gov = govInit(state.detailRung);
+    // Kept for the HUD; the governor itself works in frame TIME, because the
+    // budget is a time and averaging reciprocals biases towards fast frames.
+    state.fpsEMA = state.fpsEMA * 0.9 + (1000 / Math.max(dtMs, 1)) * 0.1;
 
-    if (state.fpsEMA < 50) {
-      state.slowFrames++;
-      state.fastFrames = 0;
-    } else if (state.fpsEMA > 58) {
-      state.fastFrames++;
-      state.slowFrames = 0;
-    } else {
-      state.slowFrames = 0;
-      state.fastFrames = 0;
-    }
+    state.gov = govSample(state.gov, dtMs);
+    state.showcaseRung = -1;
+    if (state.gov.changed) applyRung(state.gov.index, 'governor');
+  }
 
-    const MIN_SCALE = 0.4;
-    const MAX_SCALE = 1.0;
-
-    // Hysteresis: require sustained slow/fast before changing.
-    if (state.slowFrames > 45 && state.qualityScale > MIN_SCALE) {
-      state.qualityScale = Math.max(MIN_SCALE, state.qualityScale - 0.15);
-      state.slowFrames = 0;
-      resize();
-    } else if (state.fastFrames > 120 && state.qualityScale < MAX_SCALE) {
-      state.qualityScale = Math.min(MAX_SCALE, state.qualityScale + 0.1);
-      state.fastFrames = 0;
-      resize();
-    }
+  // Once the view has been still long enough to be a showcase rather than an
+  // interaction, there is no responsiveness left to protect: a single frame may
+  // take a quarter of a second, and the accumulator will keep refining it. This
+  // is the same philosophy the progressive accumulation already follows, applied
+  // to resolution and march precision as well as to sample count.
+  function considerShowcase() {
+    if (state.qualityMode !== 'max' || !state.gov) return;
+    if (state.showcaseRung >= 0) return;
+    const want = showcaseIndex(state.gov, 220);
+    state.showcaseRung = want;
+    if (want > state.detailRung) applyRung(want, 'showcase');
   }
 
   // ---- Render loop ----
@@ -1123,6 +1152,8 @@ export async function initFractalBackground(canvas, options = {}) {
     }
 
     if (acc) {
+      // A still view: spend the headroom on the picture rather than on frames.
+      considerShowcase();
       renderFrame(nowMs, false);
       // Deliberately not sampled by adaptQuality. A converged frame skips the
       // raymarch entirely, so its post-chain cost is not an interactive FPS
@@ -1462,9 +1493,12 @@ export async function initFractalBackground(canvas, options = {}) {
 
     // Pick starting quality tier.
     if (state.qualityMode === 'auto') {
-      state.qualityScale = pickAutoQuality();
+      state.detailRung = pickAutoRung();
+      state.gov = govInit(state.detailRung);
+      state.qualityScale = LADDER[state.detailRung].scale;
     } else {
-      state.qualityScale = QUALITY_SCALE[state.qualityMode] ?? 1.0;
+      state.detailRung = PRESET_RUNG[state.qualityMode] ?? PRESET_RUNG.high;
+      state.qualityScale = LADDER[state.detailRung].scale;
     }
 
     createStaticResources();
@@ -1484,12 +1518,13 @@ export async function initFractalBackground(canvas, options = {}) {
     }
   }
 
-  function pickAutoQuality() {
-    // Heuristic from viewport, DPR, pointer type.
+  // Where to START before any frame has been measured. Only a guess: the
+  // governor replaces it with evidence within a second or two either way.
+  function pickAutoRung() {
     const px = window.innerWidth * (window.devicePixelRatio || 1);
-    if (coarsePointer || px < 900) return 0.5;
-    if (px < 1700) return 0.7;
-    return 0.9;
+    if (coarsePointer || px < 900) return 1;
+    if (px < 1700) return 3;
+    return 4;
   }
 
   // ---- Destroy ----
@@ -1753,8 +1788,17 @@ export async function initFractalBackground(canvas, options = {}) {
     setQuality(mode) {
       state.qualityMode = mode;
       state.accumSamples = 0;
-      if (mode === 'auto') state.qualityScale = pickAutoQuality();
-      else state.qualityScale = QUALITY_SCALE[mode] ?? 1.0;
+      state.showcaseRung = -1;
+      if (mode === 'auto' || mode === 'max') {
+        // Start from the heuristic guess and let measurement take over. Max
+        // starts one rung higher, since it is asking to be pushed.
+        const start = pickAutoRung() + (mode === 'max' ? 1 : 0);
+        state.gov = govInit(start, { budgetMs: mode === 'max' ? BUDGET_MS * 1.35 : BUDGET_MS });
+        applyRung(start);
+      } else {
+        state.gov = null;
+        applyRung(PRESET_RUNG[mode] ?? PRESET_RUNG.high);
+      }
       resize();
     },
     setTransparent(v) { applyTransparent(v); },
@@ -1846,6 +1890,10 @@ export async function initFractalBackground(canvas, options = {}) {
         fractalType: state.fractalType,
         qualityMode: state.qualityMode,
         qualityScale: +state.qualityScale.toFixed(2),
+        rung: state.detailRung,
+        steps: LADDER[clampIndex(state.detailRung)].steps,
+        iters: LADDER[clampIndex(state.detailRung)].iters,
+        frameMs: state.gov ? +state.gov.emaMs.toFixed(2) : null,
         fps: Math.round(state.fpsEMA),
         reducedMotion: reducedMotion(),
         explorer: state.explorer,

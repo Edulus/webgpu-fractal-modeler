@@ -458,10 +458,11 @@
       Shift colours</label>
     <label>Quality
       <select id="sel-quality">
-        <option value="auto">Auto</option>
         <option value="low">Low</option>
         <option value="medium">Medium</option>
         <option value="high">High</option>
+        <option value="auto" selected>Auto</option>
+        <option value="max">Max</option>
       </select>
     </label>
     <div class="row">
@@ -565,6 +566,9 @@
       fractal: 'mandelbulb',
       palette: 'aurora',
       quality: 'auto',
+      // The explorer asks the machine for everything it has; the library's
+      // default stays low-power for the background-effect use.
+      power: 'high',
       transparent: true,
       onUnsupported: (reason) => {
         console.warn('Fractal renderer unsupported:', reason);
