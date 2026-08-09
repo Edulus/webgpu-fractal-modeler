@@ -256,6 +256,15 @@
     #panel.collapsed { width: auto; }
     #panel.collapsed #panel-tri { transform: rotate(-90deg); }
     #panel.collapsed > :not(#panel-toggle) { display: none; }
+    /* The image controls are the one section that outlives the collapse. They
+       are what you want in hand while looking at the shape, rather than while
+       setting it up, so collapsing the panel leaves them on screen against a
+       clean view and closing them takes the panel the rest of the way down to
+       the chip. Three states, one at a time: panel, sliders, nothing. */
+    #panel.collapsed > #img-io[open] { display: block; }
+    /* Held at the panel's width while they are the only thing showing, so the
+       sliders keep their travel instead of shrinking to fit their own text. */
+    #panel.collapsed:has(> #img-io[open]) { width: 210px; }
 
     #btn-explorer {
       background: rgba(127, 231, 212, 0.14);
@@ -540,13 +549,12 @@
       const collapsed = panel.classList.toggle('collapsed');
       panelToggle.setAttribute('aria-expanded', String(!collapsed));
       panelToggle.setAttribute('aria-label', collapsed ? 'Expand controls' : 'Collapse controls');
-      // Collapsing means collapsing. Without this the open sections keep their
-      // state while hidden, so re-opening the panel brings back whatever height
-      // it had -- the compact panel can only be got back by folding each
-      // section away by hand as well.
-      if (collapsed) {
-        for (const d of panel.querySelectorAll('details[open]')) d.open = false;
-      }
+      // The palette loader is a setup section: left open it is hidden but still
+      // open, so re-opening the panel brings back whatever height it had rather
+      // than the compact one. The image controls are deliberately NOT folded --
+      // they stay up while the panel is collapsed, and closing them is what
+      // clears the last of the panel away.
+      if (collapsed) document.getElementById('pal-io').open = false;
     });
 
     let handle = null;
