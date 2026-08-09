@@ -470,8 +470,12 @@
       <div id="pal-swatches"></div>
       <div id="pal-msg"></div>
     </details>
-    <label class="check"><input type="checkbox" id="chk-cycle" checked />
-      Shift colours</label>
+    <label class="slider">
+      <span>Shift colours · <output id="cycle-speed-value">1</output></span>
+      <input type="range" id="cycle-speed" min="0" max="5" step="1" value="1"
+             aria-label="Colour shift speed, 0 is off and 5 is fastest"
+             title="0 = off; 1 = original speed; 5 = fastest" />
+    </label>
     <label>Quality
       <select id="sel-quality">
         <option value="low">Low</option>
@@ -878,45 +882,19 @@
       document.getElementById('btn-pause').addEventListener('click', () => handle.pause());
       document.getElementById('btn-resume').addEventListener('click', () => handle.resume());
 
-      // Explorer mode: full-screen navigable model viewer.
-      const btnExplorer = document.getElementById('btn-explorer');
-      const btnReset = document.getElementById('btn-reset');
-      const btnFly = document.getElementById('btn-fly');
-      // The library owns which camera mode is active and keeps the two mutually
-      // exclusive, so the page reads that state back rather than tracking its
-      // own copy. Keeping a duplicate here is what broke fly mode once already.
-      function syncModeUI() {
-        const i = handle.info;
-        document.body.classList.toggle('explorer', i.explorer);
-        document.body.classList.toggle('flying', i.fly);
-        btnExplorer.textContent = i.explorer ? 'Exit explorer mode' : 'Enter explorer mode';
-        btnFly.textContent = i.fly ? 'Exit fly-through' : 'Fly through';
-        btnFly.classList.toggle('on', i.fly);
-        btnReset.classList.toggle('hidden', !(i.explorer || i.fly));
-      }
-      function toggleExplorer(on) {
-        handle.setExplorer(on);
-        syncModeUI();
-      }
-      btnExplorer.addEventListener('click', () => toggleExplorer(!handle.info.explorer));
-      btnFly.addEventListener('click', () => {
-        handle.setFly(!handle.info.fly);
-        syncModeUI();
-        // Drop focus so the keyboard reaches the flight controls rather than
-        // the button or the model dropdown.
-        if (document.activeElement && document.activeElement.blur) {
-          document.activeElement.blur();
-        }
-      });
-      btnReset.addEventListener('click', () => handle.resetView());
-
-      // Colour cycling on/off. The rate the renderer booted with is the "on"
-      // setting, so the checkbox never invents a speed of its own.
+      // Colour cycling speed. Position 1 is the exact rate the renderer booted
+      // with; 0 disables cycling, and 2..5 are integer multiples of that rate.
       {
-        const chk = document.getElementById('chk-cycle');
-        const rate = handle.info.colorCycle || 0.025;
-        chk.checked = handle.info.colorCycle > 0;
-        chk.addEventListener('change', () => handle.setColorCycle(chk.checked ? rate : 0));
+        const speed = document.getElementById('cycle-speed');
+        const value = document.getElementById('cycle-speed-value');
+        const currentRate = Math.max(0, Number(handle.info.colorCycle) || 0);
+        const baseRate = currentRate > 0 ? currentRate : 0.025;
+        speed.value = currentRate > 0 ? '1' : '0';
+        value.textContent = speed.value;
+        speed.addEventListener('input', () => {
+          value.textContent = speed.value;
+          handle.setColorCycle(baseRate * Number(speed.value));
+        });
       }
 
       // Image adjustments. All four live in the composite pass, so dragging a
