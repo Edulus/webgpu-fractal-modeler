@@ -4,7 +4,7 @@ This document describes the architecture, performance strategy, and engineering 
 
 It is an implementation document rather than an API tutorial. The README explains how to use the library and describes the mathematical models. This file explains how the renderer turns those models into an image, how it adapts to the device it is running on, and which design decisions should be preserved when the engine changes.
 
-The adaptive-quality ladder was introduced in commit `9f0d024`. Commit `104eb59` corrected the governor to use a signal that remains meaningful under vsync and added thermal re-probe backoff.
+The adaptive-quality ladder was introduced in commit `9f0d024`. Commit `104eb59` corrected the governor to use a signal that remains meaningful under vsync and added thermal re-probe backoff. Commit `260c5b7` unified mode entry so `quality: 'max'` and `setQuality('max')` behave identically.
 
 ## 1. Design goals
 
@@ -266,20 +266,53 @@ Auto is the normal adaptive mode. It protects the 16.7 ms moving-view budget and
 
 ### Max
 
-When selected through `setQuality('max')`, Max is deliberately more aggressive:
+Max is adaptive however it is entered. Constructing with `quality: 'max'` and later calling `setQuality('max')` produce the same planned state because both go through `planMode()`.
 
-- it starts one rung above the normal Auto estimate; and
-- its interactive budget is `BUDGET_MS * 1.35`, about 22.5 ms.
+Its more ambitious personality is defined by three differences from Auto:
+
+- **Starting rung:** one above the Auto heuristic estimate.
+- **Interactive budget:** `BUDGET_MS * MAX_BUDGET_FACTOR`, where:
+
+```text
+MAX_BUDGET_FACTOR = 1.35
+```
+
+  This is about 22.5 ms at the current base budget.
+- **Miss thresholds:** Max tolerates more late frames before backing down:
+
+```text
+MAX_CLIMB_MISS = 0.06
+MAX_DROP_MISS  = 0.30
+```
+
+  Auto uses `CLIMB_MISS = 0.02` and `DROP_MISS = 0.12`.
+
+Max therefore does more than start higher and accept a longer frame budget. It deliberately tolerates a larger fraction of late frames, which makes it visibly ambitious where Auto is intended to stay unobtrusive.
 
 When the view becomes still, Max can use `showcaseIndex()` with an approximate still-frame budget of 220 ms and escalate beyond the interactive rung.
 
 `showcaseIndex()` estimates higher-rung cost mainly from resolution area, with secondary march-step and iteration factors. It is a useful global approximation, not a per-model performance model.
 
-### Current initialization caveat
+### Unified mode planning
 
-At commit `104eb59`, initial construction with `quality: 'max'` does not follow the same path as later `setQuality('max')`: `init()` creates a governor only for `qualityMode === 'auto'`, while other initial modes use preset rungs. This means Max is fully adaptive when selected through the public setter, but initial `quality: 'max'` currently starts as the rung-9 preset without a governor.
+The single mode-planning entry point is `planMode(mode, autoRung)` in `src/quality.js`. It returns:
 
-Until that code path is unified, documentation and tests should preserve this distinction rather than implying the two paths are identical.
+```text
+{ rung, gov }
+```
+
+The contract is:
+
+- every fixed preset returns `gov = null` and its documented preset rung;
+- `auto` and `max` return a live governor;
+- `init()` and `setQuality()` both call `planMode()`;
+- `adaptQuality()` uses it as the lazy fallback if an adaptive mode somehow reaches the render loop without a governor;
+- unknown modes fall back to `PRESET_RUNG.high` with no governor; and
+- the returned starting rung passes through `clampIndex`, so an Auto heuristic estimate near the top cannot run off the ladder.
+
+The defect fixed by `260c5b7` was not simply an overly narrow `mode === 'auto'` comparison. The deeper problem was that the same decision existed in multiple places. `init()` had one branch that recognised only Auto. `setQuality()` had another that recognised both Auto and Max. A third copy in `adaptQuality()` lazily called `govInit(state.detailRung)`, which silently gave a Max session Auto's default budget if that path was reached.
+
+The fix is one pure decision function rather than wider comparisons in several callers. **Mode-to-governor planning must remain centralised in `planMode()` rather than being duplicated.**
 
 ## 9. Resolution, supersampling, and DPR
 
@@ -375,10 +408,15 @@ The project moves control logic out of GPU-only code whenever practical.
 - increasingly rare re-probes;
 - simulated thermal throttling;
 - converged-frame dilution at both 50/50 and realistic high-converged ratios;
-- invalid samples and long pauses; and
-- showcase escalation.
+- invalid samples and long pauses;
+- showcase escalation;
+- mode planning in which both adaptive modes produce a governor by either entry route;
+- every fixed preset producing no governor and landing on its documented rung;
+- unknown modes falling back safely;
+- the heuristic starting rung being respected and clamped; and
+- Max settling no lower than Auto on the same simulated device.
 
-The quality suite contains 42 assertions as of `104eb59`; the project-wide suite reported 369 assertions at that revision.
+The quality suite contains 62 assertions as of `260c5b7`, up from 42 at `104eb59`.
 
 Synthetic tests prove controller arithmetic against known models. They do not answer perceptual questions such as whether 2× supersampling is the best use of the top-rung budget.
 
@@ -396,6 +434,7 @@ Synthetic tests prove controller arithmetic against known models. They do not an
 10. **Keep interaction and showcase quality conceptually separate.**
 11. **High remains the historical `1.0 / 160 / 12` point unless compatibility is deliberately changed.**
 12. **A quality-rung change invalidates accumulation.**
+13. **Keep all quality-mode entry through `planMode()`.** Constructor, setter, and lazy fallback must not grow separate mode decisions.
 
 ## 18. Known limitations and next measurements
 
@@ -428,10 +467,6 @@ The current controller intentionally uses user-visible presentation outcome. GPU
 ### Very large render targets
 
 Supersampling combined with DPR 2 can request very large offscreen textures. Limit-aware sizing should be added for unusually large canvases or display walls.
-
-### Max initialization path
-
-Unify initial `quality: 'max'` with `setQuality('max')` so both create the same adaptive governor and showcase behavior.
 
 ## 19. Performance philosophy
 
