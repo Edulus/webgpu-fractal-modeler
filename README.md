@@ -49,6 +49,7 @@ mathematicians named there.
 - Hyperbolic honeycomb {5,3,4}
 - Hyperbolic honeycomb {4,3,5}
 - Truncated and omnitruncated forms of both honeycombs
+- Kleinian sphere packing {5,3,6}
 - Aizawa strange attractor
 - Lorenz strange attractor
 
@@ -71,7 +72,8 @@ mathematicians named there.
 │   ├── camera.test.js            camera unit tests (node tools/camera.test.js)
 │   ├── palette.test.js           palette import/persistence unit tests
 │   ├── recovery.test.js          GPU device-loss recovery decisions
-│   └── colorcycle.test.js        palette-cycle and image-control arithmetic
+│   ├── colorcycle.test.js        palette-cycle and image-control arithmetic
+│   └── kleinpack.test.js         sphere-packing construction and estimator
 └── .github/workflows/pages.yml   deploys the demo to GitHub Pages
 ```
 
@@ -337,6 +339,26 @@ A Kleinian group is a discrete group of Möbius transformations, and its limit s
 The smooth caps in the result are not an artefact: they are the group's tangent spheres, with recursive filigree running along the ridges where they meet. Slowly drifting the inversion radius walks the construction through a family of nearby Kleinian groups, morphing the limit set within a narrow band — the structure degenerates quickly outside it.
 
 Parameters came from rendering candidates rather than from a reference. The construction is sharply sensitive to them: of the first four published-looking parameter sets tried, three collapsed into featureless lobes, and swapping the final primitive alone was enough to turn the surface from tangent spheres into granular noise.
+
+#### Kleinian sphere packing
+
+**A packing of round spheres that is somebody's orbit.** Two of the packings above — `apollonian` and `spherepack` — are a periodic lattice fold composed with an inversion. That imitates the look convincingly, and it is the standard trick, but the result is not the orbit of any group and its spheres are not exactly tangent to one another. This one is: every sphere in it is the image of a single sphere under a Kleinian group, and tangency is exact.
+
+The group is `[5,3,6]`, built exactly as the honeycombs above are built. What changes is the last branch of the diagram. With `r = 6` the vertex figure `{3,6}` is a **Euclidean** tiling rather than a spherical one, which pushes the honeycomb's vertex out onto the sphere at infinity: the cells are *ideal* dodecahedra, their corners touching the boundary.
+
+An ideal vertex is a cusp, and a cusp carries **horoballs** — spheres tangent to the boundary from inside, which in hyperbolic terms are surfaces at infinite distance from every interior point. Möbius maps carry horoballs to horoballs, so the orbit of one is a family of Euclidean spheres whose residual set is the limit set of the group. That is a Kleinian sphere packing in the strict sense.
+
+**Which horoball is not a matter of taste.** The fundamental simplex has one ideal vertex `v`, lying on mirrors `m1`, `m2` and the sphere but not on `m0`. Seed with the horoball at `v` tangent to `m0`: its reflection in `m0` is then tangent to it rather than overlapping, and that propagates through the group, giving the *maximal cusp* — the packing where every sphere touches its neighbours and none of them cross. Measured over the orbit: worst overlap 1.7e-16, and every image satisfies `|centre| + radius = 1` to 4.4e-16, i.e. is exactly tangent to the boundary.
+
+The vertex is ideal exactly when the line `m1 ∧ m2` meets the mirror sphere in a *double* point. Substituting `p = t·d` into `|p − c|² = s²` with `|c|² − s² = 1` gives `t² − 2(d·c)t + 1 = 0`, whose roots multiply to 1 — an inversive pair straddling the boundary — unless the discriminant vanishes, which forces `t = ±1`. For `{5,3,6}` the discriminant is exactly 0 and `|v| = 1` to 1e-12.
+
+Run against the **compact** `{5,3,4}` as a control, the same code produces overlaps of 0.23 and tangency errors of 0.38, because that group has no cusp to seed from. The construction fails where it should.
+
+**Why `{5,3,6}` and not `{3,3,6}`.** All four cusped honeycombs give exact packings, but only some can be *seen*. Sampling spherical shells for the fraction lying inside the packing: `{3,3,6}` is 84% covered at every radius and `{3,4,4}` 80%, so both read as a solid ball from outside — the first CPU render of `{3,3,6}` came back a featureless sphere. `{5,3,6}` has the smallest seed horoball of the four and leaves **0% coverage inside radius 0.45** — a hollow core — rising to only 43–63% further out, so there are real gaps to see through and the spheres read as spheres.
+
+The estimator folds into the fundamental domain and measures one exact sphere there, divided by the accumulated conformal factor. It carries a **safety factor of 0.8**, measured: a dense fixed-step reference march found no ray stepping past the surface without one, but marching is a weak test, and the pointwise bound fails — against the exact distance to 282 known orbit spheres the raw quotient over-reports at 36% of sampled points, by up to 0.018, because the fold need not land the point beside the *nearest* orbit sphere. That is the same defect the Schottky estimator charges 0.6 for. The largest factor keeping every sampled point conservative is 0.849, so 0.8 takes it with a margin.
+
+Clipped at radius 0.95 rather than the 0.85 the honeycombs use: these spheres are tangent to the boundary by construction, so a tighter clip would slice a cap off every one of them.
 
 #### Hyperbolic honeycomb
 

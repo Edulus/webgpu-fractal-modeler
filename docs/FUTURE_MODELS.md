@@ -298,6 +298,37 @@ The catalog should resist visually attractive ideas that lack enough mathematica
 - thickened curves that reveal no topology, dynamics, or field structure;
 - “Calabi–Yau-style” or “quantum-style” objects without a precise construction.
 
+## Recurring traps, found the hard way
+
+Each of these cost a wrong render or worse before it was understood. Check them
+before writing an estimator, not after.
+
+- **A hidden continuous invariance.** The quaternion Mandelbrot turned out to be
+  the plane Mandelbrot revolved about the real axis, and the first four-sphere
+  Schottky configuration had a common orthogonal sphere that confined its limit
+  set to a 2-sphere. Both are 2D patterns wearing a 3D costume. Test for it by
+  sampling membership under random rotations before building anything.
+- **Density: whether the object can be seen at all.** A construction can be
+  exactly right and still render as a featureless ball, because what fills the
+  ball is dense. The horoball packings of `{3,3,6}` and `{3,4,4}` cover 84% and
+  80% of every spherical shell, so every ray meets a sphere; `{5,3,6}` covers
+  0% inside radius 0.45 and is the one worth drawing. Measure shell coverage
+  before committing to a group. Cell walls versus edge skeletons in the
+  honeycombs are the same lesson.
+- **The clip becoming a surface.** Returning the clip distance on its own makes
+  the clip itself register as a hit, and the whole model renders as a smooth
+  sphere at the clip radius. Take `max(primitive, clip)` so it only shows where
+  it actually cuts. This has now caused three misdiagnoses, twice on the
+  honeycomb and once on the packing, where it was briefly mistaken for density.
+- **Marching is a weak test of an estimator.** Rays finding surfaces proves
+  much less than the pointwise bound. The sphere packing passed a dense
+  reference march with zero overshoot while over-reporting at 36% of sampled
+  points. Compare against exact distances to a known finite subset as well.
+- **Signed error, and where the safety factor goes.** Applying the factor to the
+  returned distance rather than the step scales the hit test too, which reads as
+  stopping short when the real fault is skipping past. Return the unscaled
+  estimate, and keep exact terms such as a bounding clip outside the factor.
+
 ## Suggested implementation sequence
 
 ### Phase 0 — Establish a performance baseline

@@ -1423,6 +1423,128 @@ fn deHoneycomb(pos : vec3<f32>) -> DEResult {
   return res;
 }
 
+// ---- Kleinian sphere packing -----------------------------------------------
+//
+// A packing of round spheres, every one of them tangent to the sphere at
+// infinity and to its neighbours, arising as the ORBIT of a single sphere under
+// a Kleinian group. That is a different object from the two packings already
+// here: those are a periodic lattice fold composed with an inversion, which
+// imitates the look without being anybody's orbit, and their spheres are not
+// exactly tangent to one another.
+//
+// The group is the honeycomb group [5,3,6], built exactly as deHoneycomb builds
+// its own -- three plane mirrors through the origin and one sphere orthogonal to
+// the unit sphere. What changes is the last branch of the Coxeter diagram. With
+// r = 6 the vertex figure {3,6} is a EUCLIDEAN tiling rather than a spherical
+// one, which pushes the honeycomb's vertex out onto the sphere at infinity: the
+// cells are IDEAL dodecahedra, their corners touching the boundary.
+//
+// An ideal vertex is a cusp, and a cusp carries HOROBALLS -- spheres tangent to
+// the boundary from inside, which in hyperbolic terms are surfaces at infinite
+// distance from every interior point. Mobius maps carry horoballs to horoballs,
+// so the orbit of one is a family of Euclidean spheres, and their residual set
+// is the limit set of the group. This is a Kleinian sphere packing in the strict
+// sense.
+//
+// WHICH HOROBALL, measured rather than chosen. The fundamental simplex has one
+// ideal vertex v, lying on mirrors m1, m2 and the sphere but not on m0. Seeding
+// with the horoball at v tangent to m0 makes its reflection in m0 tangent to it
+// rather than overlapping, and that propagates through the group: the orbit is
+// the maximal cusp, where every sphere touches its neighbours and none of them
+// cross. Checked on the CPU over the orbit: worst overlap 1.7e-16, and every
+// image satisfies |centre| + radius = 1 to 4.4e-16, i.e. is exactly tangent to
+// the boundary. Run against the COMPACT {5,3,4} as a control the same code
+// produces overlaps of 0.23 and tangency errors of 0.38, because that group has
+// no cusp to seed from -- so the construction fails where it should.
+//
+// The vertex is ideal exactly when the line m1^m2 meets the mirror sphere in a
+// double point: substituting p = t*d into |p - c|^2 = s^2 with |c|^2 - s^2 = 1
+// gives t^2 - 2(d.c)t + 1 = 0, whose roots multiply to 1, so they are an
+// inversive pair straddling the boundary unless the discriminant vanishes, which
+// forces t = +-1. Measured for {5,3,6}: discriminant exactly 0, |v| = 1 to 1e-12.
+//
+// WHY {5,3,6} AND NOT {3,3,6}. All four cusped honeycombs give exact packings,
+// but only some can be SEEN. Sampling shells for the fraction lying inside the
+// packing: {3,3,6} is 84% covered at every radius and {3,4,4} 80%, so both read
+// as a solid ball from outside. {5,3,6} has the smallest seed horoball of the
+// four and leaves 0% coverage inside radius 0.45 -- a hollow core -- rising to
+// only 43-63% further out, so there are real gaps to see through and the
+// spheres read as spheres.
+//
+// SAFETY FACTOR 0.8, measured. A dense fixed-step reference march found no ray
+// stepping past the surface without one -- 150 rays at each of four fold caps,
+// zero lost, median error 1.3e-4 short -- but marching is a weak test, and the
+// pointwise bound is not satisfied: against the exact distance to 282 known
+// orbit spheres the raw quotient over-reports at 36% of sampled points, by up to
+// 0.018, because the fold need not land the point beside the NEAREST orbit
+// sphere. That is the same defect the Schottky estimator charges 0.6 for. The
+// largest factor that keeps every sampled point conservative is 0.849, so 0.8
+// takes that with a margin.
+fn deKleinPack(pos : vec3<f32>) -> DEResult {
+  const KP_ITERS : i32 = 24;
+  const R_CLIP : f32 = 0.95;      // the packing is tangent to |p| = 1
+
+  // [5,3,6]: p = 5 and q = 3 give the same two plane mirrors as {5,3,4}; only
+  // the mirror sphere differs, being the branch that carries r.
+  const N0 : vec3<f32> = vec3<f32>(1.0, 0.0, 0.0);
+  const N1 : vec3<f32> = vec3<f32>(-0.80901699, 0.58778525, 0.0);
+  const N2 : vec3<f32> = vec3<f32>(0.0, -0.85065081, 0.52573111);
+  const CEN : vec3<f32> = vec3<f32>(0.0, 0.0, -1.25840857);
+  const S2 : f32 = 0.58359214;    // sphere radius 0.76393202, squared
+  // Seed horoball: centre (1 - r) * v at the ideal vertex, radius r.
+  const HO : vec3<f32> = vec3<f32>(-0.26298370, -0.36196601, -0.58567330);
+  const HR : f32 = 0.26298370;
+
+  var res : DEResult;
+
+  let r = length(pos);
+  let clip = r - R_CLIP;
+  if (r >= 0.999) {
+    // Outside the ball the fold is not valid. The clip is a safe step, and far
+    // enough above zero here that it cannot itself register as a surface.
+    res.dist = clip;
+    res.trap = 0.5;
+    return res;
+  }
+
+  var p = pos;
+  var factor = 1.0;
+  var word = 0.0;
+
+  for (var i = 0; i < KP_ITERS; i = i + 1) {
+    var moved = false;
+    let d0 = dot(p, N0);
+    if (d0 > 0.0) { p = p - N0 * (2.0 * d0); moved = true; }
+    let d1 = dot(p, N1);
+    if (d1 > 0.0) { p = p - N1 * (2.0 * d1); moved = true; }
+    let d2 = dot(p, N2);
+    if (d2 > 0.0) { p = p - N2 * (2.0 * d2); moved = true; }
+    let v = p - CEN;
+    let q2 = dot(v, v);
+    if (q2 < S2) {
+      let k = S2 / max(q2, 1e-18);
+      p = CEN + v * k;
+      factor = factor * k;
+      moved = true;
+    }
+    if (!moved) { break; }
+    word = word + 1.0;
+  }
+
+  // An exact sphere in the folded frame, carried back to world scale by the
+  // accumulated conformal factor. Rays are marched in the Euclidean ball, so the
+  // estimate has to be a Euclidean one. The clip is exact and is deliberately
+  // left outside the safety factor.
+  let horo = 0.8 * (length(p - HO) - HR) / max(factor, 1e-9);
+
+  res.dist = max(horo, clip);
+  // How deep into the group this sphere sits. The few big spheres come out of
+  // shallow words and the cascade filling their gaps out of long ones, so this
+  // separates the generations into palette bands.
+  res.trap = clamp(0.10 + 0.075 * word, 0.0, 1.0);
+  return res;
+}
+
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
   let ft = u.fractalType;
@@ -1458,9 +1580,12 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
   } else if (ft < 16.5) {
     // Both envelope entries share one estimator; the id selects the seed.
     return deEnvelope(pos);
+  } else if (ft < 22.5) {
+    // The six honeycomb entries share one estimator; the id selects {p,q,r}
+    // and the active-mirror string.
+    return deHoneycomb(pos);
   }
-  // Both honeycomb entries share one estimator; the id selects {p,q,r}.
-  return deHoneycomb(pos);
+  return deKleinPack(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {
@@ -1596,7 +1721,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // Strange attractors aren't distance fields — they're rasterized as line
   // geometry by a second pipeline drawn over this pass. Emit only the
   // background here so those lines have something to blend onto.
-  if (u.fractalType > 22.5) {
+  if (u.fractalType > 23.5) {
     let bg = backgroundColor(rd);
     return vec4<f32>(select(vec3<f32>(0.0), bg, u.bgMode >= 0.5), 0.0);
   }

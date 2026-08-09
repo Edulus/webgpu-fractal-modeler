@@ -421,6 +421,7 @@
         <option value="hyp435">Hyperbolic honeycomb {4,3,5}</option>
         <option value="hyp435t">Hyperbolic honeycomb {4,3,5}, truncated</option>
         <option value="hyp435o">Hyperbolic honeycomb {4,3,5}, omnitruncated</option>
+        <option value="kleinpack">Kleinian sphere packing {5,3,6}</option>
         <option value="attractor">Strange attractor (Aizawa)</option>
         <option value="lorenz">Strange attractor (Lorenz)</option>
       </select>
@@ -763,6 +764,8 @@
           'A truncated form of the {4,3,5} cubic honeycomb, made by cutting back every vertex. Each cube becomes a truncated cube with octagonal faces and new triangles at the cuts.'],
         hyp435o: ['Omnitruncated {4,3,5}',
           'An omnitruncated form of the {4,3,5} cubic honeycomb, with the generating point moved off all four reflection mirrors so vertices and edges are cut throughout the tessellation.'],
+        kleinpack: ['Kleinian sphere packing',
+          'Spheres tangent to one another and to the sphere at infinity, every one the image of a single sphere under a group of reflections. The cells of the honeycomb behind it are ideal dodecahedra, with their corners out at infinity.'],
         attractor: ['Aizawa attractor',
           'One trajectory, traced for six hundred thousand steps. It never repeats and never escapes, and never quite closes the loop.'],
         lorenz: ['Lorenz attractor',
@@ -876,7 +879,7 @@
         'spherepack', 'encrusted', 'surfacepack', 'penrose', 'gyroid',
         'kleinian', 'barth', 'schottky', 'schottkyh', 'tetrabrot',
         'envoct', 'envdodec', 'hyp534', 'hyp435', 'hyp534t', 'hyp534o',
-        'hyp435t', 'hyp435o', 'attractor', 'lorenz'];
+        'hyp435t', 'hyp435o', 'kleinpack', 'attractor', 'lorenz'];
       setInterval(() => {
         const i = handle.info;
         hud.textContent = `${names[i.fractalType]} · q${i.qualityScale} · ${i.fps}fps` +
