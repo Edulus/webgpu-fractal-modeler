@@ -16,11 +16,10 @@
 //
 // Two ideas do most of the work:
 //
-//   A BUDGET, NOT A RACE. The governor targets a frame time, not maximum speed.
-//   Inside budget with margin it climbs; at budget it stops. Frame time is used
-//   directly rather than converted to FPS because the budget is a time and the
-//   arithmetic of averaging reciprocals is a trap -- the mean of 1/t is not
-//   1/mean(t), so an FPS average is biased by its fastest frames.
+//   A BUDGET, NOT A RACE. The governor targets a frame time, not maximum speed,
+//   and judges it by the fraction of frames that MISSED that budget rather than
+//   by the average frame time -- see the note on vsync below, which is what
+//   forced that choice.
 //
 //   A REMEMBERED CEILING. When a rung proves too expensive the governor drops
 //   AND records that rung as known-bad, settling one below it instead of
@@ -51,17 +50,36 @@ export const PRESET_RUNG = { low: 1, medium: 3, high: 5, screenshot: 5, max: 9 }
 
 export const TOP = LADDER.length - 1;
 
-// Budgets in milliseconds per frame while the view is MOVING. 16.7 is 60Hz.
+// Budget in milliseconds per frame while the view is MOVING. 16.7 is 60Hz.
 export const BUDGET_MS = 16.7;
-// Climb only when comfortably inside budget, so the governor is not provoked
-// into oscillating by a frame time that merely grazes the target.
-export const CLIMB_FRACTION = 0.72;
+// Jitter allowance: a frame within this much of budget counts as having met it.
+export const MET_TOLERANCE = 1.05;
 // A frame this far over budget is a stall, not noise: drop at once.
-export const STALL_FACTOR = 2.0;
+export const STALL_FACTOR = 2.5;
 
-export const CLIMB_SAMPLES = 90;    // sustained good frames before a step up
-export const DROP_SAMPLES = 20;     // sustained bad frames before a step down
+// THE SIGNAL IS A MISS RATE, NOT A MEAN. requestAnimationFrame is vsync-locked,
+// so observed frame time is QUANTISED to multiples of the refresh period: at
+// 60Hz a frame is reported as 16.7ms or 33.3ms and never anything between. A
+// mean-frame-time rule therefore cannot see headroom at all -- measured, a
+// simulated workstation doing 1.0ms of work per frame reported 16.7ms like
+// everything else and never climbed off its starting rung, because no display
+// can report the 12ms that rule wanted. (The FPS thresholds this replaced
+// survived that by luck: 1000/16.7 = 59.9, just over their 58.)
+//
+// What a vsync-locked display CAN report is whether a frame arrived on the next
+// refresh or the one after. So the governor counts the fraction of frames that
+// missed the budget and works from that. This reads correctly whether the
+// timing is quantised or continuous.
+export const CLIMB_MISS = 0.02;     // essentially every frame on time -> climb
+export const DROP_MISS = 0.12;      // this many missed -> too expensive
+export const CLIMB_SAMPLES = 90;
+export const DROP_SAMPLES = 20;
 export const CEILING_RESET_MS = 20000;
+// Each time a rung re-confirms it is too expensive, wait longer before probing
+// it again. A thermally throttled device would otherwise climb back into the
+// same stall every reset interval, for as long as it stayed hot.
+export const CEILING_BACKOFF = 2.0;
+export const CEILING_RESET_MAX_MS = 300000;
 
 /**
  * Governor state. `index` is the current rung; `ceiling` is the highest rung
@@ -72,10 +90,15 @@ export function govInit(index = 3, opts = {}) {
     index: clampIndex(index),
     ceiling: clampIndex(opts.ceiling ?? TOP),
     emaMs: opts.emaMs ?? BUDGET_MS,
+    missRate: 0,
     good: 0,
     bad: 0,
     sinceCeilingMs: 0,
+    resetMs: opts.resetMs ?? CEILING_RESET_MS,
+    lastFail: -1,
     budgetMs: opts.budgetMs ?? BUDGET_MS,
+    climbMiss: opts.climbMiss ?? CLIMB_MISS,
+    dropMiss: opts.dropMiss ?? DROP_MISS,
     changed: false,
   };
 }
@@ -103,10 +126,13 @@ export function govSample(gov, frameMs) {
 
   // Clamp before smoothing: an alt-tab or a garbage-collection pause can hand
   // back a frame of several seconds, and one of those must not poison the
-  // average that decides quality for the next minute.
+  // averages that decide quality for the next minute.
   const sample = Math.min(frameMs, g.budgetMs * 8);
   g.emaMs = g.emaMs * 0.9 + sample * 0.1;
   g.sinceCeilingMs += sample;
+
+  const missed = sample > g.budgetMs * MET_TOLERANCE ? 1 : 0;
+  g.missRate = g.missRate * 0.94 + missed * 0.06;
 
   // A single catastrophic frame is acted on immediately. Waiting out the
   // hysteresis here would mean twenty more frames at a rung already known to be
@@ -115,10 +141,10 @@ export function govSample(gov, frameMs) {
     return applyDrop(g, g.index - 2);
   }
 
-  if (g.emaMs > g.budgetMs) {
+  if (g.missRate > g.dropMiss) {
     g.bad++;
     g.good = 0;
-  } else if (g.emaMs < g.budgetMs * CLIMB_FRACTION) {
+  } else if (g.missRate < g.climbMiss) {
     g.good++;
     g.bad = 0;
   } else {
@@ -133,7 +159,7 @@ export function govSample(gov, frameMs) {
   // The ceiling lifts by one rung after a long stretch without trouble, so a
   // scene that has become cheaper can be explored again rather than being held
   // down by a measurement taken somewhere expensive.
-  if (g.ceiling < TOP && g.sinceCeilingMs > CEILING_RESET_MS && g.bad === 0) {
+  if (g.ceiling < TOP && g.sinceCeilingMs > g.resetMs && g.bad === 0) {
     g.ceiling = g.ceiling + 1;
     g.sinceCeilingMs = 0;
   }
@@ -142,8 +168,9 @@ export function govSample(gov, frameMs) {
     g.index = g.index + 1;
     g.good = 0;
     g.changed = true;
-    // Assume the new rung costs more, so the next decision is not made on an
-    // average gathered at the cheaper one.
+    // Assume the new rung costs more, so the next decision is not made on
+    // evidence gathered at the cheaper one.
+    g.missRate = g.climbMiss;
     g.emaMs = g.budgetMs * 0.9;
   }
   return g;
@@ -152,11 +179,22 @@ export function govSample(gov, frameMs) {
 function applyDrop(g, to) {
   const from = g.index;
   g.index = clampIndex(to);
-  // One BELOW the rung that misbehaved, and remember it.
+  // One BELOW the rung that misbehaved, and remember it. Failing at the same
+  // ceiling again backs the retry off, so a device that is throttling settles
+  // instead of probing the stall every reset interval.
+  // Compare against the rung that FAILED, not against the ceiling: the periodic
+  // reset lifts the ceiling before the retry, so testing the ceiling here made
+  // "this failed before" permanently false and the backoff never engaged --
+  // measured as a throttled device probing the same stall 60 times.
+  const repeat = g.lastFail === from;
+  g.lastFail = from;
   g.ceiling = Math.max(0, from - 1);
+  g.resetMs = Math.min(CEILING_RESET_MAX_MS,
+    repeat ? g.resetMs * CEILING_BACKOFF : CEILING_RESET_MS);
   g.sinceCeilingMs = 0;
   g.good = 0;
   g.bad = 0;
+  g.missRate = 0;
   g.changed = g.index !== from;
   g.emaMs = g.budgetMs * 0.9;
   return g;

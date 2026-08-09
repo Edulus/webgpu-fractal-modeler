@@ -39,10 +39,23 @@ check('clampIndex keeps the rung in range',
 
 // ---- device models ---------------------------------------------------------
 // Cost in ms for a rung: area dominates, steps and iterations add on top.
-const device = (msAtUnitScale) => (i) => {
+const work = (msAtUnitScale) => (i) => {
   const r = LADDER[i];
   return msAtUnitScale * (r.scale * r.scale) * (0.55 + 0.3 * (r.steps / 160)
     + 0.15 * (r.iters / 12));
+};
+
+// What a display actually REPORTS. requestAnimationFrame is vsync-locked, so
+// frame time is quantised to whole refresh periods: work of 1ms and work of
+// 16ms are both reported as 16.7ms at 60Hz. Every device below is presented
+// this way, because that is the only signal the real governor will ever see.
+const REFRESH = 1000 / 60;
+const present = (ms) => Math.ceil(ms / REFRESH) * REFRESH;
+const device = (msAtUnitScale) => {
+  const w = work(msAtUnitScale);
+  const f = (i) => present(w(i));
+  f.work = w;
+  return f;
 };
 
 function settle(costOf, frames = 6000, gov = govInit(3)) {
@@ -65,9 +78,9 @@ for (const [name, cost, wantLo, wantHi] of [
   ['a workstation', WORKSTATION, 7, TOP],
 ]) {
   const { g } = settle(cost);
-  const ms = cost(g.index);
+  const ms = cost.work ? cost.work(g.index) : cost(g.index);
   check(`${name} settles in a sensible band`, g.index >= wantLo && g.index <= wantHi,
-        `settled at rung ${g.index} (${ms.toFixed(1)}ms, scale ${rung(g.index).scale})`);
+        `settled at rung ${g.index} (${ms.toFixed(1)}ms of work, scale ${rung(g.index).scale})`);
   check(`${name} settles inside its frame budget`, ms <= BUDGET_MS * 1.15,
         `${ms.toFixed(1)}ms against ${BUDGET_MS}ms`);
 }
@@ -83,13 +96,24 @@ for (const [name, cost, wantLo, wantHi] of [
 // ---- stability -------------------------------------------------------------
 // Oscillation is the classic failure of a controller like this: climb, stall,
 // drop, climb again, forever. Count how often the rung changes once settled.
+// The governor re-probes its ceiling on purpose, so that a view which has become
+// cheaper can be explored again. The property that matters is not "never
+// changes" but that probing gets RARER: each failure at the same rung doubles
+// the wait. Measure the first third of a long run against the last.
 for (const [name, cost] of [['phone', PHONE], ['laptop', LAPTOP], ['workstation', WORKSTATION]]) {
-  const { seen } = settle(cost, 9000);
-  const tail = seen.slice(4000);
-  let flips = 0;
-  for (let i = 1; i < tail.length; i++) if (tail[i] !== tail[i - 1]) flips++;
-  check(`${name} does not oscillate once settled`, flips <= 2,
-        `${flips} rung changes over the last ${tail.length} frames`);
+  const { seen } = settle(cost, 30000);
+  const third = Math.floor(seen.length / 3);
+  const count = (from, to) => {
+    let n = 0;
+    for (let i = from + 1; i < to; i++) if (seen[i] !== seen[i - 1]) n++;
+    return n;
+  };
+  const early = count(0, third);
+  const late = count(seen.length - third, seen.length);
+  check(`${name} settles rather than oscillating`, late <= 2,
+        `${late} rung changes in the last ${third} frames (${early} in the first)`);
+  check(`${name} probes less often as it goes`, late <= early,
+        `early ${early}, late ${late}`);
 }
 
 // ---- reacting to a scene that gets expensive -------------------------------
@@ -98,12 +122,12 @@ for (const [name, cost] of [['phone', PHONE], ['laptop', LAPTOP], ['workstation'
   // into an expensive region would.
   let { g } = settle(LAPTOP, 4000);
   const before = g.index;
-  const dear = (i) => LAPTOP(i) * 4;
+  const dear = (i) => present(LAPTOP.work(i) * 4);
   for (let f = 0; f < 1500; f++) g = govSample(g, dear(g.index));
   check('it backs down when the scene becomes expensive', g.index < before,
         `${before} -> ${g.index}`);
-  check('and lands inside budget again', dear(g.index) <= BUDGET_MS * 1.2,
-        `${dear(g.index).toFixed(1)}ms`);
+  check('and lands inside budget again', LAPTOP.work(g.index) * 4 <= BUDGET_MS * 1.2,
+        `${(LAPTOP.work(g.index) * 4).toFixed(1)}ms of work`);
 }
 
 // A single catastrophic frame is acted on at once, not after the hysteresis.
@@ -130,18 +154,34 @@ for (const [name, cost] of [['phone', PHONE], ['laptop', LAPTOP], ['workstation'
 
 // ---- converged frames must not be evidence ---------------------------------
 {
-  // A converged frame costs almost nothing because the raymarch is skipped.
-  // Feeding those in would look like limitless headroom.
-  let honest = govInit(3);
-  let fooled = govInit(3);
-  for (let f = 0; f < 4000; f++) {
-    honest = govSample(honest, PHONE(honest.index));
-    fooled = govSample(fooled, f % 2 === 0 ? PHONE(fooled.index) : 0.4);
+  // A converged frame skips the raymarch, so it always presents on time. Under
+  // a MISS-RATE signal that does not invent headroom the way a mean would --
+  // but it does DILUTE evidence of overload, which is the real hazard: half the
+  // frames arriving on time can hold the miss rate under the drop threshold
+  // while the interactive ones are all late. Here every interactive frame at
+  // rung 3 and above misses, and the diluted run fails to notice.
+  // The dilution that matters is the realistic one. While the accumulator is
+  // running MOST frames are converged, so a one-in-ten mixture is the honest
+  // model -- and at that ratio nine on-time frames hold the miss rate below the
+  // threshold while every interactive frame is late.
+  const cliff = (i) => (i >= 3 ? REFRESH * 2 : REFRESH);
+  let honest = govInit(5);
+  let half = govInit(5);
+  let mostly = govInit(5);
+  for (let f = 0; f < 6000; f++) {
+    honest = govSample(honest, cliff(honest.index));
+    half = govSample(half, f % 2 === 0 ? cliff(half.index) : REFRESH);
+    mostly = govSample(mostly, f % 10 === 0 ? cliff(mostly.index) : REFRESH);
   }
-  check('cheap frames WOULD mislead the governor if fed in',
-        fooled.index > honest.index,
-        `honest ${honest.index}, fooled ${fooled.index}`);
-  check('...so the honest run stays inside budget', PHONE(honest.index) <= BUDGET_MS * 1.15);
+  check('the honest run finds the sustainable rung', honest.index <= 2,
+        `settled at ${honest.index}`);
+  // Worth recording: at 50/50 the miss-rate rule is NOT fooled, where the mean
+  // rule this replaced would have been. It takes a realistic dilution to break.
+  check('a half-and-half mixture is still caught', half.index <= 2,
+        `settled at ${half.index}`);
+  check('but converged frames DO hide the overload at a realistic ratio',
+        mostly.index > honest.index,
+        `honest ${honest.index}, nine-in-ten converged ${mostly.index}`);
 }
 
 // ---- robustness ------------------------------------------------------------
@@ -183,12 +223,79 @@ for (const [name, cost] of [['phone', PHONE], ['laptop', LAPTOP], ['workstation'
 check('accumulation targets rise with the rung',
       accumTarget(TOP) > accumTarget(0), `${accumTarget(0)} -> ${accumTarget(TOP)}`);
 
+// ---- vsync: the signal the governor will actually be given ------------------
+// This is the scenario that condemned the first version of this governor. With
+// timing quantised to the refresh, a mean-frame-time rule can never observe
+// headroom: every frame that meets the budget reports 16.7ms whether the work
+// took 1ms or 16ms. A rule needing a mean below 12ms therefore never fires.
+{
+  const raw = (i) => WORKSTATION.work(i);          // continuous, unrealistic
+  let a = govInit(3), b = govInit(3);
+  for (let f = 0; f < 6000; f++) {
+    a = govSample(a, raw(a.index));
+    b = govSample(b, WORKSTATION(b.index));        // vsync-locked, realistic
+  }
+  check('a strong device climbs under vsync-locked timing, not just continuous',
+        b.index === a.index && b.index >= 7,
+        `continuous ${a.index}, vsync ${b.index}`);
+  check('and is genuinely using its headroom',
+        WORKSTATION.work(b.index) > 8, `${WORKSTATION.work(b.index).toFixed(1)}ms of work`);
+}
+
+// A frame that misses presentation reports double, so a device sitting exactly
+// on the boundary alternates 16.7 / 33.3. That must not become rung chatter.
+{
+  let g = govInit(4);
+  let flips = 0, last = g.index;
+  for (let f = 0; f < 6000; f++) {
+    // one frame in thirty misses: jitter, not overload. (One in six would be a
+    // sustained 50fps, which the governor is right to treat as too expensive.)
+    g = govSample(g, f % 30 === 0 ? REFRESH * 2 : REFRESH);
+    if (g.index !== last) { flips++; last = g.index; }
+  }
+  check('occasional missed vsyncs do not cause rung chatter', flips <= 2,
+        `${flips} rung changes over 6000 frames`);
+}
+
+// ---- thermal throttling -----------------------------------------------------
+// A rung that is comfortable for thirty seconds can become too expensive once
+// the device is hot. The governor should back down and STAY down while it is
+// throttled, rather than probing the stall every time its ceiling resets.
+{
+  const hot = (i, tMs) => {
+    const factor = 1 + 0.9 * Math.min(1, Math.max(0, (tMs - 30000) / 60000));
+    return present(LAPTOP.work(i) * factor);
+  };
+  let g = govInit(3);
+  let tMs = 0, settledCool = -1, changesWhileHot = 0, last = -1;
+  for (let f = 0; f < 40000; f++) {
+    const dt = hot(g.index, tMs);
+    tMs += dt;
+    g = govSample(g, dt);
+    if (tMs < 30000) settledCool = g.index;
+    else {
+      if (last >= 0 && g.index !== last) changesWhileHot++;
+      last = g.index;
+    }
+  }
+  check('a throttling device backs down', g.index < settledCool,
+        `cool rung ${settledCool} -> hot rung ${g.index}`);
+  // It should keep re-checking occasionally -- the device may cool down -- but
+  // rarely. Over roughly twenty simulated minutes of throttling this is about
+  // one re-probe every hundred seconds, against sixty before the backoff was
+  // fixed.
+  check('and probes the stall rarely rather than constantly', changesWhileHot <= 16,
+        `${changesWhileHot} rung changes over ${Math.round(tMs / 1000)}s while hot`);
+  check('the retry backoff grew, which is what stops the probing',
+        g.resetMs > 20000, `resetMs ${Math.round(g.resetMs)}`);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 {
   const rows = [['phone', PHONE], ['laptop', LAPTOP], ['workstation', WORKSTATION]];
   const out = rows.map(([n, c]) => {
     const { g } = settle(c);
-    return `${n} -> rung ${g.index} (scale ${rung(g.index).scale}, ${rung(g.index).steps} steps, ${c(g.index).toFixed(1)}ms)`;
+    return `${n} -> rung ${g.index} (scale ${rung(g.index).scale}, ${rung(g.index).steps} steps, ${c.work(g.index).toFixed(1)}ms work)`;
   });
   console.log('(' + out.join('; ') + ')');
 }
