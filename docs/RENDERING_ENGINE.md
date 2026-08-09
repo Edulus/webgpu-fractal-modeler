@@ -4,7 +4,7 @@ This document describes the architecture, performance strategy, and engineering 
 
 It is an implementation document rather than an API tutorial. The README explains how to use the library and describes the mathematical models. This file explains how the renderer turns those models into an image, how it adapts to the device it is running on, and which design decisions should be preserved when the engine changes.
 
-The adaptive-quality ladder was introduced in commit `9f0d024`. Commit `104eb59` corrected the governor to use a signal that remains meaningful under vsync and added thermal re-probe backoff. Commit `260c5b7` unified mode entry so `quality: 'max'` and `setQuality('max')` behave identically.
+The adaptive-quality ladder was introduced in commit `9f0d024`. Commit `104eb59` corrected the governor to use a signal that remains meaningful under vsync and added thermal re-probe backoff. Commit `260c5b7` unified mode entry so `quality: 'max'` and `setQuality('max')` behave identically. Commit `23bddda` made supersampling respect the adapter's texture-dimension limit by fitting the swapchain, capping the quality ladder to allocatable rungs, and retaining an allocation clamp as a final backstop.
 
 ## 1. Design goals
 
@@ -20,12 +20,12 @@ The design follows several principles:
 - **Protect interaction first.** While the camera is moving, the controller protects presentation cadence. Once the view is still, the renderer can spend much more time per sample.
 - **Keep fixed modes deterministic.** Low, Medium, and High select known rungs. High remains the historical `1.0 / 160 / 12` quality point.
 - **Do expensive geometry work once when possible.** Progressive accumulation stores palette-independent material information so palette animation and image controls can remain live without re-marching.
-- **Keep decision logic testable without WebGPU.** Quality, camera-rate, recovery, and palette parsing logic are pure where practical.
+- **Keep decision logic testable without WebGPU.** Quality, camera-rate, recovery, palette parsing, mode planning, and texture-limit fitting are pure where practical.
 
 ## 2. Main source files
 
-- `src/fractal-bg.js` — device acquisition, pipelines, render targets, uniforms, cameras, render loop, lifecycle, quality plumbing, progressive accumulation, and public API.
-- `src/quality.js` — pure adaptive-quality governor and quality ladder.
+- `src/fractal-bg.js` — device acquisition, pipelines, render targets, uniforms, cameras, render loop, lifecycle, quality plumbing, progressive accumulation, texture-limit fitting, and public API.
+- `src/quality.js` — pure adaptive-quality governor, quality ladder, mode planning, and texture-limit rung calculation.
 - `src/camera.js` — pure orbit/fly mathematics, drift, zoom-rate helpers, and device-loss policy.
 - `src/palettes.js` — built-in cosine palettes.
 - `src/palette-io.js` — imported palette parsing and persistence.
@@ -35,7 +35,7 @@ The design follows several principles:
 - `src/shaders/composite.wgsl.js` — palette resolution, bloom, image controls, tonemapping, and final presentation.
 - `src/shaders/engel.wgsl.js` — generated Engel plesiohedron data and estimator.
 
-`quality.js` decides **how much work should be done**. `fractal-bg.js` applies that decision to render-target size and shader uniforms.
+`quality.js` decides **how much work should be done** and whether a quality rung can actually fit. `fractal-bg.js` applies those decisions to render-target size and shader uniforms.
 
 ## 3. Two geometry families
 
@@ -314,9 +314,9 @@ The defect fixed by `260c5b7` was not simply an overly narrow `mode === 'auto'` 
 
 The fix is one pure decision function rather than wider comparisons in several callers. **Mode-to-governor planning must remain centralised in `planMode()` rather than being duplicated.**
 
-## 9. Resolution, supersampling, and DPR
+## 9. Resolution, supersampling, DPR, and texture limits
 
-The swapchain remains at full device-pixel resolution. DPR is capped at 2, and internal material resolution is:
+The swapchain normally tracks full device-pixel resolution. DPR is capped at 2, and internal material resolution is:
 
 ```text
 render width  = device-pixel width  * quality scale
@@ -325,7 +325,46 @@ render height = device-pixel height * quality scale
 
 Scales above 1.0 are true supersampling. At 2× scale, material pixel count is roughly four times rung 5 before additional march and iteration work is considered.
 
-A current limitation is that `resize()` does not explicitly clamp supersampled target dimensions against `device.limits.maxTextureDimension2D`.
+Supersampling made the adapter's `maxTextureDimension2D` a first-class constraint. `resize()` now obtains that limit from `device.limits.maxTextureDimension2D`, with 8192 as the code's fallback value if the limit is unavailable.
+
+### 9.1 Fit the swapchain without changing aspect ratio
+
+The requested backing-store size begins as CSS size multiplied by DPR. If either axis exceeds the texture limit, `resize()` computes one shared fit factor:
+
+```text
+swapFit = min(1, limit / pixelWidth, limit / pixelHeight)
+```
+
+That same factor is applied to **both** axes. Width and height must never be fitted independently because doing so would satisfy the allocation limit by stretching the rendered image.
+
+### 9.2 Cap the ladder, not only the allocation
+
+`maxRungForLimit(pxW, pxH, limit)` returns the highest quality rung whose internal target dimensions fit the device limit.
+
+This cap is necessary even though the final allocation is also clamped. A clamp by itself prevents a texture-creation failure, but it creates a false performance signal: if two nominal rungs are both silently clamped to the same pixel dimensions, the higher rung costs little or no additional pixel work. The governor can misread that unchanged frame time as spare headroom and continue climbing. It may then settle at a high rung while delivering the pixel resolution of a lower rung and still paying the higher march-step and iteration budgets.
+
+The quality state therefore has to tell the truth about what the renderer can actually allocate.
+
+`resize()` sets `state.rungCap` from `maxRungForLimit()` and holds both the live rung and any adaptive governor to that cap:
+
+- `state.detailRung` cannot remain above it;
+- `state.gov.index` cannot remain above it; and
+- `state.gov.ceiling` cannot remain above it.
+
+`applyRung()` is the single choke point for later rung changes and clamps every requested rung to `state.rungCap`, so Auto, Max, showcase escalation, and public quality changes cannot bypass the device limit.
+
+### 9.3 Allocation clamp remains a backstop
+
+After the rung has been capped, `resize()` still computes a final proportional `renderFit` before creating textures. This is deliberate belt-and-braces protection: the logical rung cap should make the allocation legal, but an unexpected oversize texture request can take down the renderer, so the final creation path protects itself independently.
+
+The hierarchy is therefore:
+
+1. proportionally fit an oversized swapchain;
+2. compute the highest honest quality rung with `maxRungForLimit()`;
+3. cap renderer and governor state to that rung; and
+4. proportionally clamp the final internal target as a last-resort allocation guard.
+
+A 5120 × 1440 CSS-pixel ultrawide at DPR 2, for example, requests 10240 pixels across before supersampling. With an 8192-pixel texture limit the backing store is fitted proportionally, and the 2× top rung is no longer presented as available. The renderer caps itself at the highest rung that genuinely fits instead of pretending to run a higher-resolution rung whose allocation has been truncated.
 
 ## 10. Mathematical detail controls
 
@@ -413,10 +452,16 @@ The project moves control logic out of GPU-only code whenever practical.
 - mode planning in which both adaptive modes produce a governor by either entry route;
 - every fixed preset producing no governor and landing on its documented rung;
 - unknown modes falling back safely;
-- the heuristic starting rung being respected and clamped; and
-- Max settling no lower than Auto on the same simulated device.
+- the heuristic starting rung being respected and clamped;
+- Max settling no lower than Auto on the same simulated device;
+- `maxRungForLimit()` across ordinary displays, 4K-class dimensions, an 8192-wide backing store, an ultrawide, and a 16384-wide stress case;
+- the invariant that the selected rung fits the limit and, when a higher rung exists, the next rung does not;
+- limits large enough to leave the ladder untouched; and
+- degenerate inputs including zero dimensions, zero limits, and a limit below even the lowest rung.
 
-The quality suite contains 62 assertions as of `260c5b7`, up from 42 at `104eb59`.
+The quality suite contains 77 assertions as of `23bddda`, up from 62 at `260c5b7`. The project-wide suite reported 404 assertions at that revision.
+
+The texture-limit cap is pure, so its boundary behavior can be tested without WebGPU. Browser/GPU integration still matters because the proportional swapchain fit and actual texture creation live in `fractal-bg.js`.
 
 Synthetic tests prove controller arithmetic against known models. They do not answer perceptual questions such as whether 2× supersampling is the best use of the top-rung budget.
 
@@ -435,6 +480,9 @@ Synthetic tests prove controller arithmetic against known models. They do not an
 11. **High remains the historical `1.0 / 160 / 12` point unless compatibility is deliberately changed.**
 12. **A quality-rung change invalidates accumulation.**
 13. **Keep all quality-mode entry through `planMode()`.** Constructor, setter, and lazy fallback must not grow separate mode decisions.
+14. **Texture limits cap the ladder as well as the allocation.** A silently clamped high rung creates false headroom and wastes step/iteration work.
+15. **Fit both axes with one factor.** Independent width/height clamps would distort aspect ratio.
+16. **Keep the final allocation clamp even with an honest rung cap.** Texture creation is a hard failure boundary, so the creation path retains its own backstop.
 
 ## 18. Known limitations and next measurements
 
@@ -464,9 +512,7 @@ This cannot be decided from synthetic timing tests. It should be judged on real 
 
 The current controller intentionally uses user-visible presentation outcome. GPU timestamp queries could eventually provide a complementary diagnostic signal for distinguishing GPU work from CPU/presentation effects, but they should not replace the presentation signal the user actually experiences.
 
-### Very large render targets
-
-Supersampling combined with DPR 2 can request very large offscreen textures. Limit-aware sizing should be added for unusually large canvases or display walls.
+Large render targets are no longer an open limitation in the sense previously documented: swapchain fitting, ladder capping, and a final allocation guard now keep requested textures within the active device limit. Future work in this area should focus on visual policy rather than basic allocation safety, for example whether a heavily constrained display should expose the effective rung cap in the UI.
 
 ## 19. Performance philosophy
 
@@ -474,7 +520,9 @@ The renderer should not make every device perform the same workload.
 
 The goal is for every device to render the **best version of the same mathematical scene that it can comfortably sustain**.
 
-A phone may use reduced internal resolution, shallower iteration, and cheaper shading while moving. A workstation may supersample and search deeper mathematics. When either device becomes still, spare time can be converted into fidelity rather than unused frame rate.
+A phone may use reduced internal resolution, shallower iteration, and cheaper shading while moving. A workstation may supersample and search deeper mathematics. A very large display may hit a texture-dimension ceiling before it hits a performance ceiling; in that case the renderer should stop at the highest rung it can honestly allocate rather than inventing unusable headroom.
+
+When a view becomes still, spare time can be converted into fidelity rather than unused frame rate.
 
 The controlling distinction is therefore:
 
