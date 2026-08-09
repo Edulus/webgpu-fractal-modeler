@@ -131,7 +131,7 @@
       min-width: 0;
     }
     #panel > *, #panel label, #panel .row > *,
-    #panel #pal-io > *, #panel #img-io > * { min-width: 0; }
+    #panel #pal-io > *, #panel #img-io > *, #panel #diag-io > * { min-width: 0; }
     /* A text input carries an intrinsic size of ~20 characters regardless of
        its container, which pushed the Save button past the panel edge even
        after the grid tracks were freed. */
@@ -158,6 +158,22 @@
     #img-io { color: var(--muted); font-size: 12px; }
     #img-io summary { cursor: pointer; padding: 2px 0; }
     #img-io > *:not(summary) { margin-top: 7px; }
+    /* Developer diagnostics: closed by default and refreshed at HUD cadence,
+       so observing the renderer does not become a per-frame DOM workload. */
+    #diag-io { color: var(--muted); font-size: 12px; }
+    #diag-io summary { cursor: pointer; padding: 2px 0; }
+    #diag-io > *:not(summary) { margin-top: 7px; }
+    #diag-readout {
+      margin: 0;
+      max-height: 260px;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font: 10.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: var(--fg);
+      opacity: 0.9;
+    }
+    #diag-msg { min-height: 1.2em; font-size: 11px; color: var(--accent); }
     #panel label.slider { gap: 2px; font-size: 12px; }
     /* A range input carries an intrinsic width of its own (~129px in Chromium)
        and, like every other grid item, min-width:auto keeps it from shrinking
@@ -490,6 +506,13 @@
       <button id="adj-reset">Reset image</button>
     </details>
 
+    <details id="diag-io">
+      <summary>Diagnostics</summary>
+      <pre id="diag-readout">Waiting for renderer state…</pre>
+      <button id="diag-copy">Copy Renderer Report</button>
+      <div id="diag-msg" aria-live="polite"></div>
+    </details>
+
     <div id="hud">initializing…</div>
   </div>
 
@@ -540,6 +563,7 @@
   <script type="module">
     import { initFractalBackground } from './src/fractal-bg.js';
     import * as PaletteIO from './src/palette-io.js';
+    import { installRendererDiagnostics, formatDiagnosticsPanel } from './src/diagnostics.js';
 
     const canvas = document.getElementById('bg');
     const hud = document.getElementById('hud');
@@ -557,7 +581,10 @@
       // than the compact one. The image controls are deliberately NOT folded --
       // they stay up while the panel is collapsed, and closing them is what
       // clears the last of the panel away.
-      if (collapsed) document.getElementById('pal-io').open = false;
+      if (collapsed) {
+        document.getElementById('pal-io').open = false;
+        document.getElementById('diag-io').open = false;
+      }
     });
 
     let handle = null;
@@ -582,6 +609,41 @@
     window.fractalHandle = handle;
 
     if (handle) {
+      // Diagnostics observes public renderer state and immutable quality events.
+      // It never feeds measurements back into the governor. The panel is closed
+      // by default; ?diagnostics=1 opens it for benchmark sessions.
+      const diagnostics = installRendererDiagnostics(handle, canvas, { accumCap: 96 });
+      window.rendererDiagnostics = diagnostics;
+      const diagIO = document.getElementById('diag-io');
+      const diagReadout = document.getElementById('diag-readout');
+      const diagMsg = document.getElementById('diag-msg');
+      if (new URLSearchParams(location.search).get('diagnostics') === '1') diagIO.open = true;
+      const syncDiagnostics = () => {
+        diagnostics.setEnabled(diagIO.open);
+        if (diagIO.open) diagReadout.textContent = formatDiagnosticsPanel(diagnostics.snapshot());
+      };
+      diagIO.addEventListener('toggle', syncDiagnostics);
+      syncDiagnostics();
+
+      async function copyRendererReport() {
+        const text = diagnostics.report();
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch (_) {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          ta.remove();
+        }
+        diagMsg.textContent = 'Renderer report copied.';
+        setTimeout(() => { if (diagMsg.textContent === 'Renderer report copied.') diagMsg.textContent = ''; }, 1800);
+      }
+      document.getElementById('diag-copy').addEventListener('click', copyRendererReport);
+
       // Wire up the control panel.
       // ---- Palette loading ------------------------------------------------
       const palInput = document.getElementById('pal-input');
@@ -897,6 +959,7 @@
             : (i.explorer ? ` · ${i.zoom}×${i.pinned ? ' pin' : ''}` : '')) +
           (i.samples > 0 ? ` · ${i.samples}spp` : '') +
           (i.reducedMotion ? ' · reduced-motion' : '');
+        if (diagIO.open) diagReadout.textContent = formatDiagnosticsPanel(diagnostics.snapshot());
       }, 500);
     }
   </script>

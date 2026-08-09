@@ -4,7 +4,7 @@ This document describes the architecture, performance strategy, and engineering 
 
 It is an implementation document rather than an API tutorial. The README explains how to use the library and describes the mathematical models. This file explains how the renderer turns those models into an image, how it adapts to the device it is running on, and which design decisions should be preserved when the engine changes.
 
-The adaptive-quality ladder was introduced in commit `9f0d024`. Commit `104eb59` corrected the governor to use a signal that remains meaningful under vsync and added thermal re-probe backoff. Commit `260c5b7` unified mode entry so `quality: 'max'` and `setQuality('max')` behave identically. Commit `23bddda` made supersampling respect the adapter's texture-dimension limit by fitting the swapchain, capping the quality ladder to allocatable rungs, and retaining an allocation clamp as a final backstop.
+The adaptive-quality ladder was introduced in commit `9f0d024`. Commit `104eb59` corrected the governor to use a signal that remains meaningful under vsync and added thermal re-probe backoff. Commit `260c5b7` unified mode entry so `quality: 'max'` and `setQuality('max')` behave identically. Commit `23bddda` made supersampling respect the adapter's texture-dimension limit by fitting the swapchain, capping the quality ladder to allocatable rungs, and retaining an allocation clamp as a final backstop. The subsequent diagnostics layer adds optional observational telemetry and copyable renderer reports so the next quality changes can be driven by measurements from real hardware rather than inferred cost models.
 
 ## 1. Design goals
 
@@ -21,11 +21,13 @@ The design follows several principles:
 - **Keep fixed modes deterministic.** Low, Medium, and High select known rungs. High remains the historical `1.0 / 160 / 12` quality point.
 - **Do expensive geometry work once when possible.** Progressive accumulation stores palette-independent material information so palette animation and image controls can remain live without re-marching.
 - **Keep decision logic testable without WebGPU.** Quality, camera-rate, recovery, palette parsing, mode planning, and texture-limit fitting are pure where practical.
+- **Measure before retuning.** Developer diagnostics observe the renderer without feeding results back into it, so perceptual changes to the upper ladder can be justified by real device/model evidence.
 
 ## 2. Main source files
 
 - `src/fractal-bg.js` — device acquisition, pipelines, render targets, uniforms, cameras, render loop, lifecycle, quality plumbing, progressive accumulation, texture-limit fitting, and public API.
-- `src/quality.js` — pure adaptive-quality governor, quality ladder, mode planning, and texture-limit rung calculation.
+- `src/quality.js` — pure adaptive-quality decision logic, quality ladder, mode planning, texture-limit rung calculation, and optional environment-free diagnostic observation hooks.
+- `src/diagnostics.js` — developer snapshots, bounded rung history, report formatting, and the optional browser-facing diagnostics controller.
 - `src/camera.js` — pure orbit/fly mathematics, drift, zoom-rate helpers, and device-loss policy.
 - `src/palettes.js` — built-in cosine palettes.
 - `src/palette-io.js` — imported palette parsing and persistence.
@@ -35,7 +37,7 @@ The design follows several principles:
 - `src/shaders/composite.wgsl.js` — palette resolution, bloom, image controls, tonemapping, and final presentation.
 - `src/shaders/engel.wgsl.js` — generated Engel plesiohedron data and estimator.
 
-`quality.js` decides **how much work should be done** and whether a quality rung can actually fit. `fractal-bg.js` applies those decisions to render-target size and shader uniforms.
+`quality.js` decides **how much work should be done** and whether a quality rung can actually fit. `fractal-bg.js` applies those decisions to render-target size and shader uniforms. `diagnostics.js` observes the resulting public state and quality events; it has no authority to change a governor decision.
 
 ## 3. Two geometry families
 
@@ -459,6 +461,29 @@ The project moves control logic out of GPU-only code whenever practical.
 - limits large enough to leave the ladder untouched; and
 - degenerate inputs including zero dimensions, zero limits, and a limit below even the lowest rung.
 
+### 16.1 Diagnostics coverage
+
+`tools/diagnostics.test.js` covers the pure diagnostic helpers and observation boundary, including:
+
+- bounded transition history without mutation of the caller's array;
+- proportional dimension fitting and aspect preservation;
+- reconstruction of requested and effective internal render sizes;
+- Auto, Max, and fixed-preset diagnostic personalities;
+- frozen quality events and read-only retained snapshots;
+- no mutation of governor inputs or outputs by diagnostics;
+- differential comparison against the pre-diagnostics governor arithmetic over long deterministic Auto and Max frame sequences;
+- no observer notification for ordinary steady frames, so the active diagnostic path does not allocate an event object every frame;
+- safe subscriber removal;
+- fixed versus adaptive snapshot representation;
+- texture-constrained rung information;
+- accumulation and convergence reporting;
+- graceful formatting when fields are unavailable;
+- installation of `getDiagnostics()` and `getRendererReport()` on a diagnostic-wrapped handle;
+- mode and accumulation changes in transition/report state; and
+- clean restoration of wrapped public methods on `destroy()`.
+
+The diagnostics suite contains 55 assertions in the initial implementation. The existing quality suite remains at 77 assertions from `23bddda`; the last recorded project-wide baseline before diagnostics was 404 assertions.
+
 The quality suite contains 77 assertions as of `23bddda`, up from 62 at `260c5b7`. The project-wide suite reported 404 assertions at that revision.
 
 The texture-limit cap is pure, so its boundary behavior can be tested without WebGPU. Browser/GPU integration still matters because the proportional swapchain fit and actual texture creation live in `fractal-bg.js`.
@@ -466,6 +491,24 @@ The texture-limit cap is pure, so its boundary behavior can be tested without We
 Synthetic tests prove controller arithmetic against known models. They do not answer perceptual questions such as whether 2× supersampling is the best use of the top-rung budget.
 
 ## 17. Important invariants
+
+### 17.1 Renderer diagnostics are observational
+
+The Explorer demo contains a collapsed **Diagnostics** section. It is disabled by default. Opening the section enables live governor sampling; closing it unsubscribes the diagnostic listener again. `?diagnostics=1` opens it at startup for deliberate benchmark sessions.
+
+The diagnostic snapshot draws from three kinds of authoritative evidence:
+
+1. the renderer's public `handle.info` values for the live model, rung, workload, FPS, navigation, and accumulation count;
+2. quality-module observations for governor state, showcase decisions, the texture limit, and `rungCap`; and
+3. the browser DPR plus canvas backing store for the requested pixel density and the swapchain's actual fitted width and height.
+
+Browser DPR and effective backing-store scale are reported separately because an oversized swapchain may be proportionally fitted below the DPR request. The private material textures are not exposed by the renderer. Their dimensions are therefore reconstructed from the actual swapchain dimensions, live quality scale, observed device limit, and the same proportional fitting rule used by `resize()`. The report labels requested and effective dimensions separately so a requested supersampling scale is never presented as proof that those pixels were allocated.
+
+`src/diagnostics.js` keeps a bounded history of 32 meaningful transitions by default. Rung-change events reuse the existing quality decisions rather than creating another quality controller. The demo refreshes the visible diagnostic text on the existing 500 ms HUD cadence rather than rewriting DOM on every animation frame.
+
+**Copy Renderer Report** produces plain text containing quality/governor state, real dimensions, texture constraint, mathematical workload, accumulation state, current model, recent transitions, and low-entropy browser information such as user agent, platform string, and language.
+
+The measurement boundary is deliberate. Quality subscribers receive frozen event snapshots only after a decision is complete. Subscriber return values are ignored and subscriber exceptions are contained. When no subscriber is active, ordinary `govSample()` frames retain only the governor object already produced by the controller and a few scalar fields; they create no diagnostic event objects, frozen copies, or callbacks. This preserves an accurate last-interactive snapshot even if Diagnostics is opened after the view has converged, while avoiding measurement work substantial enough to manufacture the headroom it is trying to observe.
 
 1. **Use presentation deadline misses as the adaptive climb/drop signal.** Mean `requestAnimationFrame` frame time cannot observe sub-refresh headroom under vsync.
 2. **Do not feed converged frames into the governor.** Cheap post-only frames dilute overload evidence from interactive raymarch frames.
@@ -483,6 +526,9 @@ Synthetic tests prove controller arithmetic against known models. They do not an
 14. **Texture limits cap the ladder as well as the allocation.** A silently clamped high rung creates false headroom and wastes step/iteration work.
 15. **Fit both axes with one factor.** Independent width/height clamps would distort aspect ratio.
 16. **Keep the final allocation clamp even with an honest rung cap.** Texture creation is a hard failure boundary, so the creation path retains its own backstop.
+17. **Diagnostics never feed the controller.** They may observe completed decisions, but diagnostic values, callbacks, and UI state must not become governor inputs.
+18. **Keep diagnostic UI work off the render loop.** The demo samples for display at a coarse cadence, and live governor telemetry is disabled while Diagnostics is closed.
+19. **Report allocated/fitted dimensions honestly.** Requested scale, actual swapchain size, effective internal size, and texture-limit cap are distinct facts.
 
 ## 18. Known limitations and next measurements
 
@@ -491,6 +537,14 @@ Synthetic tests prove controller arithmetic against known models. They do not an
 The engine still has a global ladder and global showcase cost model. A better long-term direction is online per-device, per-model learning from actual observed model/rung cost rather than guessed constants.
 
 This should wait for real timings. Inventing per-model constants without measurements would turn the governor back into theoretical tuning.
+
+### Real-hardware diagnostic campaign
+
+The diagnostics layer is the bridge from synthetic controller tests to perceptual tuning. The next renderer experiment should collect comparable reports from at least one phone, one laptop, and one desktop/workstation.
+
+For each device, compare Auto and Max while moving and then freeze the view long enough to observe showcase and accumulation behavior. Use at least one inexpensive raymarched model, Mandelbulb or Mandelbox, Barth sextic, Tetrabrot, and one strange attractor. Record the copied renderer report alongside a visual judgement of whether the next rung produced visible improvement.
+
+This campaign should happen before changing the upper ladder, wiring adaptive accumulation, or introducing per-model learned costs. Diagnostics supplies evidence; it does not infer the answer from synthetic timings.
 
 ### Top-rung quality allocation
 

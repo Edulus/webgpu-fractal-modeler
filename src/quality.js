@@ -1,6 +1,12 @@
-// quality.js — the adaptive-quality governor. Pure: no WebGPU, no DOM, no time
-// source of its own. Everything it decides is a function of the samples it is
-// handed, which is what makes it testable in an environment that has no GPU.
+// quality.js — the adaptive-quality governor. Pure decision logic: no WebGPU,
+// DOM, or clock source of its own. Everything it decides is a function of the
+// samples it is handed, which is what makes it testable without a GPU.
+//
+// Optional diagnostics at the bottom of this module observe decisions after
+// they have been made. Per-frame telemetry retains references/scalars only;
+// frozen copies are created only when diagnostics are read, and subscribers are
+// notified only for meaningful quality events such as rung changes. Diagnostic
+// output is never read by the governor.
 //
 // The old controller chased frames per second and moved one dial: internal
 // resolution, between 0.4 and 1.0. That answers "is the device keeping up" but
@@ -27,10 +33,6 @@
 //   allowed to lift again only after a long quiet period, so a scene that got
 //   cheaper (zooming out of an expensive region) is not punished forever.
 
-// Rungs, cheapest first. `scale` is the internal resolution multiplier; above
-// 1.0 it is supersampling, which the old ceiling of 1.0 ruled out entirely.
-// `steps` is the raymarch step ceiling, `iters` the fractal iteration depth,
-// and `shade` selects cheap or full normals/shadows/occlusion.
 export const LADDER = [
   { scale: 0.40, steps: 70, iters: 6, shade: 0 },
   { scale: 0.50, steps: 90, iters: 8, shade: 0 },
@@ -44,54 +46,74 @@ export const LADDER = [
   { scale: 2.00, steps: 300, iters: 18, shade: 1 },
 ];
 
-// The rung matching each fixed preset, so the named modes and the ladder speak
-// the same language and `info` can report one number either way.
 export const PRESET_RUNG = { low: 1, medium: 3, high: 5, screenshot: 5, max: 9 };
-
 export const TOP = LADDER.length - 1;
-
-// Budget in milliseconds per frame while the view is MOVING. 16.7 is 60Hz.
 export const BUDGET_MS = 16.7;
-// Jitter allowance: a frame within this much of budget counts as having met it.
 export const MET_TOLERANCE = 1.05;
-// A frame this far over budget is a stall, not noise: drop at once.
 export const STALL_FACTOR = 2.5;
-
-// THE SIGNAL IS A MISS RATE, NOT A MEAN. requestAnimationFrame is vsync-locked,
-// so observed frame time is QUANTISED to multiples of the refresh period: at
-// 60Hz a frame is reported as 16.7ms or 33.3ms and never anything between. A
-// mean-frame-time rule therefore cannot see headroom at all -- measured, a
-// simulated workstation doing 1.0ms of work per frame reported 16.7ms like
-// everything else and never climbed off its starting rung, because no display
-// can report the 12ms that rule wanted. (The FPS thresholds this replaced
-// survived that by luck: 1000/16.7 = 59.9, just over their 58.)
-//
-// What a vsync-locked display CAN report is whether a frame arrived on the next
-// refresh or the one after. So the governor counts the fraction of frames that
-// missed the budget and works from that. This reads correctly whether the
-// timing is quantised or continuous.
-export const CLIMB_MISS = 0.02;     // essentially every frame on time -> climb
-export const DROP_MISS = 0.12;      // this many missed -> too expensive
+export const CLIMB_MISS = 0.02;
+export const DROP_MISS = 0.12;
 export const CLIMB_SAMPLES = 90;
 export const DROP_SAMPLES = 20;
 export const CEILING_RESET_MS = 20000;
-// Each time a rung re-confirms it is too expensive, wait longer before probing
-// it again. A thermally throttled device would otherwise climb back into the
-// same stall every reset interval, for as long as it stayed hot.
-// Max's personality: a wider budget and more tolerance for a late frame, so it
-// reaches higher than auto and is allowed to be visibly ambitious.
 export const MAX_BUDGET_FACTOR = 1.35;
 export const MAX_CLIMB_MISS = 0.06;
 export const MAX_DROP_MISS = 0.30;
 export const CEILING_BACKOFF = 2.0;
 export const CEILING_RESET_MAX_MS = 300000;
 
-/**
- * Governor state. `index` is the current rung; `ceiling` is the highest rung
- * believed sustainable, which starts optimistic and is lowered by experience.
- */
+// ---- Optional, observational diagnostics -----------------------------------
+// These hooks deliberately have no browser dependency and no control authority.
+// Returned governor objects are already immutable-by-convention snapshots in
+// the renderer: govSample() creates a new object every time. We retain only the
+// latest reference/scalars on the hot path and materialise frozen copies when a
+// diagnostic consumer actually asks for them.
+const diagnosticObservers = new Set();
+let sequence = 0;
+let latestPlan = null;
+let latestLimit = null;
+let latestShowcase = null;
+let latestSampleGov = null;
+let latestSampleFrameMs = null;
+let latestSampleValid = false;
+let latestSampleBeforeIndex = null;
+let latestSampleSeq = 0;
+
+
+function frozenGov(gov) {
+  return gov ? Object.freeze({ ...gov }) : null;
+}
+
+function freezeEvent(type, payload) {
+  return Object.freeze({ type, seq: ++sequence, ...payload });
+}
+
+function notify(event) {
+  for (const observer of diagnosticObservers) {
+    try { observer(event); } catch (_) { /* diagnostics must never affect quality */ }
+  }
+}
+
+export function subscribeQualityDiagnostics(observer) {
+  if (typeof observer !== 'function') return () => {};
+  diagnosticObservers.add(observer);
+  return () => diagnosticObservers.delete(observer);
+}
+
+export function getQualityDiagnosticsState() {
+  const sample = latestSampleGov ? Object.freeze({
+    type: 'sample',
+    seq: latestSampleSeq,
+    frameMs: latestSampleFrameMs,
+    valid: latestSampleValid,
+    beforeIndex: latestSampleBeforeIndex,
+    governor: frozenGov(latestSampleGov),
+  }) : null;
+  return Object.freeze({ plan: latestPlan, sample, limit: latestLimit, showcase: latestShowcase });
+}
+
 export function govInit(index = 3, opts = {}) {
-  return {
+  const g = {
     index: clampIndex(index),
     ceiling: clampIndex(opts.ceiling ?? TOP),
     emaMs: opts.emaMs ?? BUDGET_MS,
@@ -106,6 +128,7 @@ export function govInit(index = 3, opts = {}) {
     dropMiss: opts.dropMiss ?? DROP_MISS,
     changed: false,
   };
+  return g;
 }
 
 export function clampIndex(i) {
@@ -116,22 +139,40 @@ export function rung(index) {
   return LADDER[clampIndex(index)];
 }
 
-/**
- * Feed one interactive frame time. Returns new governor state; `changed` says
- * whether the rung moved, which is the caller's cue to resize its targets.
- *
- * Converged frames must NOT be fed in. They skip the raymarch entirely, so
- * their cost is not a measurement of the work being governed -- treating them
- * as evidence would let the governor conclude the device has headroom it does
- * not have, climb, and stall the moment the view moves again.
- */
+function finishSample(before, g, frameMs, valid) {
+  // Retain the already-created governor object plus a few scalars so opening the
+  // diagnostics panel on a converged/still view can report the last true
+  // interactive governor state immediately. This adds no per-frame objects or
+  // freezes. Subscribers and event objects remain dormant while diagnostics is
+  // closed.
+  latestSampleGov = g;
+  latestSampleFrameMs = Number.isFinite(frameMs) ? frameMs : null;
+  latestSampleValid = valid;
+  latestSampleBeforeIndex = before?.index ?? null;
+  latestSampleSeq = ++sequence;
+
+  // Rung transitions are rare and useful for history. Ordinary frames only
+  // update the retained reference/scalars above, avoiding diagnostic objects
+  // and callbacks on the hot path.
+  if (diagnosticObservers.size && before?.index !== g.index) {
+    notify(Object.freeze({
+      type: 'sample',
+      seq: latestSampleSeq,
+      frameMs: latestSampleFrameMs,
+      valid,
+      beforeIndex: before?.index ?? null,
+      governor: frozenGov(g),
+    }));
+  }
+  return g;
+}
+
 export function govSample(gov, frameMs) {
   const g = { ...gov, changed: false };
-  if (!(frameMs > 0) || !Number.isFinite(frameMs)) return g;
+  if (!(frameMs > 0) || !Number.isFinite(frameMs)) {
+    return finishSample(gov, g, frameMs, false);
+  }
 
-  // Clamp before smoothing: an alt-tab or a garbage-collection pause can hand
-  // back a frame of several seconds, and one of those must not poison the
-  // averages that decide quality for the next minute.
   const sample = Math.min(frameMs, g.budgetMs * 8);
   g.emaMs = g.emaMs * 0.9 + sample * 0.1;
   g.sinceCeilingMs += sample;
@@ -139,11 +180,8 @@ export function govSample(gov, frameMs) {
   const missed = sample > g.budgetMs * MET_TOLERANCE ? 1 : 0;
   g.missRate = g.missRate * 0.94 + missed * 0.06;
 
-  // A single catastrophic frame is acted on immediately. Waiting out the
-  // hysteresis here would mean twenty more frames at a rung already known to be
-  // far too expensive.
   if (sample > g.budgetMs * STALL_FACTOR && g.index > 0) {
-    return applyDrop(g, g.index - 2);
+    return finishSample(gov, applyDrop(g, g.index - 2), frameMs, true);
   }
 
   if (g.missRate > g.dropMiss) {
@@ -158,12 +196,9 @@ export function govSample(gov, frameMs) {
   }
 
   if (g.bad >= DROP_SAMPLES && g.index > 0) {
-    return applyDrop(g, g.index - 1);
+    return finishSample(gov, applyDrop(g, g.index - 1), frameMs, true);
   }
 
-  // The ceiling lifts by one rung after a long stretch without trouble, so a
-  // scene that has become cheaper can be explored again rather than being held
-  // down by a measurement taken somewhere expensive.
   if (g.ceiling < TOP && g.sinceCeilingMs > g.resetMs && g.bad === 0) {
     g.ceiling = g.ceiling + 1;
     g.sinceCeilingMs = 0;
@@ -173,24 +208,15 @@ export function govSample(gov, frameMs) {
     g.index = g.index + 1;
     g.good = 0;
     g.changed = true;
-    // Assume the new rung costs more, so the next decision is not made on
-    // evidence gathered at the cheaper one.
     g.missRate = g.climbMiss;
     g.emaMs = g.budgetMs * 0.9;
   }
-  return g;
+  return finishSample(gov, g, frameMs, true);
 }
 
 function applyDrop(g, to) {
   const from = g.index;
   g.index = clampIndex(to);
-  // One BELOW the rung that misbehaved, and remember it. Failing at the same
-  // ceiling again backs the retry off, so a device that is throttling settles
-  // instead of probing the stall every reset interval.
-  // Compare against the rung that FAILED, not against the ceiling: the periodic
-  // reset lifts the ceiling before the retry, so testing the ceiling here made
-  // "this failed before" permanently false and the backoff never engaged --
-  // measured as a throttled device probing the same stall 60 times.
   const repeat = g.lastFail === from;
   g.lastFail = from;
   g.ceiling = Math.max(0, from - 1);
@@ -205,45 +231,29 @@ function applyDrop(g, to) {
   return g;
 }
 
-/**
- * The highest rung whose internal targets fit within a texture-dimension limit.
- *
- * Supersampling made this necessary: at rung 9 an ultrawide 5120 CSS px display
- * at DPR 2 asks for 10240 internal pixels across, past the 8192 that WebGPU
- * only guarantees, and texture creation fails. Clamping the allocation alone is
- * not enough -- a rung that is silently clamped costs no more than the one
- * below it, so the governor reads the unchanged frame time as headroom and
- * climbs again, settling at the top of the ladder while delivering the pixels
- * of a lower rung. The ladder itself has to be capped.
- *
- * Scale increases monotonically, so the first rung that does not fit ends it.
- */
 export function maxRungForLimit(pxW, pxH, limit) {
   const px = Math.max(pxW, pxH);
-  if (!(px > 0) || !(limit > 0)) return TOP;
-  let best = 0;
-  for (let i = 0; i <= TOP; i++) {
-    if (Math.round(px * LADDER[i].scale) <= limit) best = i;
-    else break;
+  let best = TOP;
+  if (px > 0 && limit > 0) {
+    best = 0;
+    for (let i = 0; i <= TOP; i++) {
+      if (Math.round(px * LADDER[i].scale) <= limit) best = i;
+      else break;
+    }
   }
+  latestLimit = freezeEvent('limit', {
+    pixelWidth: Number.isFinite(pxW) ? pxW : null,
+    pixelHeight: Number.isFinite(pxH) ? pxH : null,
+    limit: Number.isFinite(limit) ? limit : null,
+    rungCap: best,
+  });
+  if (diagnosticObservers.size) notify(latestLimit);
   return best;
 }
 
-/**
- * How a quality MODE becomes a starting rung and a governor. Both the
- * constructor and setQuality() go through this, because they used not to: init
- * tested only for 'auto', so a renderer built with quality:'max' took the fixed
- * branch and started at the top rung with no governor, while setQuality('max')
- * started near the heuristic guess with a wider budget. Same mode, two
- * behaviours, depending on how you got there. One function, one answer.
- *
- * Returns { rung, gov }, with gov null for the fixed presets.
- */
 export function planMode(mode, autoRung = 3) {
+  let plan;
   if (mode === 'auto' || mode === 'max') {
-    // Max starts one rung higher, since it is asking to be pushed, and is given
-    // a wider budget: it accepts an occasional late frame in exchange for
-    // quality, where auto should stay invisible.
     const start = clampIndex(autoRung + (mode === 'max' ? 1 : 0));
     const opts = mode === 'max'
       ? {
@@ -252,41 +262,41 @@ export function planMode(mode, autoRung = 3) {
           dropMiss: MAX_DROP_MISS,
         }
       : {};
-    return { rung: start, gov: govInit(start, opts) };
+    plan = { rung: start, gov: govInit(start, opts) };
+  } else {
+    plan = { rung: clampIndex(PRESET_RUNG[mode] ?? PRESET_RUNG.high), gov: null };
   }
-  return { rung: clampIndex(PRESET_RUNG[mode] ?? PRESET_RUNG.high), gov: null };
+  latestPlan = freezeEvent('plan', {
+    mode,
+    autoRung: clampIndex(autoRung),
+    rung: plan.rung,
+    governor: frozenGov(plan.gov),
+  });
+  if (diagnosticObservers.size) notify(latestPlan);
+  return plan;
 }
 
-/**
- * Where to sit once the view has been still long enough to be a showcase
- * rather than an interaction. A still frame has no responsiveness to protect,
- * so it can afford rungs the interactive budget will never reach; the limit is
- * patience, not smoothness.
- *
- * `stillBudgetMs` is how long a single still frame may take. The estimate uses
- * the measured interactive cost and the pixel ratio between rungs, since
- * resolution dominates: cost scales with area, hence with scale squared.
- */
 export function showcaseIndex(gov, stillBudgetMs = 220) {
   const here = rung(gov.index);
   const costPerPixel = gov.emaMs / (here.scale * here.scale);
   let best = gov.index;
   for (let i = gov.index + 1; i <= TOP; i++) {
     const r = LADDER[i];
-    // Step count and iteration depth also cost, though less sharply than area.
     const work = (r.steps / here.steps) * 0.6 + (r.iters / here.iters) * 0.4;
     const est = costPerPixel * r.scale * r.scale * work;
     if (est > stillBudgetMs) break;
     best = i;
   }
+  latestShowcase = freezeEvent('showcase', {
+    fromRung: gov.index,
+    rung: best,
+    stillBudgetMs,
+    governor: frozenGov(gov),
+  });
+  if (diagnosticObservers.size) notify(latestShowcase);
   return best;
 }
 
-/**
- * How many accumulated samples to gather before declaring the image finished.
- * Higher rungs already deliver more per sample, so the count rises with the
- * rung rather than being a single global number.
- */
 export function accumTarget(index, base = 96) {
   const r = rung(index);
   return Math.round(base * (r.scale >= 1.25 ? 1.5 : 1.0));
