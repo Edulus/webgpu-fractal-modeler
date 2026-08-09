@@ -69,7 +69,7 @@ const UNIFORM_FLOATS = 100;
 const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 400
 
 // Distance-estimated fractals occupy ids 0..23; the volumetric/line-rendered
-// attractors follow at 24+. The shader keys off that split (see the
+// attractors follow at 24+ and must stay contiguous at the end. The shader keys off that split (see the
 // `fractalType > 23.5` test in fractal.wgsl.js), so keep DE types contiguous at
 // the front when adding new ones and move the attractors up to match.
 //
@@ -95,7 +95,7 @@ const FRACTAL_IDS = {
   // The packing shares the honeycombs' machinery but not their group: [5,3,6]
   // is cusped, which is what gives it horoballs to make a packing out of.
   kleinpack: 23,
-  attractor: 24, lorenz: 25,
+  attractor: 24, lorenz: 25, rossler: 26,
 };
 
 // Quality tiers -> internal-resolution scale factor.
@@ -107,7 +107,7 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 // mandelbulb, mandelbox, menger, julia, apollonian, spherepack, encrusted,
 // surfacepack, penrose, gyroid, kleinian, barth, schottky, schottkyh,
 // tetrabrot, envoct, envdodec, hyp534, hyp435, hyp534t, hyp534o, hyp435t,
-// hyp435o, kleinpack, attractor(Aizawa), lorenz
+// hyp435o, kleinpack, attractor(Aizawa), lorenz, rossler
 // The Penrose disc is wide and flat, so it needs a little more room than the
 // roughly ball-shaped estimators to sit inside the frame edge-on. The Barth
 // sextic clips at radius 2.0, the largest here, and its 4.6 keeps the same
@@ -124,7 +124,7 @@ const QUALITY_SCALE = { low: 0.5, medium: 0.7, high: 1.0, screenshot: 1.0 };
 // clip would slice a cap off every one of them.
 const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.1, 3.0, 3.5, 3.2, 3.6, 4.6,
                     1.55, 1.75, 3.4, 2.85, 5.75, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
-                    2.3, 3.2, 3.0];
+                    2.3, 3.2, 3.0, 3.0];
 
 // Number of integrated trajectory samples drawn as a line strip per attractor.
 // These are exact float positions (vector geometry), so the curve stays crisp
@@ -610,6 +610,25 @@ export async function initFractalBackground(canvas, options = {}) {
         ];
       },
     },
+    // dx/dt = -y - z, dy/dt = x + ay, dz/dt = b + z(x - c)
+    //
+    // The simplest of the three: one quadratic term, where Lorenz has two. It
+    // spends most of its time in a nearly flat spiral and then folds sharply up
+    // out of the plane, which is what makes it the textbook picture of period
+    // doubling. Fitted from a measured run: the box is x[-9.11, 11.43],
+    // y[-10.79, 7.84], z[0.01, 22.85], so the centre is off-axis, unlike the two
+    // symmetric attractors above. dt gives 0.034 of arc per step, between the
+    // other two, and the spiral sits at the bottom of the box with the fold
+    // reaching the top.
+    rossler: {
+      init: [0.1, 0.0, 0.0],
+      dt: 0.004, warm: 4000,
+      center: [1.2, -1.5, 11.4], scale: 0.9 / 11.5,
+      deriv: (x, y, z) => {
+        const a = 0.2, b = 0.2, c = 5.7;
+        return [-y - z, x + a * y, b + z * (x - c)];
+      },
+    },
     // dx/dt = sigma(y-x), dy/dt = x(rho-z)-y, dz/dt = xy - beta*z
     lorenz: {
       init: [0.1, 0.0, 0.0],
@@ -683,7 +702,9 @@ export async function initFractalBackground(canvas, options = {}) {
 
   // Which attractor a given fractal id maps to.
   function attractorVariantForType(ft) {
-    return ft === FRACTAL_IDS.lorenz ? 'lorenz' : 'aizawa';
+    if (ft === FRACTAL_IDS.lorenz) return 'lorenz';
+    if (ft === FRACTAL_IDS.rossler) return 'rossler';
+    return 'aizawa';
   }
 
   // (Re)build the trajectory if missing or holding a different attractor.

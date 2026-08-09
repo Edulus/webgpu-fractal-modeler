@@ -52,6 +52,7 @@ mathematicians named there.
 - Kleinian sphere packing {5,3,6}
 - Aizawa strange attractor
 - Lorenz strange attractor
+- Rössler strange attractor
 
 ## Project structure
 
@@ -73,7 +74,8 @@ mathematicians named there.
 │   ├── palette.test.js           palette import/persistence unit tests
 │   ├── recovery.test.js          GPU device-loss recovery decisions
 │   ├── colorcycle.test.js        palette-cycle and image-control arithmetic
-│   └── kleinpack.test.js         sphere-packing construction and estimator
+│   ├── kleinpack.test.js         sphere-packing construction and estimator
+│   └── attractor.test.js         attractor fits and Lyapunov exponents
 └── .github/workflows/pages.yml   deploys the demo to GitHub Pages
 ```
 
@@ -488,7 +490,11 @@ A Penrose tiling inflated by φ² is another Penrose tiling on the same five dir
 
 ### Strange attractors
 
-The Aizawa and Lorenz models are trajectories rather than closed surfaces. Their differential equations are integrated on the CPU using fourth-order Runge–Kutta, uploaded as vertex data, and rasterized as line strips. This keeps the curves crisp while orbiting and zooming.
+The Aizawa, Lorenz and Rössler models are trajectories rather than closed surfaces. Their differential equations are integrated on the CPU using fourth-order Runge–Kutta, uploaded as vertex data, and rasterized as line strips. This keeps the curves crisp while orbiting and zooming.
+
+Each is fitted from a measured run rather than by eye: the trajectory is integrated, its bounding box taken, and the centre and scale chosen to place it in roughly `[-1,1]³`. The step size is picked so the arc length per step is comparable across the three — 0.005 for the compact Aizawa, 0.046 for the large, fast-moving Lorenz, 0.034 for Rössler. Rössler is the only one of the three whose centre is off-axis, because it has no symmetry about the vertical: its measured box is `x[-9.11, 11.43]`, `y[-10.79, 7.84]`, `z[0.01, 22.85]`.
+
+Rössler is also the simplest dissipative chaotic system there is — a single quadratic term, where Lorenz has two. It winds outwards in a nearly flat spiral and then folds sharply up out of the plane, and that fold is the stretch-and-fold mechanism that produces the chaos.
 
 ## Palettes
 
