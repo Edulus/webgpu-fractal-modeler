@@ -50,6 +50,7 @@ mathematicians named there.
 - Hyperbolic honeycomb {4,3,5}
 - Truncated and omnitruncated forms of both honeycombs
 - Kleinian sphere packing {5,3,6}
+- Engel plesiohedron tiling (38 faces)
 - Aizawa strange attractor
 - Lorenz strange attractor
 - Rössler strange attractor
@@ -65,6 +66,7 @@ mathematicians named there.
 │   ├── palettes.js               Inigo Quilez cosine-palette presets
 │   └── shaders/
 │       ├── fractal.wgsl.js       distance estimators + clearance compute shader
+│       ├── engel.wgsl.js         generated plesiohedron tables + its estimator
 │       ├── material.wgsl.js      palette-independent raymarch material pass
 │       ├── composite.wgsl.js     palette resolve, bloom, image controls, tonemap
 │       └── attractor.wgsl.js     palette-independent strange-attractor lines
@@ -75,7 +77,8 @@ mathematicians named there.
 │   ├── recovery.test.js          GPU device-loss recovery decisions
 │   ├── colorcycle.test.js        palette-cycle and image-control arithmetic
 │   ├── kleinpack.test.js         sphere-packing construction and estimator
-│   └── attractor.test.js         attractor fits and Lyapunov exponents
+│   ├── attractor.test.js         attractor fits and Lyapunov exponents
+│   └── engel.test.js             plesiohedron tables, tiling and Lipschitz bound
 └── .github/workflows/pages.yml   deploys the demo to GitHub Pages
 ```
 
@@ -341,6 +344,22 @@ A Kleinian group is a discrete group of Möbius transformations, and its limit s
 The smooth caps in the result are not an artefact: they are the group's tangent spheres, with recursive filigree running along the ridges where they meet. Slowly drifting the inversion radius walks the construction through a family of nearby Kleinian groups, morphing the limit set within a narrow band — the structure degenerates quickly outside it.
 
 Parameters came from rendering candidates rather than from a reference. The construction is sharply sensitive to them: of the first four published-looking parameter sets tried, three collapsed into featureless lobes, and swapping the final primitive alone was enough to turn the surface from tangent spheres into granular noise.
+
+#### Engel plesiohedron tiling
+
+**The most complicated shape that can fill space on its own.** A *plesiohedron* is the Voronoi cell of one point of a discrete point set — the region closer to that point than to any other. Voronoi cells tile by construction, so every plesiohedron is a space-filler, and the question Peter Engel settled in 1981 is how complicated one can be. Searching Dirichlet partitions of cubic symmetry he found 172 types, two of them with 38 faces and 70 vertices, and 38 is now known to be the maximum.
+
+The recipe is short: take the orbit of `(427/6984, 761/6984, 1421/6984)` under a cubic space group and build the Voronoi cell of that point. Its f-vector is `(70, 106, 38)`.
+
+**The group was found by search, not recalled.** My reading of the International Tables produced a group that closed correctly at 48 general positions but placed two sites 0.038 apart where the mean spacing is 0.275 — the generating point sitting almost on a symmetry element, which is not Engel's construction. So the eight order-48 groups with point group 432 and a body-centred lattice were enumerated instead, and the f-vector used as the discriminator. Exactly one produces `(70, 106, 38)` with Euler characteristic 2: the one whose 2-fold about *z* carries `(0, ½, 0)` and whose 2-fold about `[110]` carries `(¼, ¾, ¾)`. Its cell has volume **1/48 to 2.7e-15** relative error, which is the statement that the cells tile space.
+
+Two bugs are worth recording, because both passed tests that looked adequate. The Voronoi code reproduced the cube, truncated octahedron and rhombic dodecahedron exactly while being wrong: it built the half-spaces about the origin rather than about the site, and all three lattice tests were sited at the origin. And the first cell came back with 13 faces because the candidate neighbours were truncated at a radius that admitted only 24 half-spaces — fewer than the 38 faces being looked for, so the answer was impossible before the search began. The cell is now refined until no remaining half-space cuts it, which is self-certifying.
+
+**What is drawn is the tiling, not the cell.** A single cell is a thin wedge, 13:1 from longest principal axis to shortest, and not much to look at. Filling space with it is the point, so every cell is eroded slightly and the joints between them show — a three-dimensional jigsaw. Drawn solid it would be a solid block, which is the lesson the honeycomb's cell walls already taught.
+
+**It is the only exact estimator here.** A convex polyhedron given as half-spaces with unit normals has signed distance exactly `max(nₖ·y − hₖ)`. Every cell is a copy of one polyhedron, so the estimator finds the nearest of the 48 sites by minimum image, rotates the offset into the canonical cell's frame, and evaluates 38 planes — no iteration, no safety factor. Working *relative to the site* removes the translation and leaves only a rotation to store. Minimum image is legitimate because it need only find the nearest site, and no point of a cell is further than the circumradius 0.4442 from its own, inside the half-period the convention requires. Measured against a brute-force search over the full 27-image neighbourhood: worst difference **8.6e-16**, and the Lipschitz ratio peaks at 0.986 over 4000 pairs, never exceeding 1.
+
+The 728 constants are generated rather than typed, and live in `src/shaders/engel.wgsl.js`. `tools/engel.test.js` reads them back out of that file rather than keeping a second copy, and checks that all 1824 face planes bisect the gap to another site of the orbit, that no sampled point of space falls outside its own cell, and that the estimator is 1-Lipschitz.
 
 #### Kleinian sphere packing
 

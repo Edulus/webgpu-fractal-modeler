@@ -7,6 +7,10 @@
 // offsets there). Keep the two in lockstep. std140-ish rules: vec3 aligns to
 // 16 bytes; we deliberately pack a trailing scalar into each vec3's pad slot.
 
+// Engel's plesiohedron carries 728 generated constants, so its tables and
+// estimator live in their own module and are spliced in below.
+import { ENGEL_WGSL } from './engel.wgsl.js';
+
 export const FRACTAL_WGSL = /* wgsl */ `
 // Stop count carried for an imported palette. Mirrored by MAX_STOPS in
 // palette-io.js, which resamples longer palettes down to it.
@@ -1545,6 +1549,8 @@ fn deKleinPack(pos : vec3<f32>) -> DEResult {
   return res;
 }
 
+${ENGEL_WGSL}
+
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
   let ft = u.fractalType;
@@ -1584,8 +1590,10 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
     // The six honeycomb entries share one estimator; the id selects {p,q,r}
     // and the active-mirror string.
     return deHoneycomb(pos);
+  } else if (ft < 23.5) {
+    return deKleinPack(pos);
   }
-  return deKleinPack(pos);
+  return deEngel(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {
@@ -1721,7 +1729,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // Strange attractors aren't distance fields — they're rasterized as line
   // geometry by a second pipeline drawn over this pass. Emit only the
   // background here so those lines have something to blend onto.
-  if (u.fractalType > 23.5) {
+  if (u.fractalType > 24.5) {
     let bg = backgroundColor(rd);
     return vec4<f32>(select(vec3<f32>(0.0), bg, u.bgMode >= 0.5), 0.0);
   }

@@ -44,7 +44,7 @@ fn fs_material(in : VSOut) -> MaterialOut {
   // Attractors are rasterized as line geometry after this draw. The raymarch
   // contributes one full background/miss sample; the post chain decides whether
   // that sample is opaque or transparent from the live bgMode.
-  if (u.fractalType > 23.5) {
+  if (u.fractalType > 24.5) {
     out.aux.w = 1.0;
     return out;
   }

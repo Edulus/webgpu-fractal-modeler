@@ -324,6 +324,16 @@ before writing an estimator, not after.
   much less than the pointwise bound. The sphere packing passed a dense
   reference march with zero overshoot while over-reporting at 36% of sampled
   points. Compare against exact distances to a known finite subset as well.
+- **A test sited at the origin proves nothing about placement.** The Voronoi code
+  behind the Engel tiling reproduced the cube, truncated octahedron and rhombic
+  dodecahedron exactly while building its half-spaces about the origin instead of
+  about the site -- because all three lattice tests were sited at the origin.
+  Repeat any positional test somewhere awkward.
+- **A search cannot find what its bounds exclude.** The first Engel cell came
+  back with 13 faces because the candidate neighbours were truncated at a radius
+  admitting only 24 half-spaces, and 38 faces cannot be built from 24. Prefer a
+  refinement that terminates on its own condition -- add every half-space that
+  cuts the current cell, repeat until none does -- over a radius chosen up front.
 - **Signed error, and where the safety factor goes.** Applying the factor to the
   returned distance rather than the step scales the hit test too, which reads as
   stopping short when the real fault is skipping past. Return the unscaled

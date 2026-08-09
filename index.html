@@ -422,6 +422,7 @@
         <option value="hyp435t">Hyperbolic honeycomb {4,3,5}, truncated</option>
         <option value="hyp435o">Hyperbolic honeycomb {4,3,5}, omnitruncated</option>
         <option value="kleinpack">Kleinian sphere packing {5,3,6}</option>
+        <option value="engel">Engel plesiohedron tiling (38 faces)</option>
         <option value="attractor">Strange attractor (Aizawa)</option>
         <option value="lorenz">Strange attractor (Lorenz)</option>
         <option value="rossler">Strange attractor (Rössler)</option>
@@ -768,6 +769,8 @@
           'Spheres tangent to one another and to the sphere at infinity, every one the image of a single sphere under a group of reflections. The cells of the honeycomb behind it are ideal dodecahedra, with their corners out at infinity.'],
         attractor: ['Aizawa attractor',
           'One trajectory, traced for six hundred thousand steps. It never repeats and never escapes, and never quite closes the loop.'],
+        engel: ['Engel plesiohedron',
+          'Space filled with copies of one 38-faced solid, which is the most faces such a shape can have. Each is the region of space closest to one point of a repeating pattern, and they are drawn shrunk a little so the joints between them show.'],
         rossler: ['Rössler attractor',
           'The simplest strange attractor there is: one curved term in three equations. It winds outwards in a flat spiral, then folds sharply up and back into the middle, and that fold is where the chaos comes from.'],
         lorenz: ['Lorenz attractor',
@@ -881,7 +884,7 @@
         'spherepack', 'encrusted', 'surfacepack', 'penrose', 'gyroid',
         'kleinian', 'barth', 'schottky', 'schottkyh', 'tetrabrot',
         'envoct', 'envdodec', 'hyp534', 'hyp435', 'hyp534t', 'hyp534o',
-        'hyp435t', 'hyp435o', 'kleinpack', 'attractor', 'lorenz', 'rossler'];
+        'hyp435t', 'hyp435o', 'kleinpack', 'engel', 'attractor', 'lorenz', 'rossler'];
       setInterval(() => {
         const i = handle.info;
         hud.textContent = `${names[i.fractalType]} · q${i.qualityScale} · ${i.fps}fps` +
