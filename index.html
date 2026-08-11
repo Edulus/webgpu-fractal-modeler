@@ -123,7 +123,7 @@
       width: 210px;
       max-width: calc(100vw - 20px);
       /* Grid and flex items default to min-width:auto, so they refuse to shrink
-         below their content's intrinsic width. The longest model name then sets
+         below their content's intrinsic width. The longest shape name then sets
          a floor far wider than the panel and the controls spill off-screen --
          measured at 284px of content in a 168px panel on a phone. Every track
          below is allowed to shrink instead, and the controls are held to the
@@ -390,7 +390,7 @@
     #btn-fly.on { background: rgba(255, 190, 120, 0.3); }
 
     /* Explorer mode: fade the reading content out of the way so the fractal
-       becomes a full-screen, navigable model. */
+       becomes a full-screen, navigable shape. */
     body.explorer .wrap { display: none; }
     body.explorer { overflow: hidden; }
     body.explorer #bg { z-index: 0; } /* bring canvas above the (hidden) content */
@@ -489,7 +489,7 @@
       <button id="btn-pause">Pause</button>
       <button id="btn-resume">Resume</button>
     </div>
-    <button id="btn-explorer">Enter explorer mode</button>
+    <button id="btn-explorer">Enter shape viewer</button>
     <button id="btn-fly">Fly through</button>
     <button id="btn-reset" class="hidden">Reset view</button>
 
@@ -544,14 +544,14 @@
       Everything is drawn live, pixel by pixel, as you move.
     </p>
     <div class="actions">
-      <button class="btn primary" onclick="document.getElementById('btn-explorer').click()">Enter model viewer</button>
+      <button class="btn primary" onclick="document.getElementById('btn-explorer').click()">Enter shape viewer</button>
     </div>
 
     <div class="content-block">
       <h2>One renderer, multiple applications</h2>
       <p>
         Use the opaque explorer preset for a full-screen navigable artwork, an
-        educational model viewer, a music visual, or an installation display.
+        educational shape viewer, a music visual, or an installation display.
         Orbit and zoom remain responsive while the adaptive quality system keeps
         the renderer practical across a range of GPUs.
       </p>
@@ -559,7 +559,7 @@
         Transparent mode places the same visuals behind ordinary page content.
         The canvas stays click-through, and the dark composite treatment preserves
         legibility through controlled bloom, ACES tonemapping, vignette, and
-        dithering. Switch the model, palette, and quality tier using the panel.
+        dithering. Switch the shape, palette, and quality tier using the panel.
       </p>
     </div>
   </main>
@@ -881,6 +881,39 @@
       document.getElementById('sel-quality').addEventListener('change', (e) => handle.setQuality(e.target.value));
       document.getElementById('btn-pause').addEventListener('click', () => handle.pause());
       document.getElementById('btn-resume').addEventListener('click', () => handle.resume());
+
+      // Shape viewer: full-screen orbit controls around the selected shape.
+      const btnExplorer = document.getElementById('btn-explorer');
+      const btnReset = document.getElementById('btn-reset');
+      const btnFly = document.getElementById('btn-fly');
+      // The library owns which camera mode is active and keeps orbit/fly
+      // mutually exclusive. Read that state back instead of duplicating it in
+      // the page so one mode cannot accidentally disable the other.
+      function syncModeUI() {
+        const i = handle.info;
+        document.body.classList.toggle('explorer', i.explorer);
+        document.body.classList.toggle('flying', i.fly);
+        btnExplorer.textContent = i.explorer ? 'Exit shape viewer' : 'Enter shape viewer';
+        btnFly.textContent = i.fly ? 'Exit fly-through' : 'Fly through';
+        btnFly.classList.toggle('on', i.fly);
+        btnReset.classList.toggle('hidden', !(i.explorer || i.fly));
+      }
+      function toggleShapeViewer(on) {
+        handle.setExplorer(on);
+        syncModeUI();
+      }
+      btnExplorer.addEventListener('click', () => toggleShapeViewer(!handle.info.explorer));
+      btnFly.addEventListener('click', () => {
+        handle.setFly(!handle.info.fly);
+        syncModeUI();
+        // Drop focus so the keyboard reaches flight controls rather than the
+        // button or the shape dropdown.
+        if (document.activeElement && document.activeElement.blur) {
+          document.activeElement.blur();
+        }
+      });
+      btnReset.addEventListener('click', () => handle.resetView());
+      syncModeUI();
 
       // Colour cycling speed. Position 1 is the exact rate the renderer booted
       // with; 0 disables cycling, and 2..5 are integer multiples of that rate.
