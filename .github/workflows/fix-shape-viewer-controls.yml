@@ -2,14 +2,15 @@ name: Fix shape viewer controls
 
 on:
   push:
-    branches: [fix/shape-viewer-controls]
+    branches:
+      - fix/shape-viewer-controls
 
 permissions:
   contents: write
 
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,99 +18,14 @@ jobs:
           ref: fix/shape-viewer-controls
           fetch-depth: 0
 
-      - name: Restore viewer controls and terminology
+      - name: Patch shape viewer
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path('index.html')
-          s = p.read_text()
-
-          replacements = {
-              'The longest model name then sets': 'The longest shape name then sets',
-              'becomes a full-screen, navigable model.': 'becomes a full-screen, navigable shape.',
-              '<button id="btn-explorer">Enter explorer mode</button>': '<button id="btn-explorer">Enter shape viewer</button>',
-              '>Enter model viewer</button>': '>Enter shape viewer</button>',
-              'educational model viewer, a music visual, or an installation display.': 'educational shape viewer, a music visual, or an installation display.',
-              'Switch the model, palette, and quality tier using the panel.': 'Switch the shape, palette, and quality tier using the panel.',
-          }
-          for old, new in replacements.items():
-              if old not in s:
-                  raise SystemExit(f'missing expected text: {old}')
-              s = s.replace(old, new, 1)
-
-          anchor = """      document.getElementById('btn-resume').addEventListener('click', () => handle.resume());
-
-      // Colour cycling speed."""
-          block = """      document.getElementById('btn-resume').addEventListener('click', () => handle.resume());
-
-      // Shape viewer: full-screen orbit controls around the selected shape.
-      const btnExplorer = document.getElementById('btn-explorer');
-      const btnReset = document.getElementById('btn-reset');
-      const btnFly = document.getElementById('btn-fly');
-      // The library owns which camera mode is active and keeps orbit/fly
-      // mutually exclusive. Read that state back instead of duplicating it in
-      // the page so one mode cannot accidentally disable the other.
-      function syncModeUI() {
-        const i = handle.info;
-        document.body.classList.toggle('explorer', i.explorer);
-        document.body.classList.toggle('flying', i.fly);
-        btnExplorer.textContent = i.explorer ? 'Exit shape viewer' : 'Enter shape viewer';
-        btnFly.textContent = i.fly ? 'Exit fly-through' : 'Fly through';
-        btnFly.classList.toggle('on', i.fly);
-        btnReset.classList.toggle('hidden', !(i.explorer || i.fly));
-      }
-      function toggleShapeViewer(on) {
-        handle.setExplorer(on);
-        syncModeUI();
-      }
-      btnExplorer.addEventListener('click', () => toggleShapeViewer(!handle.info.explorer));
-      btnFly.addEventListener('click', () => {
-        handle.setFly(!handle.info.fly);
-        syncModeUI();
-        // Drop focus so the keyboard reaches flight controls rather than the
-        // button or the shape dropdown.
-        if (document.activeElement && document.activeElement.blur) {
-          document.activeElement.blur();
-        }
-      });
-      btnReset.addEventListener('click', () => handle.resetView());
-      syncModeUI();
-
-      // Colour cycling speed."""
-          if anchor not in s:
-              raise SystemExit('missing viewer-control insertion anchor')
-          s = s.replace(anchor, block, 1)
-
-          p.write_text(s)
-          PY
-
-      - name: Validate page script and restored wiring
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          s = Path('index.html').read_text()
-          required = [
-              "btnExplorer.addEventListener('click'",
-              "btnFly.addEventListener('click'",
-              "btnReset.addEventListener('click'",
-              "handle.setExplorer(on)",
-              "Enter shape viewer",
-              "Exit shape viewer",
-          ]
-          for needle in required:
-              assert needle in s, needle
-          assert 'Enter model viewer' not in s
-          m = re.search(r'<script type="module">(.*?)</script>', s, re.S)
-          assert m, 'module script not found'
-          Path('/tmp/index-script.mjs').write_text(m.group(1))
-          PY
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCmltcG9ydCByZQoKcCA9IFBhdGgoJ2luZGV4Lmh0bWwnKQpzID0gcC5yZWFkX3RleHQoKQoKcmVwbGFjZW1lbnRzID0gewogICAgJ1RoZSBsb25nZXN0IG1vZGVsIG5hbWUgdGhlbiBzZXRzJzogJ1RoZSBsb25nZXN0IHNoYXBlIG5hbWUgdGhlbiBzZXRzJywKICAgICdiZWNvbWVzIGEgZnVsbC1zY3JlZW4sIG5hdmlnYWJsZSBtb2RlbC4nOiAnYmVjb21lcyBhIGZ1bGwtc2NyZWVuLCBuYXZpZ2FibGUgc2hhcGUuJywKICAgICc8YnV0dG9uIGlkPSJidG4tZXhwbG9yZXIiPkVudGVyIGV4cGxvcmVyIG1vZGU8L2J1dHRvbj4nOiAnPGJ1dHRvbiBpZD0iYnRuLWV4cGxvcmVyIj5FbnRlciBzaGFwZSB2aWV3ZXI8L2J1dHRvbj4nLAogICAgJz5FbnRlciBtb2RlbCB2aWV3ZXI8L2J1dHRvbj4nOiAnPkVudGVyIHNoYXBlIHZpZXdlcjwvYnV0dG9uPicsCiAgICAnZWR1Y2F0aW9uYWwgbW9kZWwgdmlld2VyLCBhIG11c2ljIHZpc3VhbCwgb3IgYW4gaW5zdGFsbGF0aW9uIGRpc3BsYXkuJzogJ2VkdWNhdGlvbmFsIHNoYXBlIHZpZXdlciwgYSBtdXNpYyB2aXN1YWwsIG9yIGFuIGluc3RhbGxhdGlvbiBkaXNwbGF5LicsCiAgICAnU3dpdGNoIHRoZSBtb2RlbCwgcGFsZXR0ZSwgYW5kIHF1YWxpdHkgdGllciB1c2luZyB0aGUgcGFuZWwuJzogJ1N3aXRjaCB0aGUgc2hhcGUsIHBhbGV0dGUsIGFuZCBxdWFsaXR5IHRpZXIgdXNpbmcgdGhlIHBhbmVsLicsCn0KZm9yIG9sZCwgbmV3IGluIHJlcGxhY2VtZW50cy5pdGVtcygpOgogICAgaWYgb2xkIG5vdCBpbiBzOgogICAgICAgIHJhaXNlIFN5c3RlbUV4aXQoZidtaXNzaW5nIGV4cGVjdGVkIHRleHQ6IHtvbGR9JykKICAgIHMgPSBzLnJlcGxhY2Uob2xkLCBuZXcsIDEpCgphbmNob3IgPSAiICAgICAgZG9jdW1lbnQuZ2V0RWxlbWVudEJ5SWQoJ2J0bi1yZXN1bWUnKS5hZGRFdmVudExpc3RlbmVyKCdjbGljaycsICgpID0+IGhhbmRsZS5yZXN1bWUoKSk7XG5cbiAgICAgIC8vIENvbG91ciBjeWNsaW5nIHNwZWVkLiIKYmxvY2sgPSAiIiIgICAgICBkb2N1bWVudC5nZXRFbGVtZW50QnlJZCgnYnRuLXJlc3VtZScpLmFkZEV2ZW50TGlzdGVuZXIoJ2NsaWNrJywgKCkgPT4gaGFuZGxlLnJlc3VtZSgpKTsKCiAgICAgIC8vIFNoYXBlIHZpZXdlcjogZnVsbC1zY3JlZW4gb3JiaXQgY29udHJvbHMgYXJvdW5kIHRoZSBzZWxlY3RlZCBzaGFwZS4KICAgICAgY29uc3QgYnRuRXhwbG9yZXIgPSBkb2N1bWVudC5nZXRFbGVtZW50QnlJZCgnYnRuLWV4cGxvcmVyJyk7CiAgICAgIGNvbnN0IGJ0blJlc2V0ID0gZG9jdW1lbnQuZ2V0RWxlbWVudEJ5SWQoJ2J0bi1yZXNldCcpOwogICAgICBjb25zdCBidG5GbHkgPSBkb2N1bWVudC5nZXRFbGVtZW50QnlJZCgnYnRuLWZseScpOwogICAgICAvLyBUaGUgbGlicmFyeSBvd25zIHdoaWNoIGNhbWVyYSBtb2RlIGlzIGFjdGl2ZSBhbmQga2VlcHMgb3JiaXQvZmx5CiAgICAgIC8vIG11dHVhbGx5IGV4Y2x1c2l2ZS4gUmVhZCB0aGF0IHN0YXRlIGJhY2sgaW5zdGVhZCBvZiBkdXBsaWNhdGluZyBpdCBpbgogICAgICAvLyB0aGUgcGFnZSBzbyBvbmUgbW9kZSBjYW5ub3QgYWNjaWRlbnRhbGx5IGRpc2FibGUgdGhlIG90aGVyLgogICAgICBmdW5jdGlvbiBzeW5jTW9kZVVJKCkgewogICAgICAgIGNvbnN0IGkgPSBoYW5kbGUuaW5mbzsKICAgICAgICBkb2N1bWVudC5ib2R5LmNsYXNzTGlzdC50b2dnbGUoJ2V4cGxvcmVyJywgaS5leHBsb3Jlcik7CiAgICAgICAgZG9jdW1lbnQuYm9keS5jbGFzc0xpc3QudG9nZ2xlKCdmbHlpbmcnLCBpLmZseSk7CiAgICAgICAgYnRuRXhwbG9yZXIudGV4dENvbnRlbnQgPSBpLmV4cGxvcmVyID8gJ0V4aXQgc2hhcGUgdmlld2VyJyA6ICdFbnRlciBzaGFwZSB2aWV3ZXInOwogICAgICAgIGJ0bkZseS50ZXh0Q29udGVudCA9IGkuZmx5ID8gJ0V4aXQgZmx5LXRocm91Z2gnIDogJ0ZseSB0aHJvdWdoJzsKICAgICAgICBidG5GbHkuY2xhc3NMaXN0LnRvZ2dsZSgnb24nLCBpLmZseSk7CiAgICAgICAgYnRuUmVzZXQuY2xhc3NMaXN0LnRvZ2dsZSgnaGlkZGVuJywgIShpLmV4cGxvcmVyIHx8IGkuZmx5KSk7CiAgICAgIH0KICAgICAgZnVuY3Rpb24gdG9nZ2xlU2hhcGVWaWV3ZXIob24pIHsKICAgICAgICBoYW5kbGUuc2V0RXhwbG9yZXIob24pOwogICAgICAgIHN5bmNNb2RlVUkoKTsKICAgICAgfQogICAgICBidG5FeHBsb3Jlci5hZGRFdmVudExpc3RlbmVyKCdjbGljaycsICgpID0+IHRvZ2dsZVNoYXBlVmlld2VyKCFoYW5kbGUuaW5mby5leHBsb3JlcikpOwogICAgICBidG5GbHkuYWRkRXZlbnRMaXN0ZW5lcignY2xpY2snLCAoKSA9PiB7CiAgICAgICAgaGFuZGxlLnNldEZseSghaGFuZGxlLmluZm8uZmx5KTsKICAgICAgICBzeW5jTW9kZVVJKCk7CiAgICAgICAgLy8gRHJvcCBmb2N1cyBzbyB0aGUga2V5Ym9hcmQgcmVhY2hlcyBmbGlnaHQgY29udHJvbHMgcmF0aGVyIHRoYW4gdGhlCiAgICAgICAgLy8gYnV0dG9uIG9yIHRoZSBzaGFwZSBkcm9wZG93bi4KICAgICAgICBpZiAoZG9jdW1lbnQuYWN0aXZlRWxlbWVudCAmJiBkb2N1bWVudC5hY3RpdmVFbGVtZW50LmJsdXIpIHsKICAgICAgICAgIGRvY3VtZW50LmFjdGl2ZUVsZW1lbnQuYmx1cigpOwogICAgICAgIH0KICAgICAgfSk7CiAgICAgIGJ0blJlc2V0LmFkZEV2ZW50TGlzdGVuZXIoJ2NsaWNrJywgKCkgPT4gaGFuZGxlLnJlc2V0VmlldygpKTsKICAgICAgc3luY01vZGVVSSgpOwoKICAgICAgLy8gQ29sb3VyIGN5Y2xpbmcgc3BlZWQuIiIiCmlmIGFuY2hvciBub3QgaW4gczoKICAgIHJhaXNlIFN5c3RlbUV4aXQoJ21pc3Npbmcgdmlld2VyLWNvbnRyb2wgaW5zZXJ0aW9uIGFuY2hvcicpCnMgPSBzLnJlcGxhY2UoYW5jaG9yLCBibG9jaywgMSkKCnJlcXVpcmVkID0gWwogICAgImJ0bkV4cGxvcmVyLmFkZEV2ZW50TGlzdGVuZXIoJ2NsaWNrJyIsCiAgICAiYnRuRmx5LmFkZEV2ZW50TGlzdGVuZXIoJ2NsaWNrJyIsCiAgICAiYnRuUmVzZXQuYWRkRXZlbnRMaXN0ZW5lcignY2xpY2snIiwKICAgICJoYW5kbGUuc2V0RXhwbG9yZXIob24pIiwKICAgICJFbnRlciBzaGFwZSB2aWV3ZXIiLAogICAgIkV4aXQgc2hhcGUgdmlld2VyIiwKXQpmb3IgbmVlZGxlIGluIHJlcXVpcmVkOgogICAgYXNzZXJ0IG5lZWRsZSBpbiBzLCBuZWVkbGUKYXNzZXJ0ICdFbnRlciBtb2RlbCB2aWV3ZXInIG5vdCBpbiBzCgpwLndyaXRlX3RleHQocykKCm0gPSByZS5zZWFyY2gocic8c2NyaXB0IHR5cGU9Im1vZHVsZSI+KC4qPyk8L3NjcmlwdD4nLCBzLCByZS5TKQphc3NlcnQgbSwgJ21vZHVsZSBzY3JpcHQgbm90IGZvdW5kJwpQYXRoKCcvdG1wL2luZGV4LXNjcmlwdC5tanMnKS53cml0ZV90ZXh0KG0uZ3JvdXAoMSkpCg==' | base64 -d > /tmp/patch_viewer.py
+          python3 /tmp/patch_viewer.py
           node --check /tmp/index-script.mjs
 
-      - name: Commit patch and remove one-shot workflow
+      - name: Commit repair
         shell: bash
         run: |
           rm .github/workflows/fix-shape-viewer-controls.yml
