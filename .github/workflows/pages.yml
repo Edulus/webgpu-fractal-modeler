@@ -10,10 +10,11 @@ permissions:
   pages: write
   id-token: write
 
-# Let an in-flight deploy finish rather than cancelling it; never run two at once.
+# A fresh main deployment supersedes any stale/in-flight Pages run. This keeps
+# an abandoned deployment from blocking newer commits indefinitely.
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deploy:
