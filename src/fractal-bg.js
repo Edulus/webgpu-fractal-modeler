@@ -295,6 +295,9 @@ export async function initFractalBackground(canvas, options = {}) {
       // than towards zero, so a view that has been moved keeps drifting; a
       // zero direction (never dragged, or reset) means it settles to a stop.
       vyaw: 0, vpitch: 0, dyaw: 0, dpitch: 0,
+      // Timestamp of the most recent non-zero drag sample. Pointer release uses
+      // this to distinguish a true flick from a drag that paused before lifting.
+      flickAt: 0,
       target: [0, 0, 0],
       dist: 2.55,
       pinned: false,     // has the target been placed on a surface?
@@ -838,7 +841,10 @@ export async function initFractalBackground(canvas, options = {}) {
       // to the eased angle instead would put it in tension with the easing
       // spring, which pulls back towards the target: the two balance at a fixed
       // offset and the drift silently stalls.
-      if (!rm) {
+      // While a pointer is down, direct manipulation owns the target angles.
+      // Momentum begins only after release, so the object does not run away under
+      // the user's finger or mouse while a throw velocity is being sampled.
+      if (!rm && state.pointers.size === 0) {
         const dt = Math.min(state.frameDt / 1000, 0.1);
         // The floor is scaled the same way a drag is, so a drift that is barely
         // perceptible framing the whole model does not become a sweep once the
@@ -856,7 +862,7 @@ export async function initFractalBackground(canvas, options = {}) {
           o.dpitch = -o.dpitch;
           o.vpitch = -o.vpitch;
         }
-      } else {
+      } else if (rm) {
         o.vyaw = 0; o.vpitch = 0;
       }
       o.tpitch = Math.max(-1.45, Math.min(1.45, o.tpitch));
@@ -1269,6 +1275,13 @@ export async function initFractalBackground(canvas, options = {}) {
   const DIST_MIN_F = 1e-4;
   const DIST_MAX_F = 14.0;
   const TAP_MOVE = 10;     // px of movement that disqualifies a tap
+  // Flick sampling is time-normalised, so a fast 1000 Hz mouse and a 60 Hz
+  // touchscreen impart comparable angular velocity for the same physical throw.
+  const FLICK_MAX_RATE = 8.0;          // rad/s, safety cap (~1.27 turns/s)
+  const FLICK_MIN_DT_MS = 1.0;         // reject sub-millisecond timing spikes
+  const FLICK_MAX_DT_MS = 80.0;        // stale samples are not treated as speed
+  const FLICK_SMOOTH_MS = 24.0;        // velocity EMA time constant
+  const FLICK_RELEASE_GRACE_MS = 110;  // pause longer than this kills the throw
 
   function clampDist(d) {
     const baseR = CAM_RADIUS[state.fractalType] ?? 2.55;
@@ -1352,16 +1365,25 @@ export async function initFractalBackground(canvas, options = {}) {
   function onPointerDown(e) {
     if (!state.controls) return;
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
-    state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    state.lastInteract = performance.now();
+    const now = performance.now();
+    state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, t: now });
+    state.lastInteract = now;
     state.accumSamples = 0;
     if (state.pointers.size === 1) {
       // Begin a fresh gesture; remember where, to distinguish tap from drag.
       state.gestureMoved = false;
       state.gestureMulti = false;
       state.tapStart = { x: e.clientX, y: e.clientY };
+      if (!state.fly) {
+        // Grabbing a spinning object catches it immediately. New momentum will
+        // be sampled from this gesture and released only when the pointer lifts.
+        state.orbit.vyaw = 0; state.orbit.vpitch = 0; state.orbit.flickAt = 0;
+      }
     }
     if (state.pointers.size >= 2) {
+      if (!state.fly) {
+        state.orbit.vyaw = 0; state.orbit.vpitch = 0; state.orbit.flickAt = 0;
+      }
       // A second finger means this is a pinch, never a tap. Re-baseline the
       // separation on every touch down: which two pointers pinchDistance()
       // measures can change as fingers land, and carrying a stale baseline
@@ -1374,10 +1396,13 @@ export async function initFractalBackground(canvas, options = {}) {
   function onPointerMove(e) {
     if (!state.controls || !state.pointers.has(e.pointerId)) return;
     const prev = state.pointers.get(e.pointerId);
+    const now = performance.now();
+    const elapsed = prev.t == null ? 16.7 : now - prev.t;
+    const dtMs = Math.max(FLICK_MIN_DT_MS, Math.min(FLICK_MAX_DT_MS, elapsed));
     const dx = e.clientX - prev.x;
     const dy = e.clientY - prev.y;
-    state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    state.lastInteract = performance.now();
+    state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, t: now });
+    state.lastInteract = now;
     state.accumSamples = 0;
 
     const k = 3.2 / Math.max(300, Math.min(window.innerWidth, window.innerHeight));
@@ -1416,16 +1441,25 @@ export async function initFractalBackground(canvas, options = {}) {
       const ok = k * orbitDragScale(state.orbit.dist / baseR, state.orbit.pinned);
       state.orbit.tyaw += dx * ok;
       state.orbit.tpitch += dy * ok;
-      // Throw velocity, in rad/s (the 9 is the old per-frame 0.15 restated at
-      // 60fps). A zero-delta event deliberately zeroes the velocity but leaves
-      // the DIRECTION alone: stopping the finger before lifting should kill the
-      // throw, not the drift, and the last few events of a gesture are often
-      // jitter about a standstill.
-      state.orbit.vyaw = dx * ok * 9;
-      state.orbit.vpitch = dy * ok * 9;
+      // Sample angular velocity in rad/s from distance / elapsed time rather
+      // than distance / pointer event. That makes an energetic flick energetic
+      // on both high-polling mice and lower-rate touchscreens. Smooth the samples
+      // over a short real-time window, then cap the vector to prevent one noisy
+      // event from launching an unusably fast spin.
+      let sampleYaw = dx * ok * (1000 / dtMs);
+      let samplePitch = dy * ok * (1000 / dtMs);
+      const sampleMag = Math.hypot(sampleYaw, samplePitch);
+      if (sampleMag > FLICK_MAX_RATE) {
+        const s = FLICK_MAX_RATE / sampleMag;
+        sampleYaw *= s; samplePitch *= s;
+      }
+      const w = 1 - Math.exp(-dtMs / FLICK_SMOOTH_MS);
+      state.orbit.vyaw += (sampleYaw - state.orbit.vyaw) * w;
+      state.orbit.vpitch += (samplePitch - state.orbit.vpitch) * w;
       if (dx || dy) {
         state.orbit.dyaw = state.orbit.vyaw;
         state.orbit.dpitch = state.orbit.vpitch;
+        state.orbit.flickAt = now;
       }
       if (state.tapStart &&
           Math.hypot(e.clientX - state.tapStart.x, e.clientY - state.tapStart.y) > TAP_MOVE) {
@@ -1437,9 +1471,11 @@ export async function initFractalBackground(canvas, options = {}) {
 
   function onPointerUp(e) {
     if (!state.pointers.has(e.pointerId)) return;
+    const now = performance.now();
+    const cancelled = e.type === 'pointercancel';
     try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
     state.pointers.delete(e.pointerId);
-    state.lastInteract = performance.now();
+    state.lastInteract = now;
 
     if (state.pointers.size >= 2) {
       // Still a pinch, but on a different pair of fingers. Same reason as on
@@ -1450,8 +1486,23 @@ export async function initFractalBackground(canvas, options = {}) {
       // Dropped from a pinch to one finger: continuing as a drag, not a tap.
       state.gestureMoved = true;
       const remaining = [...state.pointers.values()][0];
+      state.pointers.set([...state.pointers.keys()][0], { ...remaining, t: now });
       state.tapStart = { x: remaining.x, y: remaining.y };
+      if (!state.fly) {
+        // A pinch transitioning back to one finger starts a fresh throw sample.
+        state.orbit.vyaw = 0; state.orbit.vpitch = 0; state.orbit.flickAt = 0;
+      }
     } else if (state.pointers.size === 0) {
+      if (!state.fly) {
+        // Releasing immediately after motion launches the sampled velocity. If
+        // the user paused before lifting (or the OS cancelled the gesture), the
+        // throw is suppressed while the existing subtle drift direction remains.
+        const recent = state.orbit.flickAt > 0
+          && now - state.orbit.flickAt <= FLICK_RELEASE_GRACE_MS;
+        if (cancelled || !recent) {
+          state.orbit.vyaw = 0; state.orbit.vpitch = 0;
+        }
+      }
       // Gesture fully ended. A clean single-finger tap (no movement, no pinch)
       // counts toward the double-tap — a pinch release never does.
       if (state.controls && !state.gestureMoved && !state.gestureMulti) {
@@ -1683,7 +1734,7 @@ export async function initFractalBackground(canvas, options = {}) {
   function freezeView() {
     const o = state.orbit;
     o.tyaw = o.yaw; o.tpitch = o.pitch;
-    o.vyaw = 0; o.vpitch = 0; o.dyaw = 0; o.dpitch = 0;
+    o.vyaw = 0; o.vpitch = 0; o.dyaw = 0; o.dpitch = 0; o.flickAt = 0;
     state.accumSamples = 0;
     state.lastInteract = performance.now();
     nudgeRender();
@@ -1695,7 +1746,7 @@ export async function initFractalBackground(canvas, options = {}) {
     // the only full stop: with no direction to settle onto, momentum decays to
     // nothing and the view holds still (and can then converge).
     o.tyaw = 0.6; o.tpitch = 0.35;
-    o.vyaw = 0; o.vpitch = 0; o.dyaw = 0; o.dpitch = 0;
+    o.vyaw = 0; o.vpitch = 0; o.dyaw = 0; o.dpitch = 0; o.flickAt = 0;
     o.target[0] = 0; o.target[1] = 0; o.target[2] = 0;
     o.dist = CAM_RADIUS[state.fractalType] ?? 2.55;
     o.pinned = false;
