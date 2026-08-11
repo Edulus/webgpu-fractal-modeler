@@ -1,0 +1,120 @@
+name: Fix shape viewer controls
+
+on:
+  push:
+    branches: [fix/shape-viewer-controls]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/shape-viewer-controls
+          fetch-depth: 0
+
+      - name: Restore viewer controls and terminology
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('index.html')
+          s = p.read_text()
+
+          replacements = {
+              'The longest model name then sets': 'The longest shape name then sets',
+              'becomes a full-screen, navigable model.': 'becomes a full-screen, navigable shape.',
+              '<button id="btn-explorer">Enter explorer mode</button>': '<button id="btn-explorer">Enter shape viewer</button>',
+              '>Enter model viewer</button>': '>Enter shape viewer</button>',
+              'educational model viewer, a music visual, or an installation display.': 'educational shape viewer, a music visual, or an installation display.',
+              'Switch the model, palette, and quality tier using the panel.': 'Switch the shape, palette, and quality tier using the panel.',
+          }
+          for old, new in replacements.items():
+              if old not in s:
+                  raise SystemExit(f'missing expected text: {old}')
+              s = s.replace(old, new, 1)
+
+          anchor = """      document.getElementById('btn-resume').addEventListener('click', () => handle.resume());
+
+      // Colour cycling speed."""
+          block = """      document.getElementById('btn-resume').addEventListener('click', () => handle.resume());
+
+      // Shape viewer: full-screen orbit controls around the selected shape.
+      const btnExplorer = document.getElementById('btn-explorer');
+      const btnReset = document.getElementById('btn-reset');
+      const btnFly = document.getElementById('btn-fly');
+      // The library owns which camera mode is active and keeps orbit/fly
+      // mutually exclusive. Read that state back instead of duplicating it in
+      // the page so one mode cannot accidentally disable the other.
+      function syncModeUI() {
+        const i = handle.info;
+        document.body.classList.toggle('explorer', i.explorer);
+        document.body.classList.toggle('flying', i.fly);
+        btnExplorer.textContent = i.explorer ? 'Exit shape viewer' : 'Enter shape viewer';
+        btnFly.textContent = i.fly ? 'Exit fly-through' : 'Fly through';
+        btnFly.classList.toggle('on', i.fly);
+        btnReset.classList.toggle('hidden', !(i.explorer || i.fly));
+      }
+      function toggleShapeViewer(on) {
+        handle.setExplorer(on);
+        syncModeUI();
+      }
+      btnExplorer.addEventListener('click', () => toggleShapeViewer(!handle.info.explorer));
+      btnFly.addEventListener('click', () => {
+        handle.setFly(!handle.info.fly);
+        syncModeUI();
+        // Drop focus so the keyboard reaches flight controls rather than the
+        // button or the shape dropdown.
+        if (document.activeElement && document.activeElement.blur) {
+          document.activeElement.blur();
+        }
+      });
+      btnReset.addEventListener('click', () => handle.resetView());
+      syncModeUI();
+
+      // Colour cycling speed."""
+          if anchor not in s:
+              raise SystemExit('missing viewer-control insertion anchor')
+          s = s.replace(anchor, block, 1)
+
+          p.write_text(s)
+          PY
+
+      - name: Validate page script and restored wiring
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          s = Path('index.html').read_text()
+          required = [
+              "btnExplorer.addEventListener('click'",
+              "btnFly.addEventListener('click'",
+              "btnReset.addEventListener('click'",
+              "handle.setExplorer(on)",
+              "Enter shape viewer",
+              "Exit shape viewer",
+          ]
+          for needle in required:
+              assert needle in s, needle
+          assert 'Enter model viewer' not in s
+          m = re.search(r'<script type="module">(.*?)</script>', s, re.S)
+          assert m, 'module script not found'
+          Path('/tmp/index-script.mjs').write_text(m.group(1))
+          PY
+          node --check /tmp/index-script.mjs
+
+      - name: Commit patch and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/fix-shape-viewer-controls.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html .github/workflows/fix-shape-viewer-controls.yml
+          git commit -m "Restore shape viewer controls"
+          git push origin HEAD:fix/shape-viewer-controls
