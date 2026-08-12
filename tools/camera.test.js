@@ -9,7 +9,8 @@
 
 import {
   makeFlyCamera, stepFlyCamera, aimFlyCamera, dollyFlyCamera, scaleFlySpeed,
-  flyBasis, aimAtOrigin, MAX_PITCH, FLY_SPEED_MIN, FLY_SPEED_MAX,
+  flyBasis, orbitBasis, flickVelocity, FLICK_WINDOW_MS, FLICK_MAX_RATE,
+  aimAtOrigin, MAX_PITCH, FLY_SPEED_MIN, FLY_SPEED_MAX,
   usableClearance, travelDistance, orbitDragScale,
   pinchZoomFactor, pinchDollyDistance, driftFloor, decayMomentum,
   CLEAR_MIN, CLEAR_MAX, TRAVEL_K, DRAG_MIN, DRAG_MAX,
@@ -343,6 +344,58 @@ console.log('\npinch to dolly (fly mode)');
     check(`degenerate delta ${bad} travels nothing`,
           pinchDollyDistance(1, bad) === 0);
   }
+}
+
+console.log('\nflick velocity: event-rate and axis independent');
+{
+  const scale = 0.01;
+  const gesture = (hz, dx, dy, ms = 60) => {
+    const n = Math.max(2, Math.round(hz * ms / 1000));
+    const samples = [];
+    for (let i = 0; i <= n; i++) {
+      const f = i / n;
+      samples.push({ x: dx * f, y: dy * f, t: ms * f });
+    }
+    return flickVelocity(samples, scale);
+  };
+
+  const mouse = gesture(1000, 120, 0);
+  const touch = gesture(60, 120, 0);
+  check('1000Hz mouse and 60Hz touch give the same throw',
+        near(mouse[0], touch[0], 1e-9), `${mouse[0]} vs ${touch[0]}`);
+
+  const horizontal = gesture(120, 24, 0, 80);
+  const vertical = gesture(120, 0, 24, 80);
+  check('horizontal and vertical flicks have equal gain',
+        near(Math.abs(horizontal[0]), Math.abs(vertical[1]), 1e-9));
+  check('pure vertical has no yaw leakage', near(vertical[0], 0, 1e-12));
+  check('pure horizontal has no pitch leakage', near(horizontal[1], 0, 1e-12));
+
+  const diagonal = gesture(120, 1000, 1000, FLICK_WINDOW_MS);
+  check('diagonal safety cap applies to the vector',
+        near(Math.hypot(...diagonal), FLICK_MAX_RATE, 1e-9));
+
+  check('sub-millisecond polling noise cannot launch a throw',
+        flickVelocity([{x:0,y:0,t:0}, {x:100,y:0,t:1}], scale).every(v => v === 0));
+}
+
+console.log('\norbit basis: vertical revolutions are continuous');
+{
+  for (const pitch of [0, Math.PI / 2, Math.PI, 3 * Math.PI / 2, 2 * Math.PI]) {
+    const b = orbitBasis(0.73, pitch);
+    check(`basis finite at pitch ${pitch.toFixed(3)}`,
+          [...b.dir, ...b.right, ...b.up].every(Number.isFinite));
+    check(`basis unit at pitch ${pitch.toFixed(3)}`,
+          near(len(b.dir), 1, 1e-9) && near(len(b.right), 1, 1e-9) && near(len(b.up), 1, 1e-9));
+    check(`screen axes stay perpendicular at pitch ${pitch.toFixed(3)}`,
+          near(dot(b.dir, b.right), 0, 1e-9) &&
+          near(dot(b.dir, b.up), 0, 1e-9) &&
+          near(dot(b.right, b.up), 0, 1e-9));
+  }
+  const a = orbitBasis(1.17, 0.35).dir;
+  const b = orbitBasis(1.17, 0.35 + Math.PI * 2).dir;
+  check('one full vertical revolution returns to the same eye direction',
+        a.every((v, i) => near(v, b[i], 1e-9)));
 }
 
 console.log('\norbit momentum: a throw that never quite dies');

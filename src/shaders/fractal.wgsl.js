@@ -1719,7 +1719,16 @@ fn cameraRay(uv : vec2<f32>, ro : vec3<f32>, ta : vec3<f32>, fov : f32) -> vec3<
   var p = (uv * 2.0 - 1.0);
   p.x = p.x * aspect;
   let fwd = normalize(ta - ro);
-  let right = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), fwd));
+  // detail.w carries Shape Viewer's wrapped yaw. It gives a screen-right vector
+  // that remains defined at the north/south poles, allowing pitch to continue
+  // through +/-PI/2. Outside Shape Viewer JS writes sentinel 10 and the original
+  // world-up camera basis is preserved.
+  var right : vec3<f32>;
+  if (abs(u.detail.w) < 4.0) {
+    right = vec3<f32>(-sin(u.detail.w), 0.0, cos(u.detail.w));
+  } else {
+    right = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), fwd));
+  }
   let up = cross(fwd, right);
   let focal = 1.0 / tan(fov * 0.5);
   return normalize(p.x * right + p.y * up + focal * fwd);
