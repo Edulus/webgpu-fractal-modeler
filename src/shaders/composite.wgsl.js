@@ -141,7 +141,10 @@ fn attractorPalette(t : f32) -> vec3<f32> {
 fn resolveScene(uv : vec2<f32>) -> vec4<f32> {
   let m = textureSampleLevel(srcTex, samp, uv, 0.0);
   let a = textureSampleLevel(auxTex, samp, uv, 0.0);
-  let phase = select(u.colorPhase, 0.0, u.reducedMotion > 0.5);
+  // Reduced-motion policy is enforced on the CPU. If the user explicitly
+  // moves the colour-speed slider, u.colorPhase is allowed to advance even
+  // under reduced motion, so the shader must consume that phase unchanged.
+  let phase = u.colorPhase;
   let bg = backgroundColor(uv);
   let missBg = select(0.0, a.w, u.bgMode >= 0.5);
   var color = bg * (a.x + missBg);

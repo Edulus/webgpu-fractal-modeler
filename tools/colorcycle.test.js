@@ -8,6 +8,7 @@
 // blending produces the same running mean as the old accumulation shader, and
 // the explicit Hue slider remains a separate post-image adjustment.
 
+import { readFileSync } from 'node:fs';
 import { PALETTES } from '../src/palettes.js';
 import { colorCycleMotionAllowed, colorCycleNeedsLoop } from '../src/fractal-bg.js';
 
@@ -66,6 +67,15 @@ console.log('\ncolour-cycle motion policy');
         !colorCycleNeedsLoop(true, false, true, 0));
   check('interactive viewer keeps rendering under reduced motion',
         colorCycleNeedsLoop(true, true, false, 0));
+}
+
+console.log('\nshader colour-cycle phase');
+{
+  const shaderSource = readFileSync(new URL('../src/shaders/composite.wgsl.js', import.meta.url), 'utf8');
+  check('composite consumes the CPU-approved colour phase directly',
+        shaderSource.includes('let phase = u.colorPhase;'));
+  check('composite no longer suppresses colour phase under reduced motion',
+        !shaderSource.includes('select(u.colorPhase, 0.0, u.reducedMotion'));
 }
 
 console.log('\npalette-coordinate cycling');
