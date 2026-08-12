@@ -9,6 +9,7 @@
 // the explicit Hue slider remains a separate post-image adjustment.
 
 import { PALETTES } from '../src/palettes.js';
+import { colorCycleMotionAllowed, colorCycleNeedsLoop } from '../src/fractal-bg.js';
 
 const PI = Math.PI;
 const TAU = 2 * PI;
@@ -47,6 +48,24 @@ function resolveDE(m, a, palette, phase = 0, { bgMode = true, bg = [0.01, 0.015,
   if (a[2] > 1e-9) c = add(c, scale(palette(a[1] / a[2] + phase), a[2]));
   c = add(c, scale(palette(0.5 + phase), m[3] * 0.4));
   return c;
+}
+
+console.log('\ncolour-cycle motion policy');
+{
+  check('reduced motion suppresses the autonomous boot-time cycle',
+        !colorCycleMotionAllowed(true, false));
+  check('moving the slider explicitly opts colour motion back in',
+        colorCycleMotionAllowed(true, true));
+  check('normal motion allows cycling without an explicit opt-in',
+        colorCycleMotionAllowed(false, false));
+  check('reduced-motion static page can sleep before opt-in',
+        !colorCycleNeedsLoop(true, false, false, 0.025));
+  check('positive explicit slider rate keeps the reduced-motion page rendering',
+        colorCycleNeedsLoop(true, false, true, 0.025));
+  check('slider at zero lets a reduced-motion static page sleep again',
+        !colorCycleNeedsLoop(true, false, true, 0));
+  check('interactive viewer keeps rendering under reduced motion',
+        colorCycleNeedsLoop(true, true, false, 0));
 }
 
 console.log('\npalette-coordinate cycling');
