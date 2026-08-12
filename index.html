@@ -922,7 +922,12 @@
         const value = document.getElementById('cycle-speed-value');
         const currentRate = Math.max(0, Number(handle.info.colorCycle) || 0);
         const baseRate = currentRate > 0 ? currentRate : 0.025;
-        speed.value = currentRate > 0 ? '1' : '0';
+        // On a reduced-motion desktop the boot-time colour cycle is suppressed.
+        // Reflect the EFFECTIVE state so the control does not say speed 1 while
+        // the picture is static; moving it above zero is an explicit opt-in.
+        const cycleActive = handle.info.colorCycleActive
+          ?? (currentRate > 0 && !handle.info.reducedMotion);
+        speed.value = cycleActive ? '1' : '0';
         value.textContent = speed.value;
         speed.addEventListener('input', () => {
           value.textContent = speed.value;

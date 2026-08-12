@@ -30,6 +30,17 @@ import {
   planDeviceLoss, MAX_REINITS,
 } from './camera.js';
 
+// Reduced-motion suppresses autonomous colour cycling, but a user moving
+// the colour-speed slider is an explicit request for that animation. Keep
+// this policy pure so the desktop/reduced-motion behaviour is testable.
+export function colorCycleMotionAllowed(reducedMotion, explicit) {
+  return !reducedMotion || !!explicit;
+}
+
+export function colorCycleNeedsLoop(reducedMotion, controls, explicit, rate) {
+  return !reducedMotion || !!controls || (!!explicit && Number(rate) > 0);
+}
+
 // ---- Uniform buffer layout (mirror of the WGSL Uniforms struct) -----------
 // 56 f32 slots = 224 bytes. Byte offset = slot * 4.
 const U = {
@@ -325,6 +336,10 @@ export async function initFractalBackground(canvas, options = {}) {
     // Palette cycles per second. Phase advances independently of the geometry
     // clock so it keeps moving after progressive accumulation has converged.
     colorCycle: opts.colorCycle ?? 0.025,
+    // False until the user explicitly moves the colour-speed control.
+    // This lets prefers-reduced-motion suppress the boot-time animation
+    // without disabling a later deliberate request from the user.
+    colorCycleExplicit: false,
     colorPhase: 0,
     // Neutral by default, so the shipped image is unchanged.
     image: { exposure: 1, contrast: 1, saturation: 1, hue: 0 },
@@ -914,7 +929,8 @@ export async function initFractalBackground(canvas, options = {}) {
     // integrated phase. Separating this clock from animTime is what lets colour
     // keep moving while geometry is frozen for progressive accumulation.
     d[U.colorCycle] = state.colorCycle;
-    d[U.colorPhase] = rm ? 0.0 : state.colorPhase;
+    d[U.colorPhase] = colorCycleMotionAllowed(rm, state.colorCycleExplicit)
+      ? state.colorPhase : 0.0;
     const im = state.image;
     const rg = LADDER[clampIndex(state.detailRung)];
     d[U.detail] = rg.steps;
@@ -1179,16 +1195,18 @@ export async function initFractalBackground(canvas, options = {}) {
     state.frameDt = dt;
 
     const acc = accumulating(nowMs);
-    if (!reducedMotion()) {
-      // Palette phase has its own clock: it remains live on a converged frame.
-      // Geometry time still freezes while accumulating, so the material samples
-      // describe one stable scene instead of smearing animation together.
+    const rm = reducedMotion();
+    // Colour cycling is independent of geometry motion. Reduced-motion keeps
+    // autonomous animation still, while moving the speed slider explicitly
+    // opts colour motion back in.
+    if (colorCycleMotionAllowed(rm, state.colorCycleExplicit)) {
       state.colorPhase += (dt / 1000) * state.colorCycle;
-      if (!acc) {
-        state.animTime += dt / 1000;
-        state.parallax.x += (state.parallax.tx - state.parallax.x) * 0.05;
-        state.parallax.y += (state.parallax.ty - state.parallax.y) * 0.05;
-      }
+    }
+    // Geometry/parallax remain governed by reduced-motion exactly as before.
+    if (!rm && !acc) {
+      state.animTime += dt / 1000;
+      state.parallax.x += (state.parallax.tx - state.parallax.x) * 0.05;
+      state.parallax.y += (state.parallax.ty - state.parallax.y) * 0.05;
     }
 
     if (acc) {
@@ -1210,10 +1228,11 @@ export async function initFractalBackground(canvas, options = {}) {
   // ---- Lifecycle ----
   function start() {
     if (state.running || state.disposed) return;
-    // Under reduced-motion we normally render a single static pose. But when
-    // interactive controls are on (explorer mode), keep the loop alive so
-    // drag/pinch/zoom stay smooth — we just don't auto-animate parameters.
-    if (reducedMotion() && !state.controls) {
+    // Under reduced-motion we normally render a single static pose. Keep the
+    // loop alive for interactive navigation, or when the user explicitly asks
+    // the colour-speed slider for a non-zero animation rate.
+    if (!colorCycleNeedsLoop(
+      reducedMotion(), state.controls, state.colorCycleExplicit, state.colorCycle)) {
       renderFrame(performance.now(), true);
       return;
     }
@@ -1906,8 +1925,20 @@ export async function initFractalBackground(canvas, options = {}) {
      * while the selected palette moves across its stored coordinates.
      */
     setColorCycle(rate) {
+      // Calling this method represents deliberate user/application intent. It
+      // therefore overrides the automatic reduced-motion suppression for the
+      // colour cycle only; geometry motion remains suppressed.
+      state.colorCycleExplicit = true;
       state.colorCycle = Math.max(0, Number(rate) || 0);
-      if (!state.running) renderFrame(performance.now(), true);
+      // A reduced-motion landing page may be sitting on its one static frame.
+      // Re-evaluate the loop immediately: positive rates animate, zero goes
+      // back to sleeping after presenting the current phase once.
+      if (reducedMotion() && !state.controls) {
+        stop();
+        updateRunning();
+      } else if (!state.running) {
+        renderFrame(performance.now(), true);
+      }
     },
     setPalette(name) {
       state.palette = getPalette(name);
@@ -2027,6 +2058,8 @@ export async function initFractalBackground(canvas, options = {}) {
         clearance: Number.isFinite(state.probeDist) ? +state.probeDist.toFixed(4) : null,
         samples: state.accumSamples,
         colorCycle: state.colorCycle,
+        colorCycleActive: state.colorCycle > 0
+          && colorCycleMotionAllowed(reducedMotion(), state.colorCycleExplicit),
         image: { ...state.image },
         zoom: +(state.orbit.dist / (CAM_RADIUS[state.fractalType] ?? 2.55)).toFixed(3),
         pinned: state.orbit.pinned,
