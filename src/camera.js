@@ -40,6 +40,23 @@ export function flyBasis(yaw, pitch) {
 }
 
 /**
+ * Pole-safe basis for the orbit camera.
+ *
+ * Unlike a world-up cross product, this stays defined as pitch passes through
+ * +/-PI/2, so a vertical flick can carry the camera through a pole and continue
+ * into a full end-over-end revolution. `dir` points target -> eye.
+ */
+export function orbitBasis(yaw, pitch) {
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  return {
+    dir: [cy * cp, sp, sy * cp],
+    right: [-sy, 0, cy],
+    up: [-cy * sp, cp, -sy * sp],
+  };
+}
+
+/**
  * Yaw/pitch that points a camera at `pos` back towards the origin.
  * @returns {{yaw: number, pitch: number}}
  */
@@ -209,6 +226,48 @@ export function decayMomentum(v, floor, dtSec) {
   if (!Number.isFinite(v)) return floor;
   const dt = clamp(dtSec, 0, 0.25);
   return floor + (v - floor) * Math.pow(0.5, dt / MOMENTUM_HALFLIFE);
+}
+
+// A release velocity should describe the gesture, not whichever single pointer
+// event happened to arrive last. Browsers can deliver a 1000Hz mouse as tiny
+// events, coalesce them, or leave the final few pixels for pointerup. Measuring
+// a short trailing time window makes all three representations equivalent.
+export const FLICK_WINDOW_MS = 72;
+export const FLICK_MAX_RATE = 8.0;
+
+/**
+ * Angular release velocity from pointer samples `{x,y,t}`.
+ * Returns [yawRate, pitchRate] in rad/s and caps the 2D vector as a whole.
+ */
+export function flickVelocity(samples, angularScale, maxRate = FLICK_MAX_RATE,
+                              windowMs = FLICK_WINDOW_MS) {
+  if (!Array.isArray(samples) || samples.length < 2 || !(angularScale > 0)) return [0, 0];
+  const clean = samples.filter((q) =>
+    q && Number.isFinite(q.x) && Number.isFinite(q.y) && Number.isFinite(q.t));
+  if (clean.length < 2) return [0, 0];
+
+  const last = clean[clean.length - 1];
+  const cutoff = last.t - Math.max(1, Number(windowMs) || FLICK_WINDOW_MS);
+  let first = clean[0];
+  // Choose the oldest sample still inside the trailing window. Keeping at
+  // least one earlier sample makes a release just after the boundary stable.
+  for (let i = clean.length - 2; i >= 0; i--) {
+    first = clean[i];
+    if (first.t <= cutoff) break;
+  }
+  const dtMs = last.t - first.t;
+  // Sub-millisecond intervals are polling noise, not a trustworthy gesture.
+  if (!(dtMs >= 2)) return [0, 0];
+
+  let yaw = (last.x - first.x) * angularScale * (1000 / dtMs);
+  let pitch = (last.y - first.y) * angularScale * (1000 / dtMs);
+  const mag = Math.hypot(yaw, pitch);
+  const cap = Math.max(0, Number(maxRate) || 0);
+  if (cap > 0 && mag > cap) {
+    const k = cap / mag;
+    yaw *= k; pitch *= k;
+  }
+  return [yaw, pitch];
 }
 
 // ---- Pinch gestures -------------------------------------------------------

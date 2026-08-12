@@ -25,6 +25,7 @@ import { clampStops, averageColor, MAX_STOPS } from './palette-io.js';
 import {
   makeFlyCamera, stepFlyCamera, aimFlyCamera, dollyFlyCamera, scaleFlySpeed,
   usableClearance, orbitDragScale, pinchZoomFactor, pinchDollyDistance,
+  orbitBasis, flickVelocity, FLICK_WINDOW_MS,
   driftFloor, decayMomentum, DRIFT_RATE, FLY_SPEED_MIN, FLY_SPEED_MAX,
   planDeviceLoss, MAX_REINITS,
 } from './camera.js';
@@ -298,6 +299,7 @@ export async function initFractalBackground(canvas, options = {}) {
       // Timestamp of the most recent non-zero drag sample. Pointer release uses
       // this to distinguish a true flick from a drag that paused before lifting.
       flickAt: 0,
+      flickSamples: [],
       target: [0, 0, 0],
       dist: 2.55,
       pinned: false,     // has the target been placed on a surface?
@@ -813,6 +815,7 @@ export async function initFractalBackground(canvas, options = {}) {
     const radius = baseR;
 
     let camX, camY, camZ;
+    let camUpX = 0, camUpY = 1, camUpZ = 0;
     let tgtX = 0, tgtY = rm ? 0.0 : Math.sin(t * 0.05) * 0.05, tgtZ = 0;
 
     if (state.fly) {
@@ -844,34 +847,27 @@ export async function initFractalBackground(canvas, options = {}) {
       // While a pointer is down, direct manipulation owns the target angles.
       // Momentum begins only after release, so the object does not run away under
       // the user's finger or mouse while a throw velocity is being sampled.
-      if (!rm && state.pointers.size === 0) {
+      if (state.pointers.size === 0) {
         const dt = Math.min(state.frameDt / 1000, 0.1);
-        // The floor is scaled the same way a drag is, so a drift that is barely
-        // perceptible framing the whole model does not become a sweep once the
-        // camera is close to an unpinned centroid.
+        // Reduced-motion suppresses automatic animation, but a flick is direct,
+        // intentional input. Once the user throws the shape, honour that motion
+        // on the same terms as a drag instead of silently zeroing it.
         const scale = orbitDragScale(o.dist / baseR, o.pinned);
         const [fy, fp] = driftFloor(o.dyaw, o.dpitch, DRIFT_RATE * scale);
         o.vyaw = decayMomentum(o.vyaw, fy, dt);
         o.vpitch = decayMomentum(o.vpitch, fp, dt);
         o.tyaw += o.vyaw * dt;
         o.tpitch += o.vpitch * dt;
-        // Bounce off the poles. Without this a drift with any vertical
-        // component parks against the pitch clamp and dies there, which is
-        // exactly the full stop the drift exists to avoid.
-        if (o.tpitch > 1.45 || o.tpitch < -1.45) {
-          o.dpitch = -o.dpitch;
-          o.vpitch = -o.vpitch;
-        }
-      } else if (rm) {
-        o.vyaw = 0; o.vpitch = 0;
       }
-      o.tpitch = Math.max(-1.45, Math.min(1.45, o.tpitch));
       o.yaw += (o.tyaw - o.yaw) * 0.18;
       o.pitch += (o.tpitch - o.pitch) * 0.18;
-      o.pitch = Math.max(-1.45, Math.min(1.45, o.pitch));
-      const cp = Math.cos(o.pitch);
-      // dir points target -> eye, so the eye rides a sphere about the pivot.
-      const dir = orbitDir(o);
+
+      // Pitch is deliberately unbounded. The pole-safe basis keeps camera roll
+      // continuous at +/-PI/2, so a vertical throw can make complete revolutions
+      // just as yaw already can horizontally.
+      const frame = orbitBasis(o.yaw, o.pitch);
+      const dir = frame.dir;
+      camUpX = frame.up[0]; camUpY = frame.up[1]; camUpZ = frame.up[2];
       camX = o.target[0] + dir[0] * o.dist;
       camY = o.target[1] + dir[1] * o.dist;
       camZ = o.target[2] + dir[2] * o.dist;
@@ -924,7 +920,12 @@ export async function initFractalBackground(canvas, options = {}) {
     d[U.detail] = rg.steps;
     d[U.detail + 1] = rg.iters;
     d[U.detail + 2] = rg.shade;
-    d[U.detail + 3] = 0;
+    // Spare slot: Shape Viewer yaw, wrapped to [-PI,PI]. The shader uses it to
+    // build a pole-safe screen basis. 10 is a sentinel for the ordinary
+    // world-up camera path used outside the orbit viewer.
+    d[U.detail + 3] = (state.explorer && !state.fly)
+      ? Math.atan2(Math.sin(state.orbit.yaw), Math.cos(state.orbit.yaw))
+      : 10;
 
     d[U.imageAdjust] = im.exposure;
     d[U.imageAdjust + 1] = im.contrast;
@@ -977,7 +978,8 @@ export async function initFractalBackground(canvas, options = {}) {
     const aspect = (state.targets ? state.targets.w / state.targets.h : 1) || 1;
     mat4Perspective(_proj, d[U.fov], aspect, 0.01, 100.0);
     mat4LookAt(_view, [camX, camY, camZ],
-      [d[U.camTarget], d[U.camTarget + 1], d[U.camTarget + 2]], [0, 1, 0]);
+      [d[U.camTarget], d[U.camTarget + 1], d[U.camTarget + 2]],
+      [camUpX, camUpY, camUpZ]);
     mat4Mul(_viewProj, _proj, _view);
     d.set(_viewProj, U.viewProj);
 
@@ -1275,13 +1277,10 @@ export async function initFractalBackground(canvas, options = {}) {
   const DIST_MIN_F = 1e-4;
   const DIST_MAX_F = 14.0;
   const TAP_MOVE = 10;     // px of movement that disqualifies a tap
-  // Flick sampling is time-normalised, so a fast 1000 Hz mouse and a 60 Hz
-  // touchscreen impart comparable angular velocity for the same physical throw.
-  const FLICK_MAX_RATE = 8.0;          // rad/s, safety cap (~1.27 turns/s)
-  const FLICK_MIN_DT_MS = 1.0;         // reject sub-millisecond timing spikes
-  const FLICK_MAX_DT_MS = 80.0;        // stale samples are not treated as speed
-  const FLICK_SMOOTH_MS = 24.0;        // velocity EMA time constant
-  const FLICK_RELEASE_GRACE_MS = 110;  // pause longer than this kills the throw
+  // Release velocity is measured over a short real-time gesture window in
+  // camera.js. That makes a 1000Hz mouse, coalesced desktop events and a 60Hz
+  // touchscreen describe the same physical throw.
+  const FLICK_RELEASE_GRACE_MS = 120;  // pause longer than this kills the throw
 
   function clampDist(d) {
     const baseR = CAM_RADIUS[state.fractalType] ?? 2.55;
@@ -1290,8 +1289,51 @@ export async function initFractalBackground(canvas, options = {}) {
 
   // Unit vector target -> eye for the current orbit angles.
   function orbitDir(o) {
-    const cp = Math.cos(o.pitch);
-    return [Math.cos(o.yaw) * cp, Math.sin(o.pitch), Math.sin(o.yaw) * cp];
+    return orbitBasis(o.yaw, o.pitch).dir;
+  }
+
+  function gestureTime(e) {
+    const t = Number(e && e.timeStamp);
+    // PointerEvent.timeStamp shares performance.now()'s monotonic clock in
+    // modern browsers. Fall back for older WebViews that expose a non-finite one.
+    return Number.isFinite(t) ? t : performance.now();
+  }
+
+  function appendFlickSamples(e) {
+    if (!e || state.fly) return;
+    let events = [];
+    try {
+      if (typeof e.getCoalescedEvents === 'function') events = e.getCoalescedEvents() || [];
+    } catch (_) {}
+    if (!events.length) events = [e];
+
+    for (const q of events) {
+      const sample = { x: q.clientX, y: q.clientY, t: gestureTime(q) };
+      const last = state.orbit.flickSamples[state.orbit.flickSamples.length - 1];
+      if (!last || sample.t > last.t || sample.x !== last.x || sample.y !== last.y) {
+        state.orbit.flickSamples.push(sample);
+      }
+    }
+    const last = state.orbit.flickSamples[state.orbit.flickSamples.length - 1];
+    if (!last) return;
+    const cutoff = last.t - FLICK_WINDOW_MS * 2;
+    while (state.orbit.flickSamples.length > 2
+        && state.orbit.flickSamples[1].t < cutoff) {
+      state.orbit.flickSamples.shift();
+    }
+  }
+
+  function orbitPointerScale() {
+    const k = 3.2 / Math.max(300, Math.min(window.innerWidth, window.innerHeight));
+    const baseR = CAM_RADIUS[state.fractalType] ?? 2.55;
+    return k * orbitDragScale(state.orbit.dist / baseR, state.orbit.pinned);
+  }
+
+  function updateFlickVelocity() {
+    const [vyaw, vpitch] = flickVelocity(state.orbit.flickSamples, orbitPointerScale());
+    state.orbit.vyaw = vyaw;
+    state.orbit.vpitch = vpitch;
+    return Math.hypot(vyaw, vpitch);
   }
 
   // Move the pivot onto the surface straight ahead, using the distance the GPU
@@ -1337,7 +1379,7 @@ export async function initFractalBackground(canvas, options = {}) {
   // move over time, and averaging a moving image just smears it).
   // Is the orbit view still drifting from its last movement?
   function orbitDrifting() {
-    return state.explorer && !state.fly && !reducedMotion()
+    return state.explorer && !state.fly
            && (state.orbit.dyaw !== 0 || state.orbit.dpitch !== 0);
   }
 
@@ -1366,7 +1408,7 @@ export async function initFractalBackground(canvas, options = {}) {
     if (!state.controls) return;
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     const now = performance.now();
-    state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, t: now });
+    state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, t: gestureTime(e) });
     state.lastInteract = now;
     state.accumSamples = 0;
     if (state.pointers.size === 1) {
@@ -1378,11 +1420,14 @@ export async function initFractalBackground(canvas, options = {}) {
         // Grabbing a spinning object catches it immediately. New momentum will
         // be sampled from this gesture and released only when the pointer lifts.
         state.orbit.vyaw = 0; state.orbit.vpitch = 0; state.orbit.flickAt = 0;
+        state.orbit.flickSamples = [];
+        appendFlickSamples(e);
       }
     }
     if (state.pointers.size >= 2) {
       if (!state.fly) {
         state.orbit.vyaw = 0; state.orbit.vpitch = 0; state.orbit.flickAt = 0;
+        state.orbit.flickSamples = [];
       }
       // A second finger means this is a pinch, never a tap. Re-baseline the
       // separation on every touch down: which two pointers pinchDistance()
@@ -1397,11 +1442,10 @@ export async function initFractalBackground(canvas, options = {}) {
     if (!state.controls || !state.pointers.has(e.pointerId)) return;
     const prev = state.pointers.get(e.pointerId);
     const now = performance.now();
-    const elapsed = prev.t == null ? 16.7 : now - prev.t;
-    const dtMs = Math.max(FLICK_MIN_DT_MS, Math.min(FLICK_MAX_DT_MS, elapsed));
     const dx = e.clientX - prev.x;
     const dy = e.clientY - prev.y;
-    state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, t: now });
+    state.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, t: gestureTime(e) });
+    if (state.pointers.size === 1 && !state.fly) appendFlickSamples(e);
     state.lastInteract = now;
     state.accumSamples = 0;
 
@@ -1437,28 +1481,18 @@ export async function initFractalBackground(canvas, options = {}) {
       // Single-pointer drag: orbit. Scaled by viewport so it feels consistent,
       // and by zoom so it stays gentle up close -- a fixed angular rate whips
       // the view once the camera is near the surface.
-      const baseR = CAM_RADIUS[state.fractalType] ?? 2.55;
-      const ok = k * orbitDragScale(state.orbit.dist / baseR, state.orbit.pinned);
+      const ok = orbitPointerScale();
       state.orbit.tyaw += dx * ok;
       state.orbit.tpitch += dy * ok;
-      // Sample angular velocity in rad/s from distance / elapsed time rather
-      // than distance / pointer event. That makes an energetic flick energetic
-      // on both high-polling mice and lower-rate touchscreens. Smooth the samples
-      // over a short real-time window, then cap the vector to prevent one noisy
-      // event from launching an unusably fast spin.
-      let sampleYaw = dx * ok * (1000 / dtMs);
-      let samplePitch = dy * ok * (1000 / dtMs);
-      const sampleMag = Math.hypot(sampleYaw, samplePitch);
-      if (sampleMag > FLICK_MAX_RATE) {
-        const s = FLICK_MAX_RATE / sampleMag;
-        sampleYaw *= s; samplePitch *= s;
-      }
-      const w = 1 - Math.exp(-dtMs / FLICK_SMOOTH_MS);
-      state.orbit.vyaw += (sampleYaw - state.orbit.vyaw) * w;
-      state.orbit.vpitch += (samplePitch - state.orbit.vpitch) * w;
+      // Estimate the gesture over a short TIME window. This deliberately uses
+      // coalesced samples and later also pointerup, so high-poll mice do not
+      // produce a stream of tiny velocities that vanish at release.
+      const speed = updateFlickVelocity();
       if (dx || dy) {
-        state.orbit.dyaw = state.orbit.vyaw;
-        state.orbit.dpitch = state.orbit.vpitch;
+        if (speed > 0) {
+          state.orbit.dyaw = state.orbit.vyaw;
+          state.orbit.dpitch = state.orbit.vpitch;
+        }
         state.orbit.flickAt = now;
       }
       if (state.tapStart &&
@@ -1474,6 +1508,18 @@ export async function initFractalBackground(canvas, options = {}) {
     const now = performance.now();
     const cancelled = e.type === 'pointercancel';
     try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+    if (!state.fly && state.pointers.size === 1) {
+      const prev = state.pointers.get(e.pointerId);
+      appendFlickSamples(e);
+      const speed = updateFlickVelocity();
+      if (prev && (e.clientX !== prev.x || e.clientY !== prev.y)) {
+        if (speed > 0) {
+          state.orbit.dyaw = state.orbit.vyaw;
+          state.orbit.dpitch = state.orbit.vpitch;
+        }
+        state.orbit.flickAt = now;
+      }
+    }
     state.pointers.delete(e.pointerId);
     state.lastInteract = now;
 
@@ -1491,6 +1537,7 @@ export async function initFractalBackground(canvas, options = {}) {
       if (!state.fly) {
         // A pinch transitioning back to one finger starts a fresh throw sample.
         state.orbit.vyaw = 0; state.orbit.vpitch = 0; state.orbit.flickAt = 0;
+        state.orbit.flickSamples = [{ x: remaining.x, y: remaining.y, t: gestureTime(e) }];
       }
     } else if (state.pointers.size === 0) {
       if (!state.fly) {
@@ -1734,7 +1781,7 @@ export async function initFractalBackground(canvas, options = {}) {
   function freezeView() {
     const o = state.orbit;
     o.tyaw = o.yaw; o.tpitch = o.pitch;
-    o.vyaw = 0; o.vpitch = 0; o.dyaw = 0; o.dpitch = 0; o.flickAt = 0;
+    o.vyaw = 0; o.vpitch = 0; o.dyaw = 0; o.dpitch = 0; o.flickAt = 0; o.flickSamples = [];
     state.accumSamples = 0;
     state.lastInteract = performance.now();
     nudgeRender();
@@ -1746,7 +1793,7 @@ export async function initFractalBackground(canvas, options = {}) {
     // the only full stop: with no direction to settle onto, momentum decays to
     // nothing and the view holds still (and can then converge).
     o.tyaw = 0.6; o.tpitch = 0.35;
-    o.vyaw = 0; o.vpitch = 0; o.dyaw = 0; o.dpitch = 0; o.flickAt = 0;
+    o.vyaw = 0; o.vpitch = 0; o.dyaw = 0; o.dpitch = 0; o.flickAt = 0; o.flickSamples = [];
     o.target[0] = 0; o.target[1] = 0; o.target[2] = 0;
     o.dist = CAM_RADIUS[state.fractalType] ?? 2.55;
     o.pinned = false;
