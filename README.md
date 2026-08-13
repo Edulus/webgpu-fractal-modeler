@@ -55,6 +55,7 @@ mathematicians named there.
 - Lorenz strange attractor
 - Rössler strange attractor
 - Ziggurat cube terraces
+- Cube stack (block of ~16,700 cubes)
 
 ## Project structure
 
@@ -522,6 +523,16 @@ The choice of norm is the entire design. The L∞ distance has *square* level se
 It is unbounded in the ground plane, like the gyroid, plateauing after a fixed ring count rather than growing without limit. The cube half-extent stays under half the cell spacing: domain repetition evaluates only the nearest cell, so anything larger is sliced flat at the cell walls, which is the artifact that once appeared as axis-aligned faces on the studded packing.
 
 It is also the one surface whose id sits *after* the attractors and the cosmic web, appended rather than inserted so that no shipped id renumbers. Surface-ness is consequently a predicate (`isSurfaceType`) rather than an id threshold.
+
+### Cube stack
+
+The ziggurat's volumetric relative. Where the ziggurat is a heightfield — one cube per cell of a *plane*, which is why it reads as a flat expanse with a shallow recess — this fills a three-dimensional lattice and clips it to a block whose limit on each axis steps inward with the Chebyshev ring of the other two:
+
+    limit(x) = N - floor( max(|cy|, |cz|) / STEPC )
+
+Each face therefore steps down towards its edges, and the three visible faces meet at the corner in nested chevrons. About 16,700 cubes survive the clip, across nine terrace levels.
+
+The limits are quantised to whole cells, so a cube is always wholly inside or wholly outside the block and none is ever cut through. As with the ziggurat, the cube half-extent stays under half the cell spacing, because domain repetition evaluates only the nearest cell.
 
 ### Strange attractors
 

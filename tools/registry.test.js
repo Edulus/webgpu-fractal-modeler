@@ -133,9 +133,17 @@ ok(
 const mapDE = fractal.slice(fractal.indexOf('fn mapDE(pos'), fractal.indexOf('\n}', fractal.indexOf('fn mapDE(pos')));
 const thresholds = [...mapDE.matchAll(/ft < ([\d.]+)/g)].map((m) => Number(m[1]));
 ok(thresholds.length > 0, `mapDE dispatches on ${thresholds.length} thresholds`);
+
+// Thresholds above the non-surface band are expected — they separate the
+// surfaces that live up there — but one *inside* the band would mean someone
+// believed an attractor or the volumetric field needed an estimator. Those ids
+// never reach mapDE: the raymarch pass returns early and the clearance probe is
+// gated on isSurfaceType. A threshold in the band is therefore a sign that
+// assumption has been broken somewhere.
+const inBand = thresholds.filter((t) => t > firstAttractor - 0.5 && t <= IDS.cosmicweb + 0.5);
 ok(
-  Math.max(...thresholds) === IDS.cosmicweb - 4 + 0.5 || Math.max(...thresholds) < IDS.attractor,
-  `mapDE's last threshold stops below the attractors (${Math.max(...thresholds)} < ${firstAttractor})`,
+  inBand.length === 0,
+  `no mapDE threshold splits the non-surface band${inBand.length ? `: ${inBand}` : ''}`,
 );
 
 const surfaceIds = Object.values(IDS).filter(

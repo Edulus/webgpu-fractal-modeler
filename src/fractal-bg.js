@@ -123,6 +123,9 @@ const FRACTAL_IDS = {
   // than inserted among the surfaces, so that nothing already shipped
   // renumbers. Surface-ness is therefore a predicate, not an id threshold.
   ziggurat: 29,
+  // The ziggurat's volumetric relative: cubes filling a 3D lattice rather than
+  // a heightfield over a plane.
+  cubestack: 30,
 };
 
 function isAttractorType(id) {
@@ -166,7 +169,7 @@ const QUALITY_SCALE = Object.fromEntries(
 // clip would slice a cap off every one of them.
 const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.1, 3.0, 3.5, 3.2, 3.6, 4.6,
                     1.55, 1.75, 3.4, 2.85, 5.75, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
-                    2.3, 3.0, 3.2, 3.0, 3.0, 6.2, 2.6];
+                    2.3, 3.0, 3.2, 3.0, 3.0, 6.2, 2.6, 2.6];
 
 // Number of integrated trajectory samples drawn as a line strip per attractor.
 // These are exact float positions (vector geometry), so the curve stays crisp
