@@ -193,14 +193,20 @@ CLIMB_MISS    = 0.02
 DROP_MISS     = 0.12
 CLIMB_SAMPLES = 90
 DROP_SAMPLES  = 20
-STALL_FACTOR  = 2.5
+STALL_FACTOR  = 4.0
 ```
 
 Interpretation:
 
 - an essentially all-on-time run sustained for 90 samples is evidence to try a higher rung;
 - a sustained miss rate above 12% is overload and causes a drop after 20 samples; and
-- a single catastrophic frame beyond `2.5 × budget` triggers an immediate larger retreat.
+- a single catastrophic frame beyond `4.0 × budget` drops one rung immediately — **and records nothing else**.
+
+**The hitch rule was corrected by measurement, and it is the first thing real hardware caught.** On a healthy 60 Hz Windows desktop holding 60 fps, `STALL_FACTOR = 2.5` fired constantly: `2.5 × 16.7 = 41.75 ms`, and a single hitch that misses two vsyncs is 50 ms — ordinary jank from the compositor, a GC pause, or a burst of drag events. Each such frame dropped *two* rungs and recorded `ceiling = index − 1` and `lastFail`, so the repeat-failure backoff doubled: 20 s, 40 s, 80 s. The recovery mechanism built for a thermally throttled phone ended up pinning a perfectly healthy desktop at rung 1 of 10 — 840 × 450 internal, 90 steps, cheap shading — while the machine never dropped a frame's worth of real work. The measured transition log ratcheted 3 → 1 → 2 → 0 and stayed there, with every drop reporting `miss 0`, which is the signature of the stall path rather than genuine overload.
+
+Two changes follow from that. A hitch now drops **one** rung rather than two, and it records **no** ceiling, no `lastFail` and no backoff extension — one late frame is not evidence that a rung is unsustainable, and only the sustained miss-rate path may lower the ceiling. And the threshold moved to `4.0 ×`, which needs four missed refreshes.
+
+Simulated against the corrected rule, a machine that is otherwise flawless reaches the top rung with hitches as often as every three seconds, and only genuinely constant hitching — three times a second — still suppresses quality, which is correct.
 
 The governor still maintains `emaMs`, but the EMA is no longer the climb/drop signal. It remains useful for reporting and for the approximate still-frame cost model in `showcaseIndex()`.
 

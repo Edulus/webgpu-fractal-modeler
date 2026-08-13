@@ -50,7 +50,11 @@ export const PRESET_RUNG = { low: 1, medium: 3, high: 5, screenshot: 5, max: 9 }
 export const TOP = LADDER.length - 1;
 export const BUDGET_MS = 16.7;
 export const MET_TOLERANCE = 1.05;
-export const STALL_FACTOR = 2.5;
+// MEASURED ON REAL HARDWARE: at 2.5 this fired constantly on a healthy 60Hz
+// desktop, because 2.5 x 16.7 = 41.75ms and one hitch missing two vsyncs is
+// 50ms -- ordinary jank from the compositor, a GC pause or a burst of drag
+// events. 4.0 needs four missed refreshes, which is catastrophe, not noise.
+export const STALL_FACTOR = 4.0;
 export const CLIMB_MISS = 0.02;
 export const DROP_MISS = 0.12;
 export const CLIMB_SAMPLES = 90;
@@ -180,8 +184,16 @@ export function govSample(gov, frameMs) {
   const missed = sample > g.budgetMs * MET_TOLERANCE ? 1 : 0;
   g.missRate = g.missRate * 0.94 + missed * 0.06;
 
+  // A hitch drops the rung for responsiveness but records NOTHING. One late
+  // frame is not evidence that a rung is unsustainable, and treating it as such
+  // was catastrophic in practice: measured on a 60fps Windows desktop, isolated
+  // hitches drove the ladder from rung 3 down to rung 0 and held it there. Each
+  // stall set ceiling = index-1 and lastFail, so the thermal backoff doubled --
+  // 20s, 40s, 80s -- and the recovery built for a hot phone ended up pinning a
+  // perfectly healthy machine at 840x450 with cheap shading. Only the sustained
+  // miss-rate path may lower the ceiling.
   if (sample > g.budgetMs * STALL_FACTOR && g.index > 0) {
-    return finishSample(gov, applyDrop(g, g.index - 2), frameMs, true);
+    return finishSample(gov, applyHitch(g, g.index - 1), frameMs, true);
   }
 
   if (g.missRate > g.dropMiss) {
@@ -212,6 +224,18 @@ export function govSample(gov, frameMs) {
     g.emaMs = g.budgetMs * 0.9;
   }
   return finishSample(gov, g, frameMs, true);
+}
+
+// A transient drop: rung only, no memory. Recovers by the ordinary climb.
+function applyHitch(g, to) {
+  const from = g.index;
+  g.index = clampIndex(to);
+  g.good = 0;
+  g.bad = 0;
+  g.missRate = 0;
+  g.changed = g.index !== from;
+  g.emaMs = g.budgetMs * 0.9;
+  return g;
 }
 
 function applyDrop(g, to) {

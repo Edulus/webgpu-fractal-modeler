@@ -13,7 +13,7 @@
 // is run against it for thousands of frames to see where it settles.
 
 import {
-  LADDER, TOP, BUDGET_MS, PRESET_RUNG,
+  LADDER, TOP, BUDGET_MS, PRESET_RUNG, CEILING_RESET_MS,
   govInit, govSample, rung, clampIndex, showcaseIndex, accumTarget, planMode,
   MAX_BUDGET_FACTOR, maxRungForLimit,
 } from '../src/quality.js';
@@ -134,9 +134,62 @@ for (const [name, cost] of [['phone', PHONE], ['laptop', LAPTOP], ['workstation'
 // A single catastrophic frame is acted on at once, not after the hysteresis.
 {
   let g = govInit(6);
+  const before = { ceiling: g.ceiling, resetMs: g.resetMs, lastFail: g.lastFail };
   g = govSample(g, BUDGET_MS * 5);
   check('one stalled frame drops the rung immediately', g.index < 6, `now ${g.index}`);
-  check('and records a ceiling below where it stalled', g.ceiling <= 5, `ceiling ${g.ceiling}`);
+  // ...but records NOTHING. This assertion is inverted from what it used to be,
+  // because the old behaviour was measured causing real harm: see below.
+  check('and does NOT lower the ceiling on one hitch', g.ceiling === before.ceiling,
+        `ceiling ${g.ceiling}`);
+  check('nor records it as a failed rung', g.lastFail === before.lastFail);
+  check('nor extends the retry backoff', g.resetMs === before.resetMs,
+        `resetMs ${g.resetMs}`);
+}
+
+// THE RATCHET. Measured on a 60fps Windows desktop, not simulated into
+// existence: isolated hitches drove the ladder from rung 3 to rung 0 and held it
+// there, rendering 840x450 with cheap shading on a machine that never dropped a
+// frame's worth of real work. Each stall recorded ceiling = index-1 and
+// lastFail, so the thermal backoff doubled -- 20s, 40s, 80s -- and the recovery
+// built for a hot phone pinned a healthy machine to the bottom of the ladder.
+//
+// The trigger was ordinary jank: 2.5 x 16.7 = 41.75ms, and one hitch missing two
+// vsyncs is 50ms.
+{
+  const REFRESH = 1000 / 60;
+  const HITCH = 50;                       // two missed vsyncs: compositor, GC, drag burst
+  const run = (periodFrames) => {
+    let g = planMode('auto', 3).gov;
+    for (let f = 0; f < 60 * 60 * 5; f++) {
+      g = govSample(g, periodFrames && f % periodFrames === 0 ? HITCH : REFRESH);
+    }
+    return g;
+  };
+  const clean = run(0);
+  const rare = run(600);                  // a hitch every 10 seconds
+  const frequent = run(60);               // a hitch every second
+
+  check('a flawless machine reaches the top of the ladder', clean.index === TOP,
+        `rung ${clean.index}`);
+  check('and an occasional hitch does not stop it', rare.index === TOP,
+        `rung ${rare.index}`);
+  check('a hitch never lowers the ceiling', rare.ceiling === TOP && clean.ceiling === TOP,
+        `ceilings ${clean.ceiling}, ${rare.ceiling}`);
+  check('nor triggers the thermal backoff, which is for sustained overload',
+        rare.resetMs === CEILING_RESET_MS && frequent.resetMs === CEILING_RESET_MS,
+        `retry ${rare.resetMs}ms, ${frequent.resetMs}ms`);
+  const veryFrequent = run(20);           // a hitch three times a second
+  check('a hitch every 3s no longer suppresses anything', run(180).index === TOP,
+        `rung ${run(180).index}`);
+  check('constant hitching still suppresses quality, as it should',
+        veryFrequent.index < rare.index, `${veryFrequent.index} vs ${rare.index}`);
+
+  // The threshold itself: one double-miss must no longer count as a stall.
+  let g = govInit(6);
+  g = govSample(g, HITCH);
+  check('a 50ms frame is jank, not a stall', g.index === 6, `now ${g.index}`);
+  g = govSample(govInit(6), 70);
+  check('a 70ms frame still is one', g.index < 6, `now ${g.index}`);
 }
 
 // After dropping, it must not climb straight back into the same stall.

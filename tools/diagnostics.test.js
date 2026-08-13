@@ -121,7 +121,17 @@ const check = (name, ok, detail = '') => {
     g.sinceCeilingMs += sample;
     const missed = sample > g.budgetMs * MET_TOLERANCE ? 1 : 0;
     g.missRate = g.missRate * 0.94 + missed * 0.06;
-    if (sample > g.budgetMs * STALL_FACTOR && g.index > 0) return refDrop(g, g.index - 2);
+    // A hitch drops the rung only; it records no ceiling, no failed rung and no
+    // backoff. Mirrors applyHitch(), which replaced a two-rung applyDrop() after
+    // isolated jank was measured ratcheting a healthy desktop to the bottom.
+    if (sample > g.budgetMs * STALL_FACTOR && g.index > 0) {
+      const from = g.index;
+      g.index = refClamp(g.index - 1);
+      g.good = 0; g.bad = 0; g.missRate = 0;
+      g.changed = g.index !== from;
+      g.emaMs = g.budgetMs * 0.9;
+      return g;
+    }
     if (g.missRate > g.dropMiss) { g.bad++; g.good = 0; }
     else if (g.missRate < g.climbMiss) { g.good++; g.bad = 0; }
     else { g.good = 0; g.bad = 0; }
@@ -140,7 +150,9 @@ const check = (name, ok, detail = '') => {
     let reference = { ...actual };
     for (let i = 0; i < 12000; i++) {
       // Deterministic mix of on-time frames, missed refreshes, jitter and rare stalls.
-      const frame = i % 997 === 0 ? actual.budgetMs * 3.1
+      // 5x clears STALL_FACTOR so the hitch path is actually compared; 2x is a
+      // single missed refresh, which must NOT be treated as a stall.
+      const frame = i % 997 === 0 ? actual.budgetMs * 5
         : (i % 29 === 0 ? actual.budgetMs * 2 : actual.budgetMs);
       actual = govSample(actual, frame);
       reference = refSample(reference, frame);
