@@ -81,7 +81,8 @@ mathematicians named there.
 │   ├── kleinpack.test.js         sphere-packing construction and estimator
 │   ├── attractor.test.js         attractor fits and Lyapunov exponents
 │   ├── engel.test.js             plesiohedron tables, tiling and Lipschitz bound
-│   └── quality.test.js           governor behaviour against simulated devices
+│   ├── quality.test.js           governor behaviour against simulated devices
+│   └── registry.test.js          shape tables, selector and shader bands agree
 └── .github/workflows/pages.yml   deploys the demo to GitHub Pages
 ```
 
