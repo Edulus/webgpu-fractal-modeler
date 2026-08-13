@@ -149,7 +149,7 @@ fn resolveScene(uv : vec2<f32>) -> vec4<f32> {
   let missBg = select(0.0, a.w, u.bgMode >= 0.5);
   var color = bg * (a.x + missBg);
 
-  if (u.fractalType > 24.5) {
+  if (u.fractalType > 24.5 && u.fractalType < 27.5) {
     // Cosine presets use the unwrapped linear mean in material.xy. Imported
     // ramps are period-1 by construction, so use the circular mean in aux.xyz
     // to keep samples on either side of the 1->0 seam adjacent.

@@ -116,7 +116,14 @@ const FRACTAL_IDS = {
   // estimator here that is an exact signed distance.
   engel: 24,
   attractor: 25, lorenz: 26, rossler: 27,
+  // Volumetric density field. Kept after the line attractors so their
+  // established ids remain stable.
+  cosmicweb: 28,
 };
+
+function isAttractorType(id) {
+  return id >= FRACTAL_IDS.attractor && id <= FRACTAL_IDS.rossler;
+}
 
 // Quality tiers -> internal-resolution scale factor.
 // The named presets pin a rung of the ladder in quality.js, so a fixed mode and
@@ -130,7 +137,7 @@ const QUALITY_SCALE = Object.fromEntries(
 // mandelbulb, mandelbox, menger, julia, apollonian, spherepack, encrusted,
 // surfacepack, penrose, gyroid, kleinian, barth, schottky, schottkyh,
 // tetrabrot, envoct, envdodec, hyp534, hyp435, hyp534t, hyp534o, hyp435t,
-// hyp435o, kleinpack, engel, attractor(Aizawa), lorenz, rossler
+// hyp435o, kleinpack, engel, attractor(Aizawa), lorenz, rossler, cosmicweb
 // The Penrose disc is wide and flat, so it needs a little more room than the
 // roughly ball-shaped estimators to sit inside the frame edge-on. The Barth
 // sextic clips at radius 2.0, the largest here, and its 4.6 keeps the same
@@ -147,7 +154,7 @@ const QUALITY_SCALE = Object.fromEntries(
 // clip would slice a cap off every one of them.
 const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.1, 3.0, 3.5, 3.2, 3.6, 4.6,
                     1.55, 1.75, 3.4, 2.85, 5.75, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
-                    2.3, 3.0, 3.2, 3.0, 3.0];
+                    2.3, 3.0, 3.2, 3.0, 3.0, 6.2];
 
 // Number of integrated trajectory samples drawn as a line strip per attractor.
 // These are exact float positions (vector geometry), so the curve stays crisp
@@ -1078,7 +1085,7 @@ export async function initFractalBackground(canvas, options = {}) {
       // Attractor line material is weighted-additive. The raymarch draw above
       // has already averaged the background sample; every segment now adds its
       // current sample contribution with the same 1/(n+1) weight.
-      if (state.fractalType >= FRACTAL_IDS.attractor && state.trajBuffer) {
+      if (isAttractorType(state.fractalType) && state.trajBuffer) {
         pass.setPipeline(state.pipelines.attractor);
         pass.setBindGroup(0, state.bindGroups.raymarch);
         pass.setVertexBuffer(0, state.trajBuffer);
@@ -1403,6 +1410,7 @@ export async function initFractalBackground(canvas, options = {}) {
   }
 
   function accumulating(nowMs) {
+    if (state.fractalType === FRACTAL_IDS.cosmicweb) return false;
     if (!state.accumOn || !state.controls) return false;
     if (state.keys.size > 0) return false;
     if (state.pointers.size > 0) return false;
@@ -1653,7 +1661,7 @@ export async function initFractalBackground(canvas, options = {}) {
 
     createStaticResources();
     resize();
-    if (state.fractalType >= FRACTAL_IDS.attractor) ensureAttractorTrajectory();
+    if (isAttractorType(state.fractalType)) ensureAttractorTrajectory();
   }
 
   async function reinit() {
@@ -1902,7 +1910,7 @@ export async function initFractalBackground(canvas, options = {}) {
         state.accumSamples = 0;
         if (state.fly) placeFlyCamera(false);
         // The attractor family needs its trajectory buffer built before use.
-        if (state.fractalType >= FRACTAL_IDS.attractor) ensureAttractorTrajectory();
+        if (isAttractorType(state.fractalType)) ensureAttractorTrajectory();
         if (!state.running) renderFrame(performance.now(), true);
       }
     },
