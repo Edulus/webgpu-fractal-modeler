@@ -1563,6 +1563,48 @@ fn deKleinPack(pos : vec3<f32>) -> DEResult {
 
 ${ENGEL_WGSL}
 
+// Ziggurat — a cube lattice terraced by Chebyshev distance.
+//
+//   h(i,j) = STEP * max(|i|, |j|)
+//
+// The choice of norm is the whole design. The L-infinity (Chebyshev) distance
+// has SQUARE level sets, so the terraces are concentric squares; L2 would give
+// circular terraces and L1 diamonds. Seen near grazing those square rings
+// compress into nested chevrons converging on the vanishing point, so what
+// reads as elaborate structure is perspective acting on one line of arithmetic.
+//
+// Unbounded in the plane like the gyroid, plateauing after a fixed ring count.
+fn deZiggurat(pos : vec3<f32>) -> DEResult {
+  const CELL : f32 = 0.13;    // grid spacing
+  const STEP : f32 = 0.055;   // height gained per ring
+  const HALF : f32 = 0.45;    // cube half-extent as a fraction of CELL
+  const RINGS : f32 = 11.0;   // terraces before the plateau
+
+  // Breathe the step height. The lattice itself never moves, so no cube can pop
+  // between cells.
+  let anim = select(1.0 + 0.12 * sin(u.time * 0.09), 1.0, u.reducedMotion > 0.5);
+
+  // Domain repetition in the ground plane. HALF must stay under 0.5 or cubes
+  // are sliced flat at the cell walls, since only the nearest cell is
+  // evaluated — the artifact that once showed up as axis-aligned faces on the
+  // studded packing.
+  let cellId = round(pos.xz / CELL);
+  let q = pos.xz - CELL * cellId;
+
+  let ring = min(max(abs(cellId.x), abs(cellId.y)), RINGS);
+  let colH = STEP * ring * anim + STEP;
+
+  // A column standing on the base plane, so the steps read as solid terraces
+  // rather than floating tiles.
+  let d = sdBox(vec3<f32>(q.x, pos.y - colH * 0.5, q.y),
+                vec3<f32>(CELL * HALF, colH * 0.5, CELL * HALF));
+
+  var res : DEResult;
+  res.dist = d;
+  res.trap = clamp(ring / RINGS, 0.0, 1.0);   // band the terraces outward
+  return res;
+}
+
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
   let ft = u.fractalType;
@@ -1604,8 +1646,10 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
     return deHoneycomb(pos);
   } else if (ft < 23.5) {
     return deKleinPack(pos);
+  } else if (ft < 24.5) {
+    return deEngel(pos);
   }
-  return deEngel(pos);
+  return deZiggurat(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {
@@ -1719,9 +1763,9 @@ fn cameraRay(uv : vec2<f32>, ro : vec3<f32>, ta : vec3<f32>, fov : f32) -> vec3<
   var p = (uv * 2.0 - 1.0);
   p.x = p.x * aspect;
   let fwd = normalize(ta - ro);
-  // detail.w carries Shape Viewer's wrapped yaw. It gives a screen-right vector
+  // detail.w carries Shape Explorer's wrapped yaw. It gives a screen-right vector
   // that remains defined at the north/south poles, allowing pitch to continue
-  // through +/-PI/2. Outside Shape Viewer JS writes sentinel 10 and the original
+  // through +/-PI/2. Outside Shape Explorer JS writes sentinel 10 and the original
   // world-up camera basis is preserved.
   var right : vec3<f32>;
   if (abs(u.detail.w) < 4.0) {
@@ -1750,7 +1794,9 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // Strange attractors aren't distance fields — they're rasterized as line
   // geometry by a second pipeline drawn over this pass. Emit only the
   // background here so those lines have something to blend onto.
-  if (u.fractalType > 24.5) {
+  // 25-28 are the line attractors and the volumetric cosmic web. The ziggurat
+  // sits at 29, past them, so this is a band rather than a threshold.
+  if (u.fractalType > 24.5 && u.fractalType < 28.5) {
     let bg = backgroundColor(rd);
     return vec4<f32>(select(vec3<f32>(0.0), bg, u.bgMode >= 0.5), 0.0);
   }

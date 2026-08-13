@@ -440,6 +440,7 @@
         <option value="kleinpack">Kleinian sphere packing {5,3,6}</option>
         <option value="engel">Engel plesiohedron tiling (38 faces)</option>
         <option value="cosmicweb">Cosmic Web</option>
+        <option value="ziggurat">Ziggurat (cube terraces)</option>
         <option value="attractor">Strange attractor (Aizawa)</option>
         <option value="lorenz">Strange attractor (Lorenz)</option>
         <option value="rossler">Strange attractor (Rössler)</option>
@@ -490,7 +491,7 @@
       <button id="btn-pause">Pause</button>
       <button id="btn-resume">Resume</button>
     </div>
-    <button id="btn-explorer">Enter shape viewer</button>
+    <button id="btn-explorer">Enter shape explorer</button>
     <button id="btn-fly">Fly through</button>
     <button id="btn-reset" class="hidden">Reset view</button>
 
@@ -545,14 +546,14 @@
       Everything is drawn live, pixel by pixel, as you move.
     </p>
     <div class="actions">
-      <button class="btn primary" onclick="document.getElementById('btn-explorer').click()">Enter shape viewer</button>
+      <button class="btn primary" onclick="document.getElementById('btn-explorer').click()">Enter shape explorer</button>
     </div>
 
     <div class="content-block">
       <h2>One renderer, multiple applications</h2>
       <p>
         Use the opaque explorer preset for a full-screen navigable artwork, an
-        educational shape viewer, a music visual, or an installation display.
+        educational shape explorer, a music visual, or an installation display.
         Orbit and zoom remain responsive while the adaptive quality system keeps
         the renderer practical across a range of GPUs.
       </p>
@@ -842,6 +843,8 @@
           'One trajectory, traced for six hundred thousand steps. It never repeats and never escapes, and never quite closes the loop.'],
         engel: ['Engel plesiohedron',
           'Space filled with copies of one 38-faced solid, which is the most faces such a shape can have. Each is the region of space closest to one point of a repeating pattern, and they are drawn shrunk a little so the joints between them show.'],
+        ziggurat: ['Ziggurat',
+          'A field of cubes whose height steps up once per square ring out from the centre. The rings are square because the distance used is the largest of the two coordinates rather than the diagonal; measuring the diagonal instead would give circular terraces. Seen from low down, the squares stack into chevrons running to the horizon.'],
         cosmicweb: ['Cosmic Web',
           'A hierarchical volumetric web of filaments and dense knots surrounding vast voids, inspired by the multifractal large-scale structure of the universe.'],
         rossler: ['Rössler attractor',
@@ -885,7 +888,7 @@
       document.getElementById('btn-pause').addEventListener('click', () => handle.pause());
       document.getElementById('btn-resume').addEventListener('click', () => handle.resume());
 
-      // Shape viewer: full-screen orbit controls around the selected shape.
+      // Shape explorer: full-screen orbit controls around the selected shape.
       const btnExplorer = document.getElementById('btn-explorer');
       const btnReset = document.getElementById('btn-reset');
       const btnFly = document.getElementById('btn-fly');
@@ -896,7 +899,7 @@
         const i = handle.info;
         document.body.classList.toggle('explorer', i.explorer);
         document.body.classList.toggle('flying', i.fly);
-        btnExplorer.textContent = i.explorer ? 'Exit shape viewer' : 'Enter shape viewer';
+        btnExplorer.textContent = i.explorer ? 'Exit shape explorer' : 'Enter shape explorer';
         btnFly.textContent = i.fly ? 'Exit fly-through' : 'Fly through';
         btnFly.classList.toggle('on', i.fly);
         btnReset.classList.toggle('hidden', !(i.explorer || i.fly));
@@ -969,7 +972,8 @@
         'spherepack', 'encrusted', 'surfacepack', 'penrose', 'gyroid',
         'kleinian', 'barth', 'schottky', 'schottkyh', 'tetrabrot',
         'envoct', 'envdodec', 'hyp534', 'hyp435', 'hyp534t', 'hyp534o',
-        'hyp435t', 'hyp435o', 'kleinpack', 'engel', 'attractor', 'lorenz', 'rossler'];
+        'hyp435t', 'hyp435o', 'kleinpack', 'engel', 'attractor', 'lorenz', 'rossler',
+        'cosmicweb', 'ziggurat'];
       setInterval(() => {
         const i = handle.info;
         hud.textContent = `${names[i.fractalType]} · q${i.qualityScale} · ${i.fps}fps` +

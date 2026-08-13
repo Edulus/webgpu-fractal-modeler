@@ -162,7 +162,7 @@ fn cosmicWebSampleAt(p : vec3<f32>, tm : f32) -> CosmicWebSample {
   );
 
   // A broad low-frequency gate creates genuine large empty domains. The sphere
-  // fade gives Shape Viewer a finite object to orbit while Fly mode can enter it.
+  // fade gives Shape Explorer a finite object to orbit while Fly mode can enter it.
   let voidGate = smoothstep(0.36, 0.59, low);
   let bound = 1.0 - smoothstep(4.8, 5.7, length(p));
 

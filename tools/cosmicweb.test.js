@@ -21,7 +21,7 @@ const composite = fs.readFileSync('src/shaders/composite.wgsl.js', 'utf8');
 ok(index.includes('<option value="cosmicweb">Cosmic Web</option>'),
    'selector exposes Cosmic Web');
 ok(index.includes("cosmicweb: ['Cosmic Web'"),
-   'Shape Viewer has a Cosmic Web note');
+   'Shape Explorer has a Cosmic Web note');
 ok(bg.includes('cosmicweb: 28'),
    'Cosmic Web has a stable id after the existing attractors');
 ok(bg.includes('return id >= FRACTAL_IDS.attractor && id <= FRACTAL_IDS.rossler;'),

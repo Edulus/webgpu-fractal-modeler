@@ -119,10 +119,22 @@ const FRACTAL_IDS = {
   // Volumetric density field. Kept after the line attractors so their
   // established ids remain stable.
   cosmicweb: 28,
+  // A distance-estimated surface, but appended after the non-surface ids rather
+  // than inserted among the surfaces, so that nothing already shipped
+  // renumbers. Surface-ness is therefore a predicate, not an id threshold.
+  ziggurat: 29,
 };
 
 function isAttractorType(id) {
   return id >= FRACTAL_IDS.attractor && id <= FRACTAL_IDS.rossler;
+}
+
+// A distance-estimated surface: anything that is neither line geometry nor a
+// volumetric field. Stated as an exclusion rather than "id <= <last surface>"
+// because surfaces are no longer one contiguous block, and because naming the
+// last surface means every new surface has to remember to update this.
+function isSurfaceType(id) {
+  return !isAttractorType(id) && id !== FRACTAL_IDS.cosmicweb;
 }
 
 // Quality tiers -> internal-resolution scale factor.
@@ -154,7 +166,7 @@ const QUALITY_SCALE = Object.fromEntries(
 // clip would slice a cap off every one of them.
 const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.1, 3.0, 3.5, 3.2, 3.6, 4.6,
                     1.55, 1.75, 3.4, 2.85, 5.75, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
-                    2.3, 3.0, 3.2, 3.0, 3.0, 6.2];
+                    2.3, 3.0, 3.2, 3.0, 3.0, 6.2, 2.6];
 
 // Number of integrated trajectory samples drawn as a line strip per attractor.
 // These are exact float positions (vector geometry), so the curve stays crisp
@@ -943,7 +955,7 @@ export async function initFractalBackground(canvas, options = {}) {
     d[U.detail] = rg.steps;
     d[U.detail + 1] = rg.iters;
     d[U.detail + 2] = rg.shade;
-    // Spare slot: Shape Viewer yaw, wrapped to [-PI,PI]. The shader uses it to
+    // Spare slot: Shape Explorer yaw, wrapped to [-PI,PI]. The shader uses it to
     // build a pole-safe screen basis. 10 is a sentinel for the ordinary
     // world-up camera path used outside the orbit viewer.
     d[U.detail + 3] = (state.explorer && !state.fly)
@@ -1040,10 +1052,12 @@ export async function initFractalBackground(canvas, options = {}) {
     const probeDue = nowMs - state.probeAt >= PROBE_INTERVAL_MS;
     const doProbe = (state.fly || state.explorer) && state.pipelines.probe
                     && !state.probeBusy && probeDue
-                    // Every distance-estimated surface, which is all ids up to
-                    // and including the last one before the attractors. The
-                    // attractors are line geometry with no field to probe.
-                    && state.fractalType <= FRACTAL_IDS.hyp435o;
+                    // Every distance-estimated surface. Attractors are line
+                    // geometry and the cosmic web is a density field, so
+                    // neither has a surface to probe for. This was previously
+                    // pinned to the id of the then-last surface, which silently
+                    // stopped probing every surface added after it.
+                    && isSurfaceType(state.fractalType);
     if (doProbe) {
       state.probeAt = nowMs;
       const cpass = encoder.beginComputePass();
