@@ -1605,6 +1605,50 @@ fn deZiggurat(pos : vec3<f32>) -> DEResult {
   return res;
 }
 
+// Cube stack — the ziggurat's rule applied to all three axes at once. Where
+// the ziggurat terraces a heightfield with
+//
+//   h(i,j) = STEP * max(|i|, |j|)
+//
+// this clips a solid 3D lattice with a limit per axis that steps inward with
+// the Chebyshev ring of the *other two*:
+//
+//   limit(x) = N - floor( max(|cy|, |cz|) / STEPC )
+//
+// and cyclically for y and z. A heightfield over a plane becomes a block
+// whose three visible faces each terrace towards their edges and meet at the
+// corner in nested chevrons, the same square rings seen edge-on.
+fn deCubestack(pos : vec3<f32>) -> DEResult {
+  const CELL : f32 = 0.06;   // grid spacing
+  const HALF : f32 = 0.45;   // cube half-extent as a fraction of CELL
+  const N : f32 = 16.0;      // half-count of cells along an untrimmed axis
+  const STEPC : f32 = 2.0;   // terrace rings before the limit steps in
+
+  // Domain repetition on all three axes. HALF must stay under 0.5 or cubes
+  // are sliced flat at the cell walls, since only the nearest cell is
+  // evaluated -- the same constraint the ziggurat's columns carry.
+  let cellId = round(pos / CELL);
+  let q = pos - CELL * cellId;
+  let a = abs(cellId);
+
+  // Each axis's reach is capped by the terrace ring of the other two, so
+  // every face steps inward towards its own edges rather than just one.
+  let limit = vec3<f32>(
+    N - floor(max(a.y, a.z) / STEPC),
+    N - floor(max(a.x, a.z) / STEPC),
+    N - floor(max(a.x, a.y) / STEPC));
+
+  // The limits are quantised to whole cells, so each clip plane lands
+  // exactly on a cell wall and no cube is ever cut through.
+  let clip = abs(pos) - limit * CELL;
+  let d = sdBox(q, vec3<f32>(CELL * HALF));
+
+  var res : DEResult;
+  res.dist = max(d, max(clip.x, max(clip.y, clip.z)));
+  res.trap = clamp(max(a.x, max(a.y, a.z)) / N, 0.0, 1.0);  // band the terraces outward
+  return res;
+}
+
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
   let ft = u.fractalType;
@@ -1648,8 +1692,10 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
     return deKleinPack(pos);
   } else if (ft < 24.5) {
     return deEngel(pos);
+  } else if (ft < 29.5) {
+    return deZiggurat(pos);
   }
-  return deZiggurat(pos);
+  return deCubestack(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {
