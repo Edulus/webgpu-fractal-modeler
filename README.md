@@ -526,13 +526,15 @@ It is also the one surface whose id sits *after* the attractors and the cosmic w
 
 ### Cube stack
 
-The ziggurat's volumetric relative. Where the ziggurat is a heightfield — one cube per cell of a *plane*, which is why it reads as a flat expanse with a shallow recess — this fills a three-dimensional lattice and clips it to a block whose limit on each axis steps inward with the Chebyshev ring of the other two:
+The ziggurat's volumetric relative, and its inverse. Where the ziggurat is a heightfield — one cube per cell of a *plane*, which is why it reads as a flat expanse with a shallow recess — this fills a three-dimensional lattice and clips it to a block whose limit on each axis *rises* with the Chebyshev ring of the other two:
 
-    limit(x) = N - floor( max(|cy|, |cz|) / STEPC )
+    limit(x) = min( N, N - DEPTH + floor( max(|cy|, |cz|) / STEPC ) )
 
-Each face therefore steps down towards its edges, and the three visible faces meet at the corner in nested chevrons. About 16,700 cubes survive the clip, across nine terrace levels.
+The sign is the whole design. Subtracting the ring instead crowns each face with a stepped pyramid, which reads as a lump; adding it sinks a square well into the middle of every face — full height at the rim, `DEPTH` terraces down at the centre. Seen face-on the concentric square rings converge on a vanishing point, and along each edge, where two wells meet, their rings fold into nested chevrons. A well is far deeper than a hill is tall, so perspective has much more to work with. About 137,000 cubes survive the clip, 63 to a side, across 15 terraces.
 
-The limits are quantised to whole cells, so a cube is always wholly inside or wholly outside the block and none is ever cut through. As with the ziggurat, the cube half-extent stays under half the cell spacing, because domain repetition evaluates only the nearest cell.
+The limits are quantised to whole cells, and the clip planes sit on the cell *wall*, at `(limit + 0.5)` cells rather than on the cell centre. Half a cell nearer and the outermost cube of every terrace is sliced through its middle, leaving flat square patches along each step — which is what quantising the limits was for in the first place. As with the ziggurat, the cube half-extent stays under half the cell spacing, because domain repetition evaluates only the nearest cell; it is set lower still, at 0.37, because at this cell count a tight gap silts up into a smooth surface instead of reading as sixty-three distinct cubes.
+
+Colouring it took more tries than building it. Every radial choice rings: the ring count and the Chebyshev radius have the terraces themselves as their level sets, so each step comes out a flat separate colour, and the Euclidean radius is smooth but still lands as concentric bands, because the well is radially symmetric — the result is a bullseye either way. The geometry already says "concentric" as loudly as it can through its own shadowing and ambient occlusion. The palette coordinate is therefore a plain directional ramp along the body diagonal, which cannot align with the rings at all; the steps are left to be described by light alone, and the six wells do not all come out identically toned.
 
 ### Strange attractors
 

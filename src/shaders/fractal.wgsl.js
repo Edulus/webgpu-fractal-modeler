@@ -1605,47 +1605,77 @@ fn deZiggurat(pos : vec3<f32>) -> DEResult {
   return res;
 }
 
-// Cube stack — the ziggurat's rule applied to all three axes at once. Where
-// the ziggurat terraces a heightfield with
+// Cube stack — the ziggurat's rule applied to all three axes at once, and
+// inverted. Where the ziggurat terraces a heightfield with
 //
 //   h(i,j) = STEP * max(|i|, |j|)
 //
-// this clips a solid 3D lattice with a limit per axis that steps inward with
-// the Chebyshev ring of the *other two*:
+// this clips a solid 3D lattice with a limit per axis that RISES with the
+// Chebyshev ring of the other two:
 //
-//   limit(x) = N - floor( max(|cy|, |cz|) / STEPC )
+//   limit(x) = min( N, N - DEPTH + floor( max(|cy|, |cz|) / STEPC ) )
 //
-// and cyclically for y and z. A heightfield over a plane becomes a block
-// whose three visible faces each terrace towards their edges and meet at the
-// corner in nested chevrons, the same square rings seen edge-on.
+// and cyclically for y and z. The sign is the whole design. Subtracting the
+// ring instead would crown each face with a stepped pyramid, which reads as a
+// lump; adding it sinks a square funnel into the middle of every face, full
+// height at the rim and DEPTH terraces down at the centre. Seen face-on the
+// concentric square rings converge on a vanishing point, and seen corner-on
+// the three funnels fold into nested chevrons along the edges between them.
+//
+// It is the same trick the ziggurat plays -- an L-infinity ring count is the
+// only arithmetic here -- but a well is far deeper than a hill, so perspective
+// has much more to work with.
 fn deCubestack(pos : vec3<f32>) -> DEResult {
-  const CELL : f32 = 0.06;   // grid spacing
-  const HALF : f32 = 0.45;   // cube half-extent as a fraction of CELL
-  const N : f32 = 16.0;      // half-count of cells along an untrimmed axis
-  const STEPC : f32 = 2.0;   // terrace rings before the limit steps in
+  const CELL : f32 = 0.0313; // grid spacing
+  const HALF : f32 = 0.37;   // cube half-extent as a fraction of CELL
+  const N : f32 = 31.0;      // cells from centre to rim, so 63 across a face
+  const STEPC : f32 = 2.0;   // cells of ring per terrace
+  const DEPTH : f32 = 15.0;  // terraces the funnel descends
 
-  // Domain repetition on all three axes. HALF must stay under 0.5 or cubes
-  // are sliced flat at the cell walls, since only the nearest cell is
-  // evaluated -- the same constraint the ziggurat's columns carry.
+  // Domain repetition on all three axes. HALF must stay well under 0.5 or
+  // cubes are sliced flat at the cell walls, since only the nearest cell is
+  // evaluated -- the same constraint the ziggurat's columns carry. It is set
+  // lower than the ziggurat's 0.45 on purpose: the gap is what separates one
+  // cube from the next, and at this cell count a tight gap silts up into a
+  // smooth surface instead of reading as sixty-three distinct cubes.
   let cellId = round(pos / CELL);
   let q = pos - CELL * cellId;
   let a = abs(cellId);
 
-  // Each axis's reach is capped by the terrace ring of the other two, so
-  // every face steps inward towards its own edges rather than just one.
-  let limit = vec3<f32>(
-    N - floor(max(a.y, a.z) / STEPC),
-    N - floor(max(a.x, a.z) / STEPC),
-    N - floor(max(a.x, a.y) / STEPC));
+  // Each axis's reach is set by the terrace ring of the other two, capped at
+  // the rim so the funnel opens flush with the face rather than overshooting.
+  let ring = vec3<f32>(max(a.y, a.z), max(a.x, a.z), max(a.x, a.y));
+  let limit = min(vec3<f32>(N), vec3<f32>(N - DEPTH) + floor(ring / STEPC));
 
-  // The limits are quantised to whole cells, so each clip plane lands
-  // exactly on a cell wall and no cube is ever cut through.
-  let clip = abs(pos) - limit * CELL;
+  // The clip planes sit on the cell WALL, at (limit + 0.5) cells, not on the
+  // cell centre. Half a cell nearer and the outermost cube of every terrace is
+  // sliced through its middle, leaving flat square patches along each step --
+  // the limits are quantised precisely so that a cube is wholly in or wholly
+  // out, and clipping at limit * CELL would throw that away.
+  let clip = abs(pos) - (limit + 0.5) * CELL;
   let d = sdBox(q, vec3<f32>(CELL * HALF));
 
   var res : DEResult;
   res.dist = max(d, max(clip.x, max(clip.y, clip.z)));
-  res.trap = clamp(max(a.x, max(a.y, a.z)) / N, 0.0, 1.0);  // band the terraces outward
+  // Palette coordinate from a plain DIRECTIONAL ramp across the block, along
+  // the body diagonal.
+  //
+  // Every radial choice was tried first and all of them ring. The ring count
+  // and the Chebyshev radius have the terraces themselves as their level sets,
+  // so each step comes out a flat separate colour; the Euclidean radius is at
+  // least smooth, but the funnel is radially symmetric, so a radial ramp still
+  // lands as concentric bands and the well turns into a bullseye. The geometry
+  // here is already saying "concentric" as loudly as it can through its own
+  // shadowing and ambient occlusion, and colour repeating that reads as garish
+  // rather than as depth.
+  //
+  // A ramp along a fixed direction cannot align with the rings at all, so the
+  // steps are left to be described by light alone and the palette does nothing
+  // but wash slowly across the solid -- which is also what stops the six
+  // funnels from all coming out identically toned.
+  const EXTENT : f32 = (N + 0.5) * CELL;
+  const AXIS : vec3<f32> = vec3<f32>(0.5773503, 0.5773503, 0.5773503);
+  res.trap = clamp(0.5 + 0.5 * dot(pos, AXIS) / EXTENT, 0.0, 1.0);
   return res;
 }
 
