@@ -15,7 +15,7 @@
 import {
   LADDER, TOP, BUDGET_MS, PRESET_RUNG, CEILING_RESET_MS,
   govInit, govSample, rung, clampIndex, showcaseIndex, accumTarget, planMode,
-  MAX_BUDGET_FACTOR, maxRungForLimit,
+  MAX_BUDGET_FACTOR, maxRungForLimit, govResync,
 } from '../src/quality.js';
 
 let passed = 0, failed = 0;
@@ -434,6 +434,41 @@ check('accumulation targets rise with the rung',
         maxRungForLimit(0, 0, L) === TOP && maxRungForLimit(1920, 1080, 0) === TOP);
   check('a limit smaller than even the lowest rung returns the lowest',
         maxRungForLimit(10000, 10000, 100) === 0);
+}
+
+
+// ---- Governor / showcase desync -------------------------------------------
+// The showcase pass raises the rendered rung while the view is still. If the
+// governor is not told, it charges the resulting frames to the rung it still
+// believes it is on. Reproduces the observed desktop failure: a high showcase
+// rung with the governor pinned low, every frame slow, and the ladder unable to
+// respond because its index has nowhere lower to go.
+{
+  console.log('\nGovernor resync after an external rung change');
+  const slow = 60;               // ms: far over any interactive budget
+
+  // Without resync: the governor sits at 0 believing it is cheap, so it can
+  // never drop, and the renderer stays wherever showcase left it.
+  let stale = govInit(0);
+  for (let i = 0; i < 400; i++) stale = govSample(stale, slow);
+  check(`stale governor cannot drop below its false index (${stale.index})`, stale.index === 0);
+  check(`stale governor's miss rate runs away (${stale.missRate.toFixed(2)})`, stale.missRate > 0.5);
+
+  // With resync: told it is actually at 9, it walks the ladder down.
+  let synced = govResync(govInit(0), 9);
+  check('resync adopts the rung actually being rendered', synced.index === 9);
+  check('resync clears evidence gathered at another rung', synced.missRate === 0);
+  for (let i = 0; i < 400; i++) synced = govSample(synced, slow);
+  check(`synced governor drops away from an unaffordable rung (9 -> ${synced.index})`, synced.index < 9);
+
+  // The hard-won memory of which rungs failed must survive a resync.
+  const remembered = govResync({ ...govInit(2), ceiling: 3, lastFail: 4 }, 7);
+  check('resync preserves the remembered ceiling and lastFail', remembered.ceiling === 3 && remembered.lastFail === 4);
+
+  // A resync to the rung already held is a no-op, so it cannot be used to
+  // silently wipe the governor's evidence every frame.
+  const settled = govSample(govInit(4), 5);
+  check('resync to the current rung changes nothing', govResync(settled, settled.index) === settled);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

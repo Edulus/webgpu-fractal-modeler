@@ -18,7 +18,7 @@ import { COMPOSITE_WGSL } from './shaders/composite.wgsl.js';
 import { ATTRACTOR_WGSL } from './shaders/attractor.wgsl.js';
 import {
   LADDER, TOP, PRESET_RUNG, BUDGET_MS,
-  govInit, govSample, rung, clampIndex, showcaseIndex, planMode, maxRungForLimit,
+  govInit, govSample, govResync, rung, clampIndex, showcaseIndex, planMode, maxRungForLimit,
 } from './quality.js';
 import { getPalette } from './palettes.js';
 import { clampStops, averageColor, MAX_STOPS } from './palette-io.js';
@@ -1177,6 +1177,11 @@ export async function initFractalBackground(canvas, options = {}) {
     if (i === state.detailRung) return false;
     state.detailRung = i;
     state.qualityScale = LADDER[i].scale;
+    // Keep the governor's idea of the current rung in step with what is really
+    // being rendered. A rung applied by anything other than the governor --
+    // showcase, or a direct call -- otherwise leaves it charging frames to a
+    // rung it is not on, which drove the ladder to the floor in practice.
+    if (why !== 'governor' && state.gov) state.gov = govResync(state.gov, i);
     // Resolution changed, so the accumulated image is the wrong size and any
     // samples gathered at the old rung no longer describe this one.
     state.accumSamples = 0;

@@ -135,6 +135,37 @@ export function govInit(index = 3, opts = {}) {
   return g;
 }
 
+// Tell the governor which rung is actually being rendered.
+//
+// The governor is not the only thing that sets a rung. The showcase pass raises
+// it once the view is still, and callers can set one directly. Its own index is
+// otherwise unaware of that, so the frames it samples next describe a rung it
+// does not believe it is on.
+//
+// Observed on a 60Hz desktop: showcase raised the rendered rung while the
+// governor still held a much lower index, so every subsequent interactive frame
+// was charged to the wrong rung. The miss rate ran to 0.93 and the ladder was
+// walked to the floor, while the renderer itself never moved -- the governor
+// only calls back into applyRung when its index changes, and its index had
+// nowhere lower to go.
+//
+// The remembered ceiling and lastFail survive: they record which rungs proved
+// unaffordable, which is still true. Only the per-rung evidence is cleared,
+// because it was gathered at a different rung and does not describe this one.
+export function govResync(gov, index) {
+  if (!gov) return gov;
+  const i = clampIndex(index);
+  if (i === gov.index) return gov;
+  const g = { ...gov };
+  g.index = i;
+  g.emaMs = g.budgetMs * 0.9;
+  g.missRate = 0;
+  g.good = 0;
+  g.bad = 0;
+  g.changed = false;
+  return g;
+}
+
 export function clampIndex(i) {
   return Math.max(0, Math.min(TOP, Math.round(i)));
 }
