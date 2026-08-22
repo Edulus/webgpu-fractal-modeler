@@ -580,7 +580,9 @@
       // The explorer asks the machine for everything it has; the library's
       // default stays low-power for the background-effect use.
       power: 'high',
-      transparent: true,
+      // Match the Shape Explorer presentation from the first rendered frame.
+      // Entering Explorer then changes camera ownership only, with no colour cut.
+      transparent: false,
       onUnsupported: (reason) => {
         console.warn('Fractal renderer unsupported:', reason);
         canvas.style.display = 'none';
