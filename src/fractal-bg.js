@@ -1822,15 +1822,15 @@ export async function initFractalBackground(canvas, options = {}) {
   // Held keys would otherwise stick down while the tab is in the background.
   function onBlur() { state.keys.clear(); }
 
-  // Both camera modes need the same things switched on, and they are mutually
-  // exclusive. Deriving that from the flags in one place means callers cannot
-  // get the ordering wrong -- an earlier version had setFly enable navigation
-  // and a following setExplorer(false) immediately turn it back off.
+  // Camera mode changes only who owns navigation. Presentation remains
+  // unchanged so entering Shape Explorer cannot alter the apparent palette by
+  // switching the canvas from transparent-over-page compositing to opaque.
+  // Fly and Explorer are mutually exclusive; deriving controls from the flags
+  // here keeps their input lifecycle in one place.
   function applyCameraMode() {
     const interactive = state.fly || state.explorer;
     applyControls(interactive);
     state.accumSamples = 0;
-    applyTransparent(interactive ? false : !!opts.transparent);
     state.autoOrbit = !interactive;
   }
 
