@@ -57,6 +57,42 @@ export function orbitBasis(yaw, pitch) {
 }
 
 /**
+ * Recover the orbit-camera pose that exactly reproduces an eye/target view.
+ * `dir` in orbitBasis points target -> eye, so yaw is atan2(z,x).
+ * Returns null for a degenerate or non-finite view.
+ */
+export function orbitPoseFromView(eye, target) {
+  if (!eye || !target || eye.length < 3 || target.length < 3) return null;
+  const dx = Number(eye[0]) - Number(target[0]);
+  const dy = Number(eye[1]) - Number(target[1]);
+  const dz = Number(eye[2]) - Number(target[2]);
+  if (![dx, dy, dz].every(Number.isFinite)) return null;
+  const dist = Math.hypot(dx, dy, dz);
+  if (!(dist > 1e-9)) return null;
+  return {
+    yaw: Math.atan2(dz, dx),
+    pitch: Math.asin(clamp(dy / dist, -1, 1)),
+    dist,
+  };
+}
+
+/**
+ * Angular velocity between two sampled orbit poses. Yaw uses the shortest
+ * wrapped delta so crossing +/-PI does not manufacture a full-turn spike.
+ * Samples are {yaw, pitch, t}, with t in milliseconds.
+ */
+export function orbitRatesFromSamples(prev, next) {
+  if (!prev || !next) return [0, 0];
+  const dt = (Number(next.t) - Number(prev.t)) / 1000;
+  if (!(dt > 1e-4) || !Number.isFinite(dt)) return [0, 0];
+  const a = Number(next.yaw) - Number(prev.yaw);
+  const dp = Number(next.pitch) - Number(prev.pitch);
+  if (!Number.isFinite(a) || !Number.isFinite(dp)) return [0, 0];
+  const dy = Math.atan2(Math.sin(a), Math.cos(a));
+  return [dy / dt, dp / dt];
+}
+
+/**
  * Yaw/pitch that points a camera at `pos` back towards the origin.
  * @returns {{yaw: number, pitch: number}}
  */

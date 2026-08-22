@@ -9,7 +9,8 @@
 
 import {
   makeFlyCamera, stepFlyCamera, aimFlyCamera, dollyFlyCamera, scaleFlySpeed,
-  flyBasis, orbitBasis, flickVelocity, FLICK_WINDOW_MS, FLICK_MAX_RATE,
+  flyBasis, orbitBasis, orbitPoseFromView, orbitRatesFromSamples,
+  flickVelocity, FLICK_WINDOW_MS, FLICK_MAX_RATE,
   aimAtOrigin, MAX_PITCH, FLY_SPEED_MIN, FLY_SPEED_MAX,
   usableClearance, travelDistance, orbitDragScale,
   pinchZoomFactor, pinchDollyDistance, driftFloor, decayMomentum,
@@ -42,6 +43,30 @@ console.log('\nbasis');
     check(`right is horizontal (yaw ${yaw})`, near(b.right[1], 0));
     check(`right ⟂ forward (yaw ${yaw}, pitch ${pitch})`, near(dot(b.forward, b.right), 0, 1e-9));
   }
+}
+
+console.log('\nlanding-to-explorer orbit handoff');
+{
+  for (const [yaw, pitch, dist, target] of [
+    [0.2, 0.1, 2.55, [0, 0, 0]],
+    [-2.4, 0.7, 4.2, [0.3, -0.2, 0.6]],
+    [2.9, -1.2, 1.1, [-0.4, 0.5, -0.1]],
+  ]) {
+    const dir = orbitBasis(yaw, pitch).dir;
+    const eye = target.map((v, i) => v + dir[i] * dist);
+    const got = orbitPoseFromView(eye, target);
+    check(`recovers exact pose at yaw ${yaw}`, !!got
+      && near(got.dist, dist, 1e-9)
+      && near(got.pitch, pitch, 1e-9)
+      && near(Math.atan2(Math.sin(got.yaw - yaw), Math.cos(got.yaw - yaw)), 0, 1e-9));
+  }
+
+  const rate = orbitRatesFromSamples(
+    { yaw: Math.PI - 0.01, pitch: 0.2, t: 1000 },
+    { yaw: -Math.PI + 0.01, pitch: 0.23, t: 1100 });
+  check('yaw rate crosses +/-PI by the short path', near(rate[0], 0.2, 1e-9));
+  check('pitch rate is preserved', near(rate[1], 0.3, 1e-9));
+  check('degenerate eye/target is rejected', orbitPoseFromView([1, 2, 3], [1, 2, 3]) === null);
 }
 
 console.log('\naiming at the origin');
