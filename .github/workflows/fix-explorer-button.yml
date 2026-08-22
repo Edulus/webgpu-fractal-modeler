@@ -1,0 +1,40 @@
+name: Fix explorer button emphasis
+
+on:
+  push:
+    branches: [fix/explorer-button-emphasis]
+
+permissions:
+  contents: write
+
+jobs:
+  implement-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/explorer-button-emphasis
+          fetch-depth: 0
+
+      - name: Apply UI patch
+        run: python3 tools/patch_explorer_button.py
+
+      - name: Syntax checks
+        run: node --check tools/presentation.test.js
+
+      - name: Run full test suite
+        run: |
+          for test in tools/*.test.js; do
+            echo "== $test =="
+            node "$test"
+          done
+
+      - name: Commit validated implementation
+        run: |
+          rm .github/workflows/fix-explorer-button.yml tools/patch_explorer_button.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Remove duplicate Explorer button"
+          git push origin HEAD:fix/explorer-button-emphasis
