@@ -25,7 +25,7 @@ import { clampStops, averageColor, MAX_STOPS } from './palette-io.js';
 import {
   makeFlyCamera, stepFlyCamera, aimFlyCamera, dollyFlyCamera, scaleFlySpeed,
   usableClearance, orbitDragScale, pinchZoomFactor, pinchDollyDistance,
-  orbitBasis, flickVelocity, FLICK_WINDOW_MS,
+  orbitBasis, orbitPoseFromView, orbitRatesFromSamples, flickVelocity, FLICK_WINDOW_MS,
   driftFloor, decayMomentum, DRIFT_RATE, FLY_SPEED_MIN, FLY_SPEED_MAX,
   planDeviceLoss, MAX_REINITS,
 } from './camera.js';
@@ -344,6 +344,13 @@ export async function initFractalBackground(canvas, options = {}) {
     keys: new Set(),
     frameDt: 16,
     lastCamPos: [0, 0, 3.2],
+    lastCamTarget: [0, 0, 0],
+    // The landing/background camera follows a time-driven path. Keep its most
+    // recent orbit-equivalent sample and angular rate so entering Shape Explorer
+    // can continue the exact pose and motion already on screen instead of
+    // jumping to the canned reset pose.
+    backgroundOrbitSample: null,
+    backgroundOrbitRate: [0, 0],
     // Clearance at the camera, read back from the GPU one frame late. Only the
     // GPU can evaluate the distance estimators, and fly speed scales by this so
     // travel feels the same close up as in open space.
@@ -920,6 +927,22 @@ export async function initFractalBackground(canvas, options = {}) {
       camZ = Math.sin(ax) * radius;
     }
 
+    // Preserve the camera path as an orbit-equivalent pose while on the landing
+    // view. This samples the ACTUAL rendered eye/target pair, so mouse parallax
+    // and the tiny moving target are included rather than approximated.
+    if (!state.fly && !state.explorer) {
+      const pose = orbitPoseFromView([camX, camY, camZ], [tgtX, tgtY, tgtZ]);
+      if (pose) {
+        const sample = { yaw: pose.yaw, pitch: pose.pitch, t: nowMs };
+        if (state.backgroundOrbitSample) {
+          const [vyaw, vpitch] = orbitRatesFromSamples(state.backgroundOrbitSample, sample);
+          state.backgroundOrbitRate[0] = vyaw;
+          state.backgroundOrbitRate[1] = vpitch;
+        }
+        state.backgroundOrbitSample = sample;
+      }
+    }
+
     // Fractal parameter morphing.
     const power = rm ? 8.0 : 8.0 + Math.sin(t * 0.15) * 1.0; // breathe 7..9
 
@@ -935,6 +958,9 @@ export async function initFractalBackground(canvas, options = {}) {
     state.lastCamPos[0] = camX;
     state.lastCamPos[1] = camY;
     state.lastCamPos[2] = camZ;
+    state.lastCamTarget[0] = tgtX;
+    state.lastCamTarget[1] = tgtY;
+    state.lastCamTarget[2] = tgtZ;
     d[U.fov] = 1.05; // radians
 
     d[U.camTarget] = tgtX;
@@ -1836,6 +1862,38 @@ export async function initFractalBackground(canvas, options = {}) {
     nudgeRender();
   }
 
+  function adoptCurrentViewAsOrbit() {
+    const pose = orbitPoseFromView(state.lastCamPos, state.lastCamTarget);
+    if (!pose) return false;
+
+    const o = state.orbit;
+    o.yaw = pose.yaw; o.tyaw = pose.yaw;
+    o.pitch = pose.pitch; o.tpitch = pose.pitch;
+    o.target[0] = state.lastCamTarget[0];
+    o.target[1] = state.lastCamTarget[1];
+    o.target[2] = state.lastCamTarget[2];
+    o.dist = clampDist(pose.dist);
+    o.pinned = false;
+
+    // Continue the landing camera's instantaneous angular motion. Explorer's
+    // normal momentum law takes over from here, so it begins at the same rate
+    // and then naturally settles towards its subtle drift floor.
+    const vyaw = Number(state.backgroundOrbitRate[0]) || 0;
+    const vpitch = Number(state.backgroundOrbitRate[1]) || 0;
+    o.vyaw = vyaw; o.vpitch = vpitch;
+    if (Math.hypot(vyaw, vpitch) > 1e-6) {
+      o.dyaw = vyaw; o.dpitch = vpitch;
+    } else {
+      o.dyaw = 0; o.dpitch = 0;
+    }
+    o.flickAt = 0;
+    o.flickSamples = [];
+    state.probeHit = -1;
+    state.accumSamples = 0;
+    state.lastInteract = performance.now();
+    return true;
+  }
+
   function resetView() {
     const o = state.orbit;
     // Clearing the drift direction as well as the velocity is what makes this
@@ -2057,13 +2115,24 @@ export async function initFractalBackground(canvas, options = {}) {
     // Model-explorer preset: opaque background, no auto-drift, full navigation.
     // Turning it off restores the original (background) configuration.
     setExplorer(on) {
-      state.explorer = !!on;
+      const want = !!on;
+      if (want === state.explorer) return;
+
+      // Capture the live landing pose BEFORE changing mode: applyCameraMode()
+      // can render immediately, so adopting afterwards would already expose one
+      // frame of the old canned Explorer pose. Palette state and colorPhase are
+      // intentionally untouched; only camera-control ownership changes here.
+      const continued = want ? adoptCurrentViewAsOrbit() : false;
+      state.explorer = want;
       if (state.explorer && state.fly) {
         state.fly = false;
         state.keys.clear();
       }
       applyCameraMode();
-      resetView();
+      // A degenerate camera is extraordinarily unlikely, but retain the old
+      // known-good starting pose as a safe fallback. Leaving Explorer also
+      // resets its private orbit state; the landing camera has its own path.
+      if ((want && !continued) || !want) resetView();
       nudgeRender();
     },
     pause() { stop(); },
