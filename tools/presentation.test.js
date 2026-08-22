@@ -17,6 +17,12 @@ check('camera mode still enables interactive controls', mode.includes('applyCont
 check('camera mode still owns auto-orbit lifecycle', mode.includes('state.autoOrbit = !interactive'));
 check('entering Explorer does not change transparency/compositing', !mode.includes('applyTransparent('));
 
+const bootStart = html.indexOf('handle = await initFractalBackground');
+const bootEnd = html.indexOf('});', bootStart);
+const boot = html.slice(bootStart, bootEnd);
+check('landing starts in Shape Explorer opaque presentation', boot.includes('transparent: false'));
+check('landing does not request the old transparent presentation', !boot.includes('transparent: true'));
+
 const landingStart = html.indexOf('  <!-- The landing view is the artwork itself.');
 const landingEnd = html.indexOf('  <script type="module">', landingStart);
 const landing = html.slice(landingStart, landingEnd);
