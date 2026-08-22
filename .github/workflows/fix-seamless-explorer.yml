@@ -55,3 +55,5 @@ jobs:
           git add src/camera.js src/fractal-bg.js tools/camera.test.js .github/workflows/fix-seamless-explorer.yml tools/patch_seamless_explorer.py
           git commit -m "Preserve view when entering Shape Explorer"
           git push origin HEAD:fix/seamless-shape-explorer-entry
+
+# Trigger after workflow exists on the branch.
