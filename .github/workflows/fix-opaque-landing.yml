@@ -1,0 +1,41 @@
+name: Fix opaque landing presentation
+
+on:
+  push:
+    branches: [fix/opaque-landing-presentation]
+
+permissions:
+  contents: write
+
+jobs:
+  implement-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/opaque-landing-presentation
+          fetch-depth: 0
+
+      - name: Apply opaque landing patch
+        run: python3 tools/patch_opaque_landing.py
+
+      - name: Syntax checks
+        run: |
+          node --check tools/presentation.test.js
+
+      - name: Run full test suite
+        run: |
+          for test in tools/*.test.js; do
+            echo "== $test =="
+            node "$test"
+          done
+
+      - name: Commit validated implementation
+        run: |
+          rm .github/workflows/fix-opaque-landing.yml tools/patch_opaque_landing.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Match landing presentation to Shape Explorer"
+          git push origin HEAD:fix/opaque-landing-presentation
