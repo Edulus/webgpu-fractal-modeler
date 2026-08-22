@@ -389,8 +389,8 @@
     }
     #btn-fly.on { background: rgba(255, 190, 120, 0.3); }
 
-    /* Explorer mode: fade the reading content out of the way so the fractal
-       becomes a full-screen, navigable shape. */
+    /* Explorer mode hides the one landing action so the artwork becomes a
+       full-screen navigable shape. */
     body.explorer .wrap { display: none; }
     body.explorer { overflow: hidden; }
     body.explorer #bg { z-index: 0; } /* bring canvas above the (hidden) content */
@@ -536,34 +536,11 @@
     Showing the static CSS gradient fallback. Try a recent Chrome/Edge, Safari 26+, or Firefox with WebGPU enabled.
   </div>
 
-  <!-- Page content demonstrating the embeddable background mode -->
+  <!-- The landing view is the artwork itself. Keep only the one action needed
+       to hand control of that same view to the user. -->
   <main class="wrap">
-    <p class="eyebrow">Twenty objects from mathematics</p>
-    <h1>Complex Geometry Explorer</h1>
-    <p class="lede">
-      Shapes that come out of equations, symmetry groups and endless repetition —
-      minimal surfaces, stellated solids, tessellations of curved space. Spin them,
-      zoom in as far as you like, and fly inside the ones with an interior.
-      Everything is drawn live, pixel by pixel, as you move.
-    </p>
     <div class="actions">
       <button class="btn primary" onclick="document.getElementById('btn-explorer').click()">Enter shape explorer</button>
-    </div>
-
-    <div class="content-block">
-      <h2>One renderer, multiple applications</h2>
-      <p>
-        Use the opaque explorer preset for a full-screen navigable artwork, an
-        educational shape explorer, a music visual, or an installation display.
-        Orbit and zoom remain responsive while the adaptive quality system keeps
-        the renderer practical across a range of GPUs.
-      </p>
-      <p>
-        Transparent mode places the same visuals behind ordinary page content.
-        The canvas stays click-through, and the dark composite treatment preserves
-        legibility through controlled bloom, ACES tonemapping, vignette, and
-        dithering. Switch the shape, palette, and quality tier using the panel.
-      </p>
     </div>
   </main>
 
