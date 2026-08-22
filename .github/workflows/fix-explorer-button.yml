@@ -38,3 +38,5 @@ jobs:
           git add -A
           git commit -m "Remove duplicate Explorer button"
           git push origin HEAD:fix/explorer-button-emphasis
+
+# Trigger validation after the workflow exists on the branch.
