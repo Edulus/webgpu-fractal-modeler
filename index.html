@@ -229,6 +229,152 @@
       opacity: 0.85;
     }
 
+    /* ---- Starting up ------------------------------------------------------
+       The renderer takes a moment to come up, and the only sign of it used to
+       be the word "initializing…" in 12px at the bottom of the panel. That is
+       missable on a fast machine and reads as a dead page on a slow one, so
+       the state is now stated plainly, over the artwork, and the wait is spent
+       walking the user through the panel. */
+    #boot {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 12;
+      display: none;
+      width: min(340px, calc(100vw - 32px));
+      padding: 20px 22px;
+      border-radius: 16px;
+      background: rgba(10, 12, 22, 0.72);
+      border: 1px solid var(--panel-border);
+      backdrop-filter: blur(10px);
+      text-align: center;
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+    }
+    body.booting #boot { display: block; }
+    #boot-title {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      margin-bottom: 6px;
+    }
+    #boot-phase {
+      font-size: 12.5px;
+      color: var(--muted);
+      min-height: 1.3em;
+    }
+    /* Indeterminate: there is no progress to report -- the GPU gives no signal
+       between "compile requested" and "compiled" -- so this says "working"
+       without pretending to know how far along it is. */
+    #boot-bar {
+      margin-top: 14px;
+      height: 3px;
+      border-radius: 999px;
+      background: rgba(160, 180, 255, 0.16);
+      overflow: hidden;
+    }
+    #boot-bar i {
+      display: block;
+      width: 38%;
+      height: 100%;
+      border-radius: 999px;
+      background: var(--accent);
+      animation: boot-slide 1.15s ease-in-out infinite;
+    }
+    @keyframes boot-slide {
+      0%   { transform: translateX(-100%); }
+      100% { transform: translateX(365%); }
+    }
+
+    /* While starting, the panel is on show but not yet wired, so it is dimmed
+       and made inert. Leaving it live invites a click that silently does
+       nothing, which is a worse first impression than the wait itself. */
+    body.booting #panel { pointer-events: none; }
+    body.booting #panel > *:not(#panel-toggle) { opacity: 0.72; }
+    body.booting #panel { border-color: rgba(127, 231, 212, 0.36); }
+
+    /* ---- Boot tour --------------------------------------------------------
+       One control at a time is lifted out of the dimmed panel and named. */
+    #panel .tour-target {
+      opacity: 1 !important;
+      position: relative;
+      z-index: 1;
+      border-radius: 10px;
+      outline: 1.5px solid var(--accent);
+      outline-offset: 3px;
+      box-shadow: 0 0 0 6px rgba(127, 231, 212, 0.1);
+      animation: tour-pulse 1.6s ease-in-out infinite;
+    }
+    @keyframes tour-pulse {
+      0%, 100% { box-shadow: 0 0 0 5px rgba(127, 231, 212, 0.07); }
+      50%      { box-shadow: 0 0 0 9px rgba(127, 231, 212, 0.16); }
+    }
+
+    #tour-tip {
+      position: fixed;
+      z-index: 13;
+      display: none;
+      width: 232px;
+      max-width: calc(100vw - 24px);
+      padding: 11px 13px;
+      border-radius: 12px;
+      background: rgba(10, 12, 22, 0.9);
+      border: 1px solid rgba(127, 231, 212, 0.34);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+      /* Only the skip button takes clicks; the card must not swallow a drag
+         aimed at the artwork behind it. */
+      pointer-events: none;
+    }
+    #tour-tip.show { display: block; }
+    #tour-tip b {
+      display: block;
+      font-size: 13px;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+    #tour-tip span {
+      display: block;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--muted);
+    }
+    #tour-tip .tour-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 9px;
+    }
+    #tour-dots { display: flex; gap: 4px; }
+    #tour-dots i {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: rgba(160, 180, 255, 0.3);
+    }
+    #tour-dots i.on { background: var(--accent); }
+    #tour-skip {
+      pointer-events: auto;
+      appearance: none;
+      background: transparent;
+      border: none;
+      padding: 2px 4px;
+      color: var(--muted);
+      font-size: 11px;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+    #tour-skip:hover { color: var(--fg); }
+
+    /* Motion here is decoration -- the highlight and the tooltip carry the
+       meaning on their own, so the pulsing and the sliding bar go away and
+       nothing is lost. */
+    @media (prefers-reduced-motion: reduce) {
+      #boot-bar i { animation: none; width: 100%; opacity: 0.5; }
+      #panel .tour-target { animation: none; }
+    }
+
     #fallback-note {
       position: fixed;
       /* Top-left: the panel holds top-right, the shape label bottom-left and
@@ -403,7 +549,21 @@
     }
   </style>
 </head>
-<body>
+<!-- Starting up is the state the page LOADS in, not one the module switches on
+     later. The module is deferred, so setting it there leaves the first
+     several hundred milliseconds -- measured at ~400ms here -- showing a panel
+     that looks live and is not. -->
+<body class="booting">
+<script>
+  // Failsafe, deliberately a classic script rather than a module: if the module
+  // never runs at all -- a parse error, a browser too old for `type="module"` --
+  // nothing would ever take the boot state back down and the page would sit
+  // under "Starting the renderer" forever, which is a worse lie than a dead
+  // page. This is the only thing here that must survive the module not loading.
+  setTimeout(function () {
+    document.body.classList.remove('booting');
+  }, 25000);
+</script>
   <!-- WebGPU fractal renderer canvas -->
   <canvas id="bg" aria-hidden="true"></canvas>
 
@@ -530,6 +690,23 @@
   <div id="nav-hint">Drag to rotate · pinch or scroll to zoom · double-tap to freeze the view</div>
   <div id="fly-hint">WASD to move · Q/E down·up · drag to look · shift to sprint · scroll for speed</div>
 
+  <!-- Starting up: stated plainly over the artwork, and taken down the moment
+       the first frame is on screen. -->
+  <div id="boot" role="status" aria-live="polite">
+    <div id="boot-title">Starting the renderer</div>
+    <div id="boot-phase">Setting up WebGPU…</div>
+    <div id="boot-bar"><i></i></div>
+  </div>
+
+  <!-- Boot tour tooltip. Positioned against whichever control is lit up. -->
+  <div id="tour-tip" role="status" aria-live="polite">
+    <b></b><span></span>
+    <div class="tour-foot">
+      <div id="tour-dots"></div>
+      <button id="tour-skip" type="button">Skip</button>
+    </div>
+  </div>
+
   <!-- Fallback banner (shown if WebGPU is unavailable) -->
   <div id="fallback-note">
     <strong>WebGPU unavailable.</strong>
@@ -548,10 +725,152 @@
     import { initFractalBackground } from './src/fractal-bg.js';
     import * as PaletteIO from './src/palette-io.js';
     import { installRendererDiagnostics, formatDiagnosticsPanel } from './src/diagnostics.js';
+    import { TOUR_STEPS, STEP_MS, tourStateAt, bootPhaseAt } from './src/tour.js';
 
     const canvas = document.getElementById('bg');
     const hud = document.getElementById('hud');
     const fallbackNote = document.getElementById('fallback-note');
+
+    // ---- Starting up, and the tour that fills the wait --------------------
+    //
+    // All of this is set running BEFORE the renderer is awaited, which is the
+    // whole point: initFractalBackground does not resolve until WebGPU has a
+    // device and every shader is compiled, and that await is the wait being
+    // filled. Anything set up after it would appear only once there was
+    // nothing left to wait for.
+    const bootPhase = document.getElementById('boot-phase');
+    const tourTip = document.getElementById('tour-tip');
+    const tourDots = document.getElementById('tour-dots');
+    const tourSkip = document.getElementById('tour-skip');
+
+    // body.booting is already set by the markup, so the state is on screen from
+    // the first paint rather than from whenever this deferred module runs.
+    const panelBox = document.getElementById('panel');
+    panelBox.setAttribute('aria-busy', 'true');
+
+    for (let i = 0; i < TOUR_STEPS.length; i++) tourDots.appendChild(document.createElement('i'));
+
+    const tourStart = performance.now();
+    let tourReadyMs = null;      // set when the first frame is actually up
+    let tourDismissed = false;
+    let tourShownIndex = -1;
+    let tourTimer = 0;
+    // Once the renderer hands over, the phase line stops being driven by the
+    // clock. Without this the interval below immediately overwrites the
+    // handover message with whichever stage the elapsed time still points at,
+    // and the card spends its last moments claiming to be setting up WebGPU.
+    let bootPhaseLocked = false;
+
+    function clearTourHighlight() {
+      for (const el of document.querySelectorAll('.tour-target')) el.classList.remove('tour-target');
+    }
+
+    // The tooltip sits to the LEFT of the panel, level with whatever is lit up.
+    // When there is no room there -- a phone, where the panel is most of the
+    // width -- it drops below the highlighted control instead.
+    function placeTip(target) {
+      const r = target.getBoundingClientRect();
+      const w = tourTip.offsetWidth;
+      const h = tourTip.offsetHeight;
+      const gap = 12;
+      if (r.left - w - gap >= 8) {
+        tourTip.style.left = `${r.left - w - gap}px`;
+        tourTip.style.top = `${Math.max(8, Math.min(r.top + r.height / 2 - h / 2, innerHeight - h - 8))}px`;
+      } else {
+        tourTip.style.left = `${Math.max(8, Math.min(r.left, innerWidth - w - 8))}px`;
+        tourTip.style.top = `${Math.min(r.bottom + gap, innerHeight - h - 8)}px`;
+      }
+    }
+
+    function showTourStep(i) {
+      const step = TOUR_STEPS[i];
+      const el = document.querySelector(step.target);
+      clearTourHighlight();
+      // A step whose target is missing is skipped rather than left pointing at
+      // nothing; tools/tour.test.js is what keeps that from happening silently.
+      if (!el) { tourTip.classList.remove('show'); return; }
+      // Highlight the whole labelled field where there is one, so the caption
+      // above the control is lit with it rather than orphaned.
+      (el.closest('label') || el).classList.add('tour-target');
+      tourTip.querySelector('b').textContent = step.title;
+      tourTip.querySelector('span').textContent = step.body;
+      for (let d = 0; d < tourDots.children.length; d++)
+        tourDots.children[d].classList.toggle('on', d === i);
+      tourTip.classList.add('show');
+      placeTip(el.closest('label') || el);
+    }
+
+    // The boot card and the tour have DIFFERENT lifetimes, and conflating them
+    // was wrong. The card is a claim about the renderer: the moment there is a
+    // frame on screen it has to go, or it sits there insisting it is drawing
+    // the first frame over a picture the user is already looking at. The tour
+    // is a lesson, and runs to its own floor so a fast start does not reduce it
+    // to a single flash. On a quick machine the card is gone seconds before the
+    // tour is, and the panel goes live underneath it.
+    function endBoot() {
+      if (!document.body.classList.contains('booting')) return;
+      document.body.classList.remove('booting');
+      panelBox.removeAttribute('aria-busy');
+    }
+
+    function endTour() {
+      clearTourHighlight();
+      tourTip.classList.remove('show');
+      if (tourTimer) { clearInterval(tourTimer); tourTimer = 0; }
+    }
+
+    function tickTour() {
+      const elapsedMs = performance.now() - tourStart;
+      // Only while still waiting: once the renderer is up, the phase line has
+      // been replaced with the first-frame message and must not be overwritten
+      // by a stage that has already been passed.
+      if (!bootPhaseLocked) bootPhase.textContent = bootPhaseAt(elapsedMs);
+      const state = tourStateAt({
+        elapsedMs,
+        readyMs: tourReadyMs,
+        dismissed: tourDismissed,
+      });
+      if (state.done) { endTour(); return; }
+      if (state.index !== tourShownIndex) {
+        tourShownIndex = state.index;
+        showTourStep(state.index);
+      }
+    }
+
+    function dismissTour() {
+      if (tourDismissed) return;
+      tourDismissed = true;
+      tickTour();
+    }
+
+    tourSkip.addEventListener('click', dismissTour);
+    addEventListener('keydown', (e) => { if (e.key === 'Escape') dismissTour(); });
+    // Once the panel is live the tour is still running over it, so touching a
+    // control has to take the lesson down -- being talked at about Shape while
+    // already changing Quality is the most annoying thing an onboarding tour
+    // can do. Capture phase, so it fires whatever the control does with the
+    // event itself.
+    panelBox.addEventListener('pointerdown', dismissTour, true);
+    // Re-place rather than re-show, so a rotate or a resize mid-step does not
+    // leave the tooltip stranded away from the control it is pointing at.
+    addEventListener('resize', () => {
+      if (tourShownIndex >= 0 && tourTip.classList.contains('show')) {
+        const el = document.querySelector(TOUR_STEPS[tourShownIndex].target);
+        if (el) placeTip(el.closest('label') || el);
+      }
+    });
+
+    // Exposed alongside window.fractalHandle for console use and for headless
+    // capture: a screenshot of this page takes longer than a step lasts, so
+    // photographing a particular step means pinning it first.
+    window.bootTour = {
+      show: showTourStep,
+      dismiss: dismissTour,
+      steps: TOUR_STEPS,
+    };
+
+    tickTour();
+    tourTimer = setInterval(tickTour, Math.min(120, STEP_MS / 4));
 
     // Collapse/expand the control panel by tapping the triangle at the top.
     const panel = document.getElementById('panel');
@@ -588,8 +907,27 @@
         canvas.style.display = 'none';
         fallbackNote.classList.add('show');
         hud.textContent = 'WebGPU unavailable';
+        // There is nothing left to wait for, and nothing the tour is teaching
+        // is reachable, so it comes down at once rather than teaching a panel
+        // that will never do anything.
+        endBoot();
+        dismissTour();
       },
     });
+
+    // Ready is the first frame ON SCREEN, not the moment initFractalBackground
+    // resolves. Those are two rAF apart: the resolve means the device and the
+    // pipelines exist, and the frame after it is the first thing the user can
+    // actually see. Ending the boot state on the resolve tears the card away
+    // over a still-empty canvas, which looks like a failure rather than a
+    // finish.
+    bootPhaseLocked = true;
+    bootPhase.textContent = 'Drawing the first frame…';
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      tourReadyMs = performance.now() - tourStart;
+      endBoot();
+      tickTour();
+    }));
 
     // Expose the handle for console tinkering (e.g. fractalHandle.setZoom(2)).
     window.fractalHandle = handle;

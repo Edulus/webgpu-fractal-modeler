@@ -67,6 +67,7 @@ mathematicians named there.
 │   ├── palette-io.js             palette import and persistence (pure)
 │   ├── palettes.js               Inigo Quilez cosine-palette presets
 │   ├── quality.js                adaptive-quality governor (pure, no WebGPU)
+│   ├── tour.js                   boot-tour steps and timing (pure, no DOM)
 │   └── shaders/
 │       ├── fractal.wgsl.js       distance estimators + clearance compute shader
 │       ├── engel.wgsl.js         generated plesiohedron tables + its estimator
@@ -83,7 +84,8 @@ mathematicians named there.
 │   ├── attractor.test.js         attractor fits and Lyapunov exponents
 │   ├── engel.test.js             plesiohedron tables, tiling and Lipschitz bound
 │   ├── quality.test.js           governor behaviour against simulated devices
-│   └── registry.test.js          shape tables, selector and shader bands agree
+│   ├── registry.test.js          shape tables, selector and shader bands agree
+│   └── tour.test.js              boot-tour sequencing and step targets
 └── .github/workflows/pages.yml   deploys the demo to GitHub Pages
 ```
 
@@ -108,6 +110,27 @@ const handle = await initFractalBackground(canvas, {
   },
 });
 ```
+
+## Starting up
+
+`initFractalBackground` does not resolve until WebGPU has handed over a device and every shader in the set has compiled. Measured cold start here is around 640ms, and a cold shader cache on real hardware is longer. Previously the only sign of that was the word `initializing…` in 12px at the bottom of the control panel, which is missable on a fast machine and reads as a dead page on a slow one.
+
+Two things now happen instead, and they are deliberately given **separate lifetimes**:
+
+**The boot card** is a claim about the renderer, so it is on screen exactly as long as that claim is true. `body.booting` is set in the markup rather than by the module — the module is deferred, so setting it there left the first ~400ms showing a panel that looks live and is not — and it comes down on the first frame the user can actually see, which is two `requestAnimationFrame`s after the await resolves. Ending it on the resolve tears the card away over a still-empty canvas, which reads as a failure rather than a finish. While it is up the panel is dimmed and inert, because a click that silently does nothing is a worse first impression than the wait itself.
+
+There is no honest percentage to show — WebGPU gives no signal between "compile this pipeline" and the promise resolving — so the bar is indeterminate and the text names the stage instead. The later phases (`Still compiling — the first run is the slow one.`) exist to say *slow, not stuck*, which a spinner alone never manages.
+
+**The tour** is a lesson, and runs to its own floor. Each control is highlighted in turn with a one-line note. Two rules in `src/tour.js` keep it from misbehaving at either end of a start whose duration is not knowable in advance:
+
+- Readiness is **rounded up to the end of the current step**, so a step is never cut off part-way.
+- It always plays at least `MIN_STEPS` (2), so a fast start does not show one highlight for 200ms and rip it away — a flash the eye is drawn to and then cannot find.
+
+On a quick machine the floor is what decides the length, not readiness: the card is gone at ~800ms and the tour runs on to 4.4s with the panel live underneath it. On a slow one the last step simply holds until the renderer is up. Touching any control, pressing Escape, or clicking Skip ends it immediately — being talked at about Shape while already changing Quality is the most annoying thing an onboarding tour can do.
+
+Only the sequencing lives in `src/tour.js`, as pure functions over elapsed milliseconds, so the timing rules are tested without a browser or a GPU (`node tools/tour.test.js`). That test also checks every step points at an element that actually exists in `index.html` — a step whose target has been renamed away fails silently, with the highlight simply never appearing and no error anywhere.
+
+A classic (non-module) inline script clears the boot state after 25 seconds as a failsafe. It is the one thing on the page that must survive the module not running at all: without it, a parse error or a browser too old for `type="module"` would leave the page sitting under "Starting the renderer" forever, which is a worse lie than a dead page.
 
 ### Shape-explorer mode
 
