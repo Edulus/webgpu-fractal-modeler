@@ -1,9 +1,10 @@
 // Per-shape mathematical controls for the Shape Explorer.
 //
-// The renderer's existing imageAdjust vec4 is transported as four exact 23-bit
-// integers. Each integer packs one image-adjustment value and one normalized
-// model parameter, allowing shape controls to ride the existing uniform layout
-// without expanding the WebGPU buffer or disturbing the public image controls.
+// The four packed transport slots are only an implementation detail. Their
+// meanings are defined independently for every model below, and models may use
+// one, two, three, or four controls. A slider must correspond to a quantity that
+// participates in that model's own construction; there is no universal
+// scale/twist/stretch/warp layer.
 
 const PACK_FLAG = 4194304; // 2^22
 const PACK_BASE = 2048;    // 11 bits per value
@@ -16,55 +17,160 @@ export const IMAGE_RANGES = Object.freeze({
   hue: [0, 1],
 });
 
-const generic = (scale, twist, stretch, warp) => [
-  { key: 'scale', label: scale, min: 0.65, max: 1.35, step: 0.01, default: 1 },
-  { key: 'twist', label: twist, min: -2, max: 2, step: 0.02, default: 0 },
-  { key: 'stretch', label: stretch, min: 0.65, max: 1.35, step: 0.01, default: 1 },
-  { key: 'warp', label: warp, min: -0.3, max: 0.3, step: 0.005, default: 0 },
-];
+const p = (key, label, min, max, step, defaultValue) =>
+  ({ key, label, min, max, step, default: defaultValue });
 
 export const MODEL_PARAMETERS = Object.freeze({
   mandelbulb: [
-    { key: 'power', label: 'Power', min: 2, max: 12, step: 0.05, default: 8 },
-    { key: 'twist', label: 'Axial twist', min: -2.5, max: 2.5, step: 0.025, default: 0 },
-    { key: 'stretch', label: 'Vertical stretch', min: 0.6, max: 1.4, step: 0.01, default: 1 },
-    { key: 'warp', label: 'Radial warp', min: -0.25, max: 0.25, step: 0.005, default: 0 },
+    p('power', 'Power', 2, 12, 0.05, 8),
+    p('bailout', 'Escape radius', 1.5, 6, 0.05, 2.2),
   ],
   mandelbox: [
-    { key: 'foldScale', label: 'Fold scale', min: -3, max: -1, step: 0.01, default: -1.85 },
-    { key: 'minRadius', label: 'Minimum radius', min: 0.1, max: 0.8, step: 0.005, default: 0.35 },
-    { key: 'fixedRadius', label: 'Fixed radius', min: 0.5, max: 1.5, step: 0.01, default: 1 },
-    { key: 'warp', label: 'Axis warp', min: -0.3, max: 0.3, step: 0.005, default: 0 },
+    p('foldScale', 'Fold scale', -3, -1, 0.01, -1.85),
+    p('minRadius', 'Minimum radius', 0.1, 0.8, 0.005, 0.35),
+    p('fixedRadius', 'Fixed radius', 0.5, 1.5, 0.01, 1),
   ],
-  menger: generic('Cell scale', 'Cross twist', 'Vertical stretch', 'Bore warp'),
-  julia: generic('Julia scale', 'Orbit twist', 'Vertical stretch', 'Slice warp'),
-  apollonian: generic('Packing scale', 'Packing twist', 'Axial stretch', 'Gap warp'),
-  spherepack: generic('Nest scale', 'Shell twist', 'Axial stretch', 'Tangency warp'),
-  encrusted: generic('Bloom scale', 'Polar twist', 'Polar stretch', 'Crust warp'),
-  surfacepack: generic('Stud scale', 'Lattice twist', 'Body stretch', 'Surface warp'),
-  penrose: generic('Disc scale', 'Tiling twist', 'Disc stretch', 'Tile warp'),
-  gyroid: generic('Cell scale', 'Labyrinth twist', 'Vertical stretch', 'Surface warp'),
-  kleinian: generic('Group scale', 'Inversion twist', 'Axial stretch', 'Limit-set warp'),
-  barth: generic('Sextic scale', 'Icosahedral twist', 'Vertical stretch', 'Node warp'),
-  schottky: generic('Sphere scale', 'Generator twist', 'Axial stretch', 'Tangency warp'),
-  schottkyh: generic('Separation scale', 'Hyperbolic twist', 'Axial stretch', 'Gap warp'),
-  tetrabrot: generic('Bicomplex scale', 'Cross twist', 'Vertical stretch', 'Slice warp'),
-  envoct: generic('Envelope scale', 'Spike twist', 'Axial stretch', 'Face warp'),
-  envdodec: generic('Envelope scale', 'Golden twist', 'Axial stretch', 'Face warp'),
-  hyp534: generic('Ball scale', 'Geodesic twist', 'Vertical stretch', 'Boundary warp'),
-  hyp534t: generic('Cell scale', 'Truncation twist', 'Vertical stretch', 'Boundary warp'),
-  hyp534o: generic('Cell scale', 'Omni twist', 'Vertical stretch', 'Boundary warp'),
-  hyp435: generic('Ball scale', 'Cubic twist', 'Vertical stretch', 'Boundary warp'),
-  hyp435t: generic('Cell scale', 'Truncation twist', 'Vertical stretch', 'Boundary warp'),
-  hyp435o: generic('Cell scale', 'Omni twist', 'Vertical stretch', 'Boundary warp'),
-  kleinpack: generic('Packing scale', 'Reflection twist', 'Axial stretch', 'Horoball warp'),
-  engel: generic('Cell scale', 'Tiling twist', 'Vertical stretch', 'Face warp'),
-  attractor: generic('Trajectory scale', 'Coil twist', 'Vertical spread', 'Orbit warp'),
-  lorenz: generic('Butterfly scale', 'Lobe twist', 'Vertical spread', 'Wing warp'),
-  rossler: generic('Spiral scale', 'Fold twist', 'Vertical spread', 'Spiral warp'),
-  cosmicweb: generic('Web scale', 'Filament twist', 'Vertical stretch', 'Void warp'),
-  ziggurat: generic('Terrace scale', 'Chevron twist', 'Height stretch', 'Ring warp'),
-  cubestack: generic('Cube scale', 'Funnel twist', 'Axis stretch', 'Well warp'),
+  menger: [
+    p('levels', 'Recursion levels', 1, 7, 1, 5),
+    p('halfSize', 'Outer half-size', 0.6, 1.4, 0.01, 1),
+  ],
+  julia: [
+    p('cx', 'Julia c · x', -0.8, 0.8, 0.005, 0.35),
+    p('cy', 'Julia c · y', -0.8, 0.8, 0.005, 0),
+    p('cz', 'Julia c · z', -0.8, 0.8, 0.005, 0.1513),
+    p('cw', 'Julia c · w', -0.8, 0.8, 0.005, 0.18),
+  ],
+  apollonian: [
+    p('inversion', 'Inversion scale', 1.05, 1.55, 0.005, 1.25),
+    p('iterations', 'Packing iterations', 3, 12, 1, 8),
+    p('boundRadius', 'Packing radius', 0.8, 1.8, 0.01, 1.3),
+  ],
+  spherepack: [
+    p('inversion', 'Inversion scale', 1.05, 1.55, 0.005, 1.28),
+    p('iterations', 'Packing iterations', 3, 12, 1, 9),
+    p('sphereRadius', 'Folded sphere radius', 0.7, 1.4, 0.01, 1.1),
+    p('boundRadius', 'Cluster radius', 0.8, 1.6, 0.01, 1.15),
+  ],
+  encrusted: [
+    p('hostRadius', 'Host radius', 0.65, 1.25, 0.01, 0.95),
+    p('crustReach', 'Crust reach', 0.12, 0.55, 0.005, 0.38),
+    p('capThreshold', 'Crust coverage', 0.2, 0.9, 0.005, 0.7),
+    p('inversion', 'Packing inversion', 1.05, 1.45, 0.005, 1.24),
+  ],
+  surfacepack: [
+    p('bodyRadius', 'Body radius', 0.7, 1.3, 0.01, 1),
+    p('shell', 'Packing shell', 0.03, 0.2, 0.002, 0.09),
+    p('cellSize', 'Base cell spacing', 0.12, 0.35, 0.002, 0.22),
+    p('studScale', 'Stud radius scale', 0.55, 1.35, 0.01, 1),
+  ],
+  penrose: [
+    p('discRadius', 'Disc radius', 0.8, 1.8, 0.01, 1.35),
+    p('halfThickness', 'Half thickness', 0.025, 0.11, 0.001, 0.06),
+    p('tileScale', 'Rhombus edge scale', 0.09, 0.28, 0.002, 0.17),
+    p('phason', 'Phason amplitude', 0, 0.2, 0.002, 0.09),
+  ],
+  gyroid: [
+    p('frequency', 'Lattice frequency', 2.5, 9, 0.05, 5.5),
+    p('wall', 'Wall half-thickness', 0.12, 0.6, 0.005, 0.34),
+    p('level', 'Level-set offset', -0.7, 0.7, 0.005, 0),
+    p('clipRadius', 'Orbit clip radius', 0.8, 2.2, 0.01, 1.35),
+  ],
+  kleinian: [
+    p('foldCell', 'Fold-cell scale', 0.85, 1.15, 0.002, 1),
+    p('inversionRadius2', 'Inversion radius²', 0.75, 1.08, 0.002, 0.92),
+    p('primitiveRadius', 'Primitive radius', 0.65, 1.2, 0.005, 0.92436),
+    p('boundRadius', 'Limit-set radius', 1.1, 2.2, 0.01, 1.55),
+  ],
+  barth: [
+    p('pencilW2', 'Pencil parameter w²', 0.75, 1.25, 0.002, 1),
+  ],
+  schottky: [
+    p('sphereScale', 'Generator sphere scale', 0.96, 1, 0.001, 1),
+  ],
+  schottkyh: [
+    p('sphereScale', 'Generator separation scale', 0.82, 0.98, 0.001, 0.925),
+  ],
+  tetrabrot: [
+    p('xShift', 'Real-axis slice shift', -0.9, -0.1, 0.005, -0.5),
+    p('crossCoupling', 'Bicomplex cross-coupling', 0.45, 1.55, 0.005, 1),
+  ],
+  envoct: [
+    p('offset', 'Stellation offset', 0.25, 0.65, 0.002, 0.40824829),
+  ],
+  envdodec: [
+    p('offset', 'Stellation offset', 0.75, 1.45, 0.002, 1.11351636),
+  ],
+  hyp534: [
+    p('edgeRadius', 'Geodesic edge radius', 0.006, 0.04, 0.001, 0.02),
+    p('clipRadius', 'Poincaré-ball clip', 0.65, 0.95, 0.005, 0.85),
+  ],
+  hyp435: [
+    p('edgeRadius', 'Geodesic edge radius', 0.006, 0.04, 0.001, 0.02),
+    p('clipRadius', 'Poincaré-ball clip', 0.65, 0.95, 0.005, 0.85),
+  ],
+  hyp534t: [
+    p('edgeRadius', 'Truncated-edge radius', 0.006, 0.04, 0.001, 0.017),
+    p('clipRadius', 'Poincaré-ball clip', 0.65, 0.95, 0.005, 0.85),
+  ],
+  hyp534o: [
+    p('edgeRadius', 'Omnitruncated-edge radius', 0.006, 0.04, 0.001, 0.012),
+    p('clipRadius', 'Poincaré-ball clip', 0.65, 0.95, 0.005, 0.85),
+  ],
+  hyp435t: [
+    p('edgeRadius', 'Truncated-edge radius', 0.006, 0.04, 0.001, 0.017),
+    p('clipRadius', 'Poincaré-ball clip', 0.65, 0.95, 0.005, 0.85),
+  ],
+  hyp435o: [
+    p('edgeRadius', 'Omnitruncated-edge radius', 0.006, 0.04, 0.001, 0.012),
+    p('clipRadius', 'Poincaré-ball clip', 0.65, 0.95, 0.005, 0.85),
+  ],
+  kleinpack: [
+    p('horoballRadius', 'Seed horoball radius', 0.12, 0.36, 0.002, 0.2629837),
+    p('clipRadius', 'Packing clip radius', 0.75, 0.99, 0.005, 0.95),
+  ],
+  engel: [
+    p('cellScale', 'Lattice cell scale', 0.6, 1.4, 0.01, 1),
+    p('gap', 'Cell-joint gap', 0, 0.035, 0.0005, 0.012),
+    p('clipRadius', 'Tiling radius', 0.75, 1.8, 0.01, 1.15),
+  ],
+  // The attractors are line geometry rather than distance fields. These
+  // controls alter their rendered trajectory geometry in model space.
+  attractor: [
+    p('ringScale', 'Ring scale', 0.65, 1.35, 0.01, 1),
+    p('coilTorsion', 'Coil torsion', -2, 2, 0.02, 0),
+    p('verticalScale', 'Vertical scale', 0.65, 1.35, 0.01, 1),
+    p('fold', 'Fold amplitude', -0.3, 0.3, 0.005, 0),
+  ],
+  lorenz: [
+    p('lobeScale', 'Lobe scale', 0.65, 1.35, 0.01, 1),
+    p('lobeTorsion', 'Lobe torsion', -2, 2, 0.02, 0),
+    p('verticalScale', 'Vertical extent', 0.65, 1.35, 0.01, 1),
+    p('wingCurve', 'Wing curvature', -0.3, 0.3, 0.005, 0),
+  ],
+  rossler: [
+    p('spiralScale', 'Spiral scale', 0.65, 1.35, 0.01, 1),
+    p('spiralTorsion', 'Spiral torsion', -2, 2, 0.02, 0),
+    p('foldHeight', 'Fold height', 0.65, 1.35, 0.01, 1),
+    p('foldCurve', 'Fold curvature', -0.3, 0.3, 0.005, 0),
+  ],
+  cosmicweb: [
+    p('baseFrequency', 'Backbone frequency', 0.45, 1.2, 0.005, 0.78),
+    p('sharpness', 'Filament sharpness', 2.5, 8, 0.05, 4.7),
+    p('voidThreshold', 'Void threshold', 0.25, 0.65, 0.005, 0.475),
+    p('volumeRadius', 'Web volume radius', 3.5, 8, 0.05, 5.7),
+  ],
+  ziggurat: [
+    p('cell', 'Cell spacing', 0.07, 0.22, 0.002, 0.13),
+    p('stepHeight', 'Terrace step height', 0.02, 0.1, 0.001, 0.055),
+    p('halfWidth', 'Cube half-width ratio', 0.25, 0.49, 0.005, 0.45),
+    p('rings', 'Terrace rings', 4, 18, 1, 11),
+  ],
+  cubestack: [
+    p('cell', 'Cube spacing', 0.02, 0.055, 0.0005, 0.0313),
+    p('halfWidth', 'Cube half-width ratio', 0.2, 0.48, 0.005, 0.37),
+    p('terraceCells', 'Cells per terrace', 1, 5, 0.1, 2),
+    p('depth', 'Funnel depth', 5, 25, 1, 15),
+  ],
 });
 
 function clamp(v, lo, hi) {
@@ -73,14 +179,15 @@ function clamp(v, lo, hi) {
 
 export function defaultValuesFor(shape) {
   const schema = MODEL_PARAMETERS[shape] || [];
-  return Object.fromEntries(schema.map((p) => [p.key, p.default]));
+  return Object.fromEntries(schema.map((param) => [param.key, param.default]));
 }
 
 export function normalizedValuesFor(shape, values = {}) {
   const schema = MODEL_PARAMETERS[shape] || [];
-  return schema.map((p) => {
-    const value = values[p.key] === undefined ? p.default : clamp(values[p.key], p.min, p.max);
-    return (value - p.min) / (p.max - p.min);
+  return schema.map((param) => {
+    const value = values[param.key] === undefined
+      ? param.default : clamp(values[param.key], param.min, param.max);
+    return (value - param.min) / (param.max - param.min);
   });
 }
 
@@ -126,7 +233,7 @@ function decimalsFor(step) {
 }
 
 function formatValue(param, value) {
-  return Number(value).toFixed(Math.min(3, decimalsFor(param.step)));
+  return Number(value).toFixed(Math.min(4, decimalsFor(param.step)));
 }
 
 function installStyle() {
@@ -303,8 +410,6 @@ export function installModelParameterControls() {
 
   render(activeShape);
 
-  // index.html publishes the renderer handle synchronously after initialization;
-  // poll on animation frames so this module stays independent of that boot path.
   const started = performance.now();
   function findHandle() {
     if (window.fractalHandle) {
