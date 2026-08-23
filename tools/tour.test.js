@@ -70,15 +70,26 @@ ok(tourStepAt(-50, N) === 0, 'a negative elapsed time clamps to the first step')
 ok(tourStepAt(NaN, N) === 0, 'a NaN clock clamps to the first step rather than vanishing');
 
 // ---- When the tour comes down ----------------------------------------------
-// Rule 1: readiness never cuts a step off part-way.
-ok(tourEndsAt(1, N) === MIN_STEPS * STEP_MS, 'an instant start still plays the minimum');
+// The floor is the whole sequence, so for any start quicker than the tour the
+// floor is what decides the end -- which on real hardware is every start.
+ok(MIN_STEPS === N, 'the floor is the whole sequence, so every step gets played');
+ok(tourEndsAt(1, N) === N * STEP_MS, 'an instant start still plays all seven steps');
+
+// Rule 1 -- readiness never cuts a step off part-way -- is therefore only
+// reachable by a start SLOWER than the whole tour. Tested past the floor, where
+// it is the rule actually doing the work.
+const past = N * STEP_MS;
 ok(
-  tourEndsAt(STEP_MS * 4 + 1, N) === STEP_MS * 5,
-  'readiness one millisecond into a step still lets that step finish',
+  tourEndsAt(past + 1, N) === past + STEP_MS,
+  'readiness one millisecond past the sequence still lets that step finish',
 );
 ok(
-  tourEndsAt(STEP_MS * 4, N) === STEP_MS * 4,
+  tourEndsAt(past, N) === past,
   'readiness exactly on a boundary does not buy an extra step',
+);
+ok(
+  tourEndsAt(past + STEP_MS * 3 + 5, N) === past + STEP_MS * 4,
+  'a start well past the sequence rounds up to its own step boundary',
 );
 
 // Rule 2: the floor. This is what a fast machine actually hits.

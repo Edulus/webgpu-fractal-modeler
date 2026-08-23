@@ -15,13 +15,6 @@
 // has been read; much over three and the tour outlasts the wait it was filling.
 export const STEP_MS = 2200;
 
-// The tour ends when the app is ready, but never before this many steps have
-// played. Without a floor a fast start shows one highlight for 200ms and rips
-// it away again, which is worse than showing nothing: the eye is drawn to a
-// flash it then cannot find. Measured cold-start here is ~640ms, so on a quick
-// machine this is what decides the length, not readiness.
-export const MIN_STEPS = 2;
-
 // The panel, in the order someone meets it. Shape first because it is what the
 // page is for; the setup controls before the view controls; Image last, since
 // it is the one section that is about the picture rather than the model.
@@ -92,6 +85,21 @@ export function bootPhaseAt(elapsedMs, phases = BOOT_PHASES) {
   for (const p of phases) if (t >= p.at) text = p.text;
   return text;
 }
+
+// The tour ends when the app is ready, but never before this many steps have
+// played. It is the WHOLE sequence: walking the panel is the point of the tour,
+// and a floor shorter than the sequence means which controls you are taught
+// depends on how fast your GPU is, which is a strange way to decide a lesson.
+// Measured cold start here is ~640ms against 15.4s of tour, so in practice this
+// is what sets the length and readiness never enters into it.
+//
+// A floor is needed at all because without one a fast start shows a single
+// highlight for 200ms and rips it away, which is worse than showing nothing:
+// the eye is drawn to a flash it then cannot find.
+//
+// This is the one number to change to make the tour shorter -- at 2 it plays
+// Shape and Palette and stops, which is roughly the length of a quick start.
+export const MIN_STEPS = TOUR_STEPS.length;
 
 // Which step is showing at `elapsedMs`.
 //
