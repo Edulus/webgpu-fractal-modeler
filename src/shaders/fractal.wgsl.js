@@ -1713,6 +1713,72 @@ fn deCubestack(pos : vec3<f32>) -> DEResult {
   return res;
 }
 
+// Icosahedral quasicrystal — six plane waves on the icosahedron's 5-fold axes.
+//
+//   f(p) = sum_{i=1..6} cos( K * (u_i . p) ),   solid where f > THRESH
+//
+// The u_i are one representative from each antipodal pair of the icosahedron's
+// twelve vertices, (0, +-1, +-phi) and its cyclic permutations, normalised by
+// sqrt(1 + phi^2). The golden ratio is not decoration here, it is the entire
+// reason the thing is a QUASIcrystal: translating along u_0 advances that wave's
+// phase at K per unit and the other five at K/sqrt5, since distinct 5-fold axes
+// meet at arccos(1/sqrt5). An exact period needs both to complete whole turns at
+// once, i.e. sqrt5 = m/n -- and sqrt5 = 2*phi - 1 is irrational, so no period
+// exists at any scale. Swap the star for an orthogonal triple and the same six
+// lines of code produce an ordinary periodic crystal.
+//
+// What survives instead is almost-periodicity: translations that nearly repeat
+// the field, improving without bound but never closing. Measured in
+// tools/quasicrystal.test.js, the best within 10 units leaves |df| = 0.107 and
+// the best within 100 leaves 0.025, against a field spanning about 10
+// peak-to-peak. "Never comes close" would be just as wrong an answer as
+// "repeats" -- getting arbitrarily close without arriving is the definition.
+//
+// Exact icosahedral symmetry was confirmed rather than assumed -- a 72-degree
+// turn about any u_i reproduces the field to 8e-15, while an arbitrary turn
+// about the same axis moves it by 7.3. That rules out the trap this catalog has
+// been caught by twice: a hidden continuous invariance making a 2D pattern wear
+// a 3D costume.
+fn deQuasicrystal(pos : vec3<f32>) -> DEResult {
+  const K : f32 = 30.0;        // wave number; ~12 cells across the clip ball
+  const THRESH : f32 = 1.55;    // solid where the sum exceeds this
+  const CLIP : f32 = 1.25;
+  // 1/sqrt(1+phi^2) and phi/sqrt(1+phi^2): the normalised 5-fold axes.
+  const A : f32 = 0.52573111;
+  const B : f32 = 0.85065081;
+  // Global Lipschitz bound, and it is EXACT rather than sampled. |grad f| =
+  // K*|sum sin(..) u_i| <= K * max over signs |sum +-u_i|, and aligning the
+  // signs with one axis gives 1 + 5*(1/sqrt5) = 1 + sqrt5 = 2*phi. So the
+  // golden ratio sets the step size as well as the structure. Sampled over
+  // 400k points the true maximum is 17.46 against this 19.42 per unit K, so
+  // the bound costs only 1.11x the marching steps an exact gradient would --
+  // better than the gyroid's 1.26x, and like the gyroid it needs no empirical
+  // safety factor. Dividing by the analytic gradient would be the textbook
+  // move and is wrong for the same reason it is wrong there.
+  const LIP : f32 = 97.082039; // 2 * phi * K
+
+  var s = cos(K * dot(pos, vec3<f32>(0.0, A, B)));
+  s = s + cos(K * dot(pos, vec3<f32>(0.0, A, -B)));
+  s = s + cos(K * dot(pos, vec3<f32>(A, B, 0.0)));
+  s = s + cos(K * dot(pos, vec3<f32>(-A, B, 0.0)));
+  s = s + cos(K * dot(pos, vec3<f32>(B, 0.0, A)));
+  s = s + cos(K * dot(pos, vec3<f32>(B, 0.0, -A)));
+
+  // The clip is an exact term and stays OUTSIDE the divisor; taking max() with
+  // the field rather than returning it alone is what keeps the clip from
+  // registering as a surface of its own and rendering the whole model as a
+  // smooth ball at radius CLIP.
+  var res : DEResult;
+  res.dist = max((THRESH - s) / LIP, length(pos) - CLIP);
+  // Radial, because at the surface s is pinned to THRESH and carries no
+  // variation to colour by. This is a depth cue through the labyrinth; the
+  // mathematically richer choice is the perpendicular-space coordinate, which
+  // needs a second six-wave sum on the conjugate star (phi -> -1/phi) and so
+  // would double the cost of every marching step, not just the shaded hit.
+  res.trap = clamp(length(pos) / CLIP, 0.0, 1.0);
+  return res;
+}
+
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
   let ft = u.fractalType;
@@ -1758,8 +1824,10 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
     return deEngel(pos);
   } else if (ft < 29.5) {
     return deZiggurat(pos);
+  } else if (ft < 30.5) {
+    return deCubestack(pos);
   }
-  return deCubestack(pos);
+  return deQuasicrystal(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {

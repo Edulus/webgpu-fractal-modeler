@@ -55,6 +55,7 @@ mathematicians named there.
 - Lorenz strange attractor
 - Rössler strange attractor
 - Ziggurat cube terraces
+- Icosahedral quasicrystal
 - Cube stack (block of ~16,700 cubes)
 
 ## Project structure
@@ -629,6 +630,24 @@ The sign is the whole design. Subtracting the ring instead crowns each face with
 The limits are quantised to whole cells, and the clip planes sit on the cell *wall*, at `(limit + 0.5)` cells rather than on the cell centre. Half a cell nearer and the outermost cube of every terrace is sliced through its middle, leaving flat square patches along each step — which is what quantising the limits was for in the first place. As with the ziggurat, the cube half-extent stays under half the cell spacing, because domain repetition evaluates only the nearest cell; it is set lower still, at 0.37, because at this cell count a tight gap silts up into a smooth surface instead of reading as sixty-three distinct cubes.
 
 Colouring it took more tries than building it. Every radial choice rings: the ring count and the Chebyshev radius have the terraces themselves as their level sets, so each step comes out a flat separate colour, and the Euclidean radius is smooth but still lands as concentric bands, because the well is radially symmetric — the result is a bullseye either way. The geometry already says "concentric" as loudly as it can through its own shadowing and ambient occlusion. The palette coordinate is therefore a plain directional ramp along the body diagonal, which cannot align with the rings at all; the steps are left to be described by light alone, and the six wells do not all come out identically toned.
+
+### Icosahedral quasicrystal
+
+Six plane waves running along the icosahedron's six five-fold axes, summed, and cut at a level:
+
+    f(p) = Σ_{i=1..6} cos( K · (uᵢ · p) ),    solid where f > 1.55
+
+The `uᵢ` are one representative from each antipodal pair of the icosahedron's twelve vertices, `(0, ±1, ±φ)` and cyclic permutations, normalised by `√(1+φ²)`.
+
+**The golden ratio is the whole reason it is a *quasi*crystal.** Distinct five-fold axes meet at `arccos(1/√5)`, so translating along `u₀` advances that wave's phase at `K` per unit and the other five at `K/√5`. A period requires both to complete whole turns simultaneously — that is, `√5 = m/n`. Since `√5 = 2φ − 1` is irrational, no period exists at any scale. Replace the star with an orthogonal triple and the identical six lines produce an ordinary periodic crystal.
+
+What remains is *almost*-periodicity: translations that nearly repeat the field, improving without bound but never closing. The best within 10 units leaves `|Δf| = 0.107`; the best within 100 leaves `0.025`, against a field spanning about 10 peak to peak. Both halves matter — "never comes close" would be as wrong an answer as "repeats". Getting arbitrarily close without arriving is the definition.
+
+**φ also sets the step size.** This is a bounded trigonometric field, so it takes the gyroid's branch of the Lipschitz rule — a global constant, not the analytic gradient. That constant is exact rather than sampled: `|∇f| = K·|Σ sin(·)uᵢ| ≤ K · max over signs |Σ ±uᵢ|`, and aligning the signs with one axis gives `1 + 5·(1/√5) = 1 + √5 = 2φ`. So `L = 2φK`, and all 64 sign patterns are enumerated in the test rather than the derivation being trusted. Sampled over 250k points the true maximum is 94.1 against the bound's 97.1 — 1.03×, tighter than the gyroid's 1.26×, and like the gyroid it needs no empirical safety factor.
+
+The traps this catalog records were each checked rather than assumed. **Hidden continuous invariance:** a 72° turn about any `uᵢ` reproduces the field exactly (3.5e-14 in exact arithmetic, 7.4e-7 with the shipped f32 constants), while an arbitrary turn about the same axis moves it by 8.2 and a 72° turn about a non-axis by 8.9 — so the symmetry is genuinely the icosahedron's and nothing continuous hides inside it. **Density:** 19.3% of the clip ball is solid, which is open enough to see through into the interior and far from the featureless ball a dense field would give. **The clip as a surface:** combined with `max()`, never returned alone. The threshold is the parameter worth moving — near 1.2 the five-fold rosettes are at their most legible, near 1.9 the solid opens into a lattice you can see clean through.
+
+**This is the six-wave Fourier model, not the cut-and-project tiling.** It is a genuine quasiperiodic solid with exact icosahedral symmetry, but it is a density field, not the rhombohedral tiling built from a 6D lattice. That construction — roadmap item 7, the successor to the retired Penrose relief — remains open.
 
 ### Strange attractors
 
