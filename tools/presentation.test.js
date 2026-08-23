@@ -23,14 +23,36 @@ const boot = html.slice(bootStart, bootEnd);
 check('landing starts in Shape Explorer opaque presentation', boot.includes('transparent: false'));
 check('landing does not request the old transparent presentation', !boot.includes('transparent: true'));
 
-const landingStart = html.indexOf('  <!-- The landing view is the artwork itself.');
-const landingEnd = html.indexOf('  <script type="module">', landingStart);
-const landing = html.slice(landingStart, landingEnd);
-check('landing keeps Enter Shape Explorer action', landing.includes('Enter shape explorer'));
-check('landing headline is removed', !landing.includes('<h1>'));
-check('landing lede is removed', !landing.includes('class="lede"'));
-check('landing demo copy is removed', !landing.includes('content-block'));
+// There are two modes and the page is always in one of them, so the landing
+// state is gone entirely -- along with the control for entering and leaving it.
+// The failure this guards against is a half-removal: the button gone but the
+// markup or CSS for the landing still there, or vice versa, which leaves a
+// state reachable that nothing can steer.
+check('landing markup is gone', !html.includes('<main class="wrap"'));
+check('no Enter/Exit Shape Explorer control remains', !html.includes('btn-explorer'));
+check('landing copy is gone', !html.includes('content-block') && !html.includes('class="lede"'));
+check('landing CSS went with it', !html.includes('    .wrap {') && !html.includes('    .btn {'));
+check('the fly-through toggle is the only mode control', html.includes('id="btn-fly"'));
 check('CSS gradient backdrop remains available', html.includes('radial-gradient(1200px 800px at 20% -10%'));
+
+// Explorer is entered by the page itself, not by a click, and before the first
+// frame -- so no frame is ever shown in a mode the page does not offer.
+check('the page enters Shape Explorer on its own', boot.includes('handle.setExplorer(true)')
+  || html.includes('if (handle) handle.setExplorer(true);'));
+
+// setFly(false) alone drops the camera into the library's background mode,
+// which this page no longer has. Leaving fly-through must therefore say so.
+const flyStart = html.indexOf("btnFly.addEventListener('click'");
+const fly = html.slice(flyStart, html.indexOf('});', flyStart));
+check('leaving fly-through returns to Explorer rather than a third state',
+  fly.includes('handle.setExplorer(true)'));
+
+// palettes.js briefly carried demo-page DOM chrome to manage the old Enter
+// button. That button is gone, so the module must be a palette module again --
+// a renderer dependency reaching into the page is exactly the coupling that
+// makes a UI change like this one hard.
+const palettes = readFileSync(new URL('../src/palettes.js', import.meta.url), 'utf8');
+check('palettes.js touches no DOM', !palettes.includes('document'));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
