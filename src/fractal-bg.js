@@ -140,6 +140,9 @@ const FRACTAL_IDS = {
   // The ziggurat's volumetric relative: cubes filling a 3D lattice rather than
   // a heightfield over a plane.
   cubestack: 30,
+  // Six plane waves on the icosahedron's 5-fold axes. Aperiodic because those
+  // axes meet at arccos(1/sqrt5) and sqrt5 = 2*phi - 1 is irrational.
+  quasicrystal: 31,
 };
 
 // The registry is keyed by name while the renderer works in ids, so the two
@@ -191,9 +194,11 @@ const QUALITY_SCALE = Object.fromEntries(
 // need the closest orbit of anything here. The sphere packing is clipped at
 // 0.95 instead, because its spheres are tangent to the boundary and a tighter
 // clip would slice a cap off every one of them.
+// The quasicrystal is clipped at 1.25, between the honeycombs' 0.85 and the
+// Barth sextic's 2.0, and 3.1 frames it to the same fraction of the view.
 const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.1, 3.0, 3.5, 3.2, 3.6, 4.6,
                     1.55, 1.75, 3.4, 2.85, 5.75, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
-                    2.3, 3.0, 3.2, 3.0, 3.0, 6.2, 2.6, 2.6];
+                    2.3, 3.0, 3.2, 3.0, 3.0, 6.2, 2.6, 2.6, 3.1];
 
 // Number of integrated trajectory samples drawn as a line strip per attractor.
 // These are exact float positions (vector geometry), so the curve stays crisp
