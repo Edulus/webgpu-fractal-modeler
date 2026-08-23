@@ -44,14 +44,14 @@ export const TOUR_STEPS = [
     body: 'Auto watches the frame rate and finds the most this machine can hold. Pin it here if you would rather choose.',
   },
   {
-    target: '#btn-explorer',
-    title: 'Enter shape explorer',
-    body: 'Hands you the camera: drag to orbit, scroll to zoom in as far as you like.',
-  },
-  {
     target: '#btn-fly',
     title: 'Fly through',
-    body: 'WASD to move, drag to look. The shapes with an interior can be flown inside.',
+    body: 'The other of the two modes. WASD to move, drag to look; the shapes with an interior can be flown inside.',
+  },
+  {
+    target: '#btn-reset',
+    title: 'Reset view',
+    body: 'Puts the camera back where it started, for when a zoom has taken you somewhere unrecognisable.',
   },
   {
     target: '#img-io',

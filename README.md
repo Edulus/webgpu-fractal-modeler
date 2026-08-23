@@ -132,6 +132,14 @@ Only the sequencing lives in `src/tour.js`, as pure functions over elapsed milli
 
 A classic (non-module) inline script clears the boot state after 25 seconds as a failsafe. It is the one thing on the page that must survive the module not running at all: without it, a parse error or a browser too old for `type="module"` would leave the page sitting under "Starting the renderer" forever, which is a worse lie than a dead page.
 
+### The demo page has two modes
+
+`index.html` is in Shape Explorer or fly-through, always one of the two, from the first frame onwards. It enters Explorer by itself as soon as the renderer is up — before the first frame, so nothing is ever shown in a state the page does not offer — and the only mode control is the fly-through toggle. There is no Enter/Exit Shape Explorer button and no landing state behind it.
+
+One consequence is worth knowing if you touch that code: `setFly(false)` only puts the flight controls down. On its own it leaves the camera in the library's background mode, so leaving fly-through has to call `setExplorer(true)` explicitly, or the page lands in a third state with nothing to steer it.
+
+**The library still has three modes.** Background mode is a supported way to embed the renderer behind page content and is documented below; the demo page simply no longer uses it. `setExplorer(false)` continues to work.
+
 ### Shape-explorer mode
 
 ```js
@@ -227,6 +235,8 @@ node tools/camera.test.js
 ```
 
 ### Background mode
+
+*A library mode, not one the demo page offers* — see above. This is the shape to use when embedding the renderer behind your own page content.
 
 ```js
 const handle = await initFractalBackground(canvas, {

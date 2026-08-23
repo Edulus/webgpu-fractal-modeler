@@ -68,35 +68,3 @@ export function getPalette(key) {
 export function paletteKeys() {
   return Object.keys(PALETTES);
 }
-
-// The app currently keeps its small amount of page chrome in index.html rather
-// than in a dedicated UI module. palettes.js is guaranteed to load before the
-// renderer is initialized, so this tiny guarded bridge can clean up the obsolete
-// duplicate entry control without changing the renderer or palette APIs. It is a
-// no-op in Node/tests and in any embedding that does not use the demo-page IDs.
-function applyExplorerEntryChrome() {
-  if (typeof document === 'undefined') return;
-
-  const apply = () => {
-    const duplicate = document.querySelector(
-      'main.wrap button[onclick*="btn-explorer"]',
-    );
-    duplicate?.closest('main.wrap')?.remove();
-
-    const explorer = document.getElementById('btn-explorer');
-    if (!explorer) return;
-    explorer.style.background = 'rgba(127, 231, 212, 0.24)';
-    explorer.style.borderColor = 'rgba(127, 231, 212, 0.72)';
-    explorer.style.color = '#dffff8';
-    explorer.style.fontWeight = '700';
-    explorer.style.boxShadow = '0 0 16px rgba(127, 231, 212, 0.14)';
-  };
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', apply, { once: true });
-  } else {
-    apply();
-  }
-}
-
-applyExplorerEntryChrome();
