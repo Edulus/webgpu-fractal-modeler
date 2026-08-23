@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { MATERIAL_WGSL } from '../src/shaders/material.wgsl.js';
+import { COMPOSITE_WGSL } from '../src/shaders/composite.wgsl.js';
 
 let passed = 0;
 let failed = 0;
@@ -15,8 +17,8 @@ function ok(condition, label) {
 console.log('\nCosmic Web registration and render routing');
 const index = fs.readFileSync('index.html', 'utf8');
 const bg = fs.readFileSync('src/fractal-bg.js', 'utf8');
-const material = fs.readFileSync('src/shaders/material.wgsl.js', 'utf8');
-const composite = fs.readFileSync('src/shaders/composite.wgsl.js', 'utf8');
+const material = MATERIAL_WGSL;
+const composite = COMPOSITE_WGSL;
 
 ok(index.includes('<option value="cosmicweb">Cosmic Web</option>'),
    'selector exposes Cosmic Web');
@@ -40,6 +42,8 @@ ok(material.includes('webFbm3') && material.includes('webFilament') && material.
    'field contains fBm hierarchy, filament extraction, and void gating');
 ok(material.includes('stepCount = max(28, min(stepCount, 88));'),
    'volume integration scales with the adaptive detail rung');
+ok(material.includes('let p = modelSpace(pos, u.fractalType).p;'),
+   'Cosmic Web samples the live per-shape model-space controls');
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
