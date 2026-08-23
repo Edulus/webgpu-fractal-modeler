@@ -161,6 +161,41 @@
     #pal-msg.err { color: #ffb0b0; }
     #pal-msg.ok { color: var(--accent); }
     #panel .row button { flex: 1; }
+    /* Shape maths: the current model's own constants, distinct from Image
+       (which is a post-process) and from Quality (which is the governor's). */
+    #shape-params { display: grid; gap: 7px; }
+    #shape-params-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    #shape-params-title { color: var(--muted); font-size: 12px; }
+    #shape-params-reset {
+      width: auto;
+      padding: 2px 8px;
+      font-size: 11px;
+      background: transparent;
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    #shape-params-reset:hover { color: var(--fg); border-color: var(--accent); }
+    #shape-params-list { display: grid; gap: 6px; }
+    #shape-params-list label { gap: 2px; font-size: 12px; }
+    #shape-params-list output { font-variant-numeric: tabular-nums; }
+    /* Why a slider's reach has narrowed. Empty, and so invisible, unless a
+       relational constraint is actually biting. */
+    .param-hint {
+      font-size: 10.5px;
+      font-style: normal;
+      color: var(--accent);
+      opacity: 0.8;
+      min-height: 0;
+    }
+    .param-hint:empty { display: none; }
+
     #hud {
       font-variant-numeric: tabular-nums;
       color: var(--accent);
@@ -586,6 +621,18 @@
     <button id="btn-fly">Fly through</button>
     <button id="btn-reset">Reset view</button>
 
+    <!-- Mathematical parameters of the current shape. Built from the registry
+         in src/shape-params.js, so a shape with none simply has no section --
+         which is the correct state for a shape whose constants have not been
+         measured yet, not an omission. -->
+    <div id="shape-params" hidden>
+      <div id="shape-params-head">
+        <span id="shape-params-title">Shape maths</span>
+        <button id="shape-params-reset" type="button">Reset</button>
+      </div>
+      <div id="shape-params-list"></div>
+    </div>
+
     <details id="img-io">
       <summary>Image…</summary>
       <label class="slider">Brightness
@@ -648,6 +695,7 @@
     import * as PaletteIO from './src/palette-io.js';
     import { installRendererDiagnostics, formatDiagnosticsPanel } from './src/diagnostics.js';
     import { TOUR_STEPS, STEP_MS, tourStateAt, bootPhaseAt } from './src/tour.js';
+    import { paramsFor, effectiveRange } from './src/shape-params.js';
 
     const canvas = document.getElementById('bg');
     const hud = document.getElementById('hud');
@@ -1170,6 +1218,79 @@
       });
       btnReset.addEventListener('click', () => handle.resetView());
       syncModeUI();
+
+      // ---- Shape maths -----------------------------------------------------
+      // Sliders are generated from src/shape-params.js, never written by hand,
+      // so a shape shows exactly the controls its registry entry declares and a
+      // shape with no measured parameters shows no section at all.
+      {
+        const box = document.getElementById('shape-params');
+        const list = document.getElementById('shape-params-list');
+        const title = document.getElementById('shape-params-title');
+
+        function buildShapeParams(name) {
+          const schema = paramsFor(name);
+          list.textContent = '';
+          box.hidden = schema.length === 0;
+          if (!schema.length) return;
+          title.textContent = schema.length === 1 ? 'Shape maths' : 'Shape maths';
+          const rows = [];
+          for (const p of schema) {
+            const label = document.createElement('label');
+            label.className = 'slider';
+            const cap = document.createElement('span');
+            const out = document.createElement('output');
+            cap.append(`${p.label} · `, out);
+            const input = document.createElement('input');
+            input.type = 'range';
+            input.step = String(p.step);
+            // The note records what the range was measured against, so the
+            // reason a slider stops where it does is reachable from the UI.
+            input.title = p.note || '';
+            input.setAttribute('aria-label', p.label);
+            // A relational constraint narrows one slider as another moves. Say
+            // so, rather than letting the thumb silently refuse to travel where
+            // the track appears to allow: an unexplained dead zone reads as a
+            // broken control, which is what silent clamping would look like.
+            const hint = document.createElement('em');
+            hint.className = 'param-hint';
+            // 'input', not 'change': the geometry should follow the thumb.
+            input.addEventListener('input', () => {
+              handle.setShapeParam(p.key, Number(input.value));
+              // Refresh every row, not just this one -- moving one parameter can
+              // change what another is allowed to reach.
+              for (const r of rows) r();
+            });
+            label.append(cap, input, hint);
+            list.appendChild(label);
+
+            rows.push(() => {
+              const live = handle.info.shapeParams || {};
+              const value = live[p.key] ?? p.default;
+              const range = effectiveRange(name, p.key, live) || { min: p.min, max: p.max };
+              input.min = String(range.min);
+              input.max = String(range.max);
+              if (String(input.value) !== String(value)) input.value = String(value);
+              out.textContent = p.integer ? String(value) : Number(value).toFixed(3);
+              hint.textContent = range.cappedBy
+                ? `max ${Number(range.max).toFixed(3)} — held below ${range.cappedByLabel}`
+                : '';
+            });
+          }
+          for (const r of rows) r();
+        }
+
+        document.getElementById('shape-params-reset').addEventListener('click', () => {
+          handle.resetShapeParams();
+          buildShapeParams(document.getElementById('sel-fractal').value);
+        });
+
+        // Rebuild whenever the shape changes, since the controls belong to the
+        // shape rather than to the panel.
+        const selShape = document.getElementById('sel-fractal');
+        selShape.addEventListener('change', () => buildShapeParams(selShape.value));
+        buildShapeParams(selShape.value);
+      }
 
       // Colour cycling speed. Position 1 is the exact rate the renderer booted
       // with; 0 disables cycling, and 2..5 are integer multiples of that rate.

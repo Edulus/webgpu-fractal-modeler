@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Shape-parameter extremes</title></head>
+<body style="font:14px/1.6 monospace;padding:24px;background:#0a0d12;color:#dfe6f5">
+<h1 style="font-size:16px">Shape-parameter extremes</h1>
+<p style="max-width:70ch;color:#9fb0c8">
+Renders every parameterised shape at the minimum, default and maximum of each of
+its parameters, and checks that a frame actually came out. This is the
+regression fixture for the failure that mathematics alone cannot catch: a value
+inside its measured range that nonetheless renders as nothing, because the
+estimator has stopped converging on real hardware rather than in a Node port.
+<br><br>
+A pass means the frame is non-empty and no error was raised — not that it is
+<em>correct</em>. Correctness of the range is what
+<code>tools/shape-params.test.js</code> and the Node sweeps establish; this
+guards the step between a measured range and a picture.
+</p>
+<pre id="out">running…</pre>
+<div id="strip" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:16px"></div>
+
+<script type="module">
+import { initFractalBackground } from '../src/fractal-bg.js';
+import { SHAPE_PARAMS, paramsFor, defaultsFor } from '../src/shape-params.js';
+
+const out = [];
+const log = (s) => { out.push(s); document.getElementById('out').textContent = out.join('\n'); };
+const strip = document.getElementById('strip');
+
+// Off-screen canvas at a modest size: this runs a lot of renders, and the
+// question is whether a frame exists, not how it looks at full resolution.
+const canvas = document.createElement('canvas');
+canvas.width = 220;
+canvas.height = 220;
+document.body.appendChild(canvas);
+canvas.style.position = 'fixed';
+canvas.style.left = '-9999px';
+
+// "Did a frame come out" measured on the pixels themselves. An all-background
+// image is the failure this page exists to catch, so it is detected rather than
+// eyeballed.
+function coverage(gl2d) {
+  const { data } = gl2d;
+  let lit = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i] > 24 || data[i + 1] > 24 || data[i + 2] > 24) lit++;
+  }
+  return lit / (data.length / 4);
+}
+
+const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+const settle = async (n) => { for (let i = 0; i < n; i++) await frame(); };
+
+let handle = null;
+let failures = 0;
+let checks = 0;
+
+try {
+  handle = await initFractalBackground(canvas, {
+    fractal: 'mandelbulb', palette: 'aurora', quality: 'medium',
+    transparent: false, power: 'high',
+    onUnsupported: (why) => { throw new Error(why); },
+  });
+  if (!handle) throw new Error('renderer unavailable');
+  handle.setExplorer(true);
+
+  const shot = document.createElement('canvas');
+  shot.width = canvas.width; shot.height = canvas.height;
+  const ctx = shot.getContext('2d', { willReadFrequently: true });
+
+  for (const shape of Object.keys(SHAPE_PARAMS)) {
+    handle.setFractal(shape);
+    await settle(12);
+    log(`\n${shape}`);
+    for (const p of paramsFor(shape)) {
+      // Each parameter is swept with the others left at their defaults, so a
+      // failure names one value rather than a combination.
+      for (const [tag, value] of [['min', p.min], ['default', p.default], ['max', p.max]]) {
+        handle.resetShapeParams();
+        handle.setShapeParam(p.key, value);
+        await settle(26);
+
+        const inForce = handle.info.shapeParams[p.key];
+        ctx.drawImage(canvas, 0, 0);
+        const cov = coverage(ctx.getImageData(0, 0, shot.width, shot.height));
+
+        checks++;
+        const bad = cov < 0.01;
+        if (bad) failures++;
+        log(`  ${bad ? 'FAIL' : 'ok  '} ${p.key} ${tag.padEnd(7)} = ${String(inForce).padEnd(9)} coverage ${(100 * cov).toFixed(1)}%`);
+
+        const thumb = document.createElement('canvas');
+        thumb.width = shot.width; thumb.height = shot.height;
+        thumb.getContext('2d').drawImage(shot, 0, 0);
+        thumb.title = `${shape} ${p.key} ${tag} = ${inForce}`;
+        thumb.style.cssText = `width:110px;height:110px;border:1px solid ${bad ? '#e06' : '#2a3547'}`;
+        strip.appendChild(thumb);
+      }
+    }
+  }
+
+  log(`\n${checks - failures}/${checks} extremes rendered a frame.`);
+  if (failures) log(`${failures} produced an empty image -- a measured range that does not survive real hardware.`);
+} catch (e) {
+  log('ERROR: ' + e.message);
+  failures++;
+} finally {
+  handle?.destroy?.();
+}
+
+window.__paramExtremes = { text: out.join('\n'), failures, checks };
+</script>
+</body>
+</html>
