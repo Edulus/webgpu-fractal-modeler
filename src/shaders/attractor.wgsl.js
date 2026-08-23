@@ -1,107 +1,100 @@
-// Strange-attractor shader wrapper. The integrated trajectories remain exact;
-// the four per-shape controls deform those trajectories in the vertex stage.
-import { ATTRACTOR_WGSL as CORE_ATTRACTOR_WGSL } from './attractor-core.wgsl.js';
+// attractor.wgsl.js — strange attractors drawn as real line geometry.
+//
+// Attractors have no closed-form distance function (they're trajectories, not
+// surfaces), so they can't be sphere-traced like the other fractals. Rather
+// than baking them into a voxel grid — which quantizes the curve and looks
+// blurry/jagged when magnified — we integrate the ODE to exact float positions
+// and rasterize those as a line strip. That's vector geometry: crisp at any
+// zoom, limited by the framebuffer rather than a fixed grid.
+//
+// The line pass now stores a palette coordinate and intensity instead of final
+// RGB. The post chain resolves that coordinate through the live palette, which
+// lets colour cycling remain palette-faithful on a converged frame.
 
-function replaceOnce(source, find, replacement, label) {
-  const at = source.indexOf(find);
-  if (at < 0) throw new Error(`[model-params] attractor shader patch missing: ${label}`);
-  if (source.indexOf(find, at + find.length) >= 0) {
-    throw new Error(`[model-params] attractor shader patch ambiguous: ${label}`);
-  }
-  return source.slice(0, at) + replacement + source.slice(at + find.length);
+export const ATTRACTOR_WGSL = /* wgsl */ `
+// Mirrors the shared Uniforms struct through viewProj. The backing buffer has
+// more fields after this, but this shader does not need them.
+struct Uniforms {
+  resolution : vec2<f32>,
+  time       : f32,
+  dpr        : f32,
+  camPos     : vec3<f32>,
+  fov        : f32,
+  camTarget  : vec3<f32>,
+  fractalType: f32,
+  power      : f32,
+  mbScale    : f32,
+  mbMinRadius: f32,
+  mbFixedRad : f32,
+  paletteA   : vec4<f32>,
+  paletteB   : vec4<f32>,
+  paletteC   : vec4<f32>,
+  paletteD   : vec4<f32>,
+  glowStrength : f32,
+  fogDensity   : f32,
+  shadowSoftness: f32,
+  aoStrength   : f32,
+  qualityScale : f32,
+  bgMode       : f32,
+  reducedMotion: f32,
+  _pad         : f32,
+  viewProj     : mat4x4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> u : Uniforms;
+
+const TAU : f32 = 6.28318530718;
+
+struct VSOut {
+  @builtin(position) pos : vec4<f32>,
+  @location(0) speed : f32,   // normalized |velocity| -> palette input
+  @location(1) depth : f32,   // view distance, for depth cueing
+};
+
+// One vertex per integrated trajectory sample: xyz position + normalized speed.
+// Speed (not position-along-the-path) drives the colour because it is a smooth
+// function of where you are on the attractor.
+@vertex
+fn vs_line(@location(0) inPos : vec3<f32>, @location(1) inSpeed : f32) -> VSOut {
+  var out : VSOut;
+  out.pos = u.viewProj * vec4<f32>(inPos, 1.0);
+  out.speed = inSpeed;
+  out.depth = length(inPos - u.camPos);
+  return out;
 }
 
-const TRAILING_UNIFORMS = `  viewProj     : mat4x4<f32>,
-  jitter       : vec2<f32>,
-  accumWeight  : f32,
-  _pad2        : f32,
-  paletteMode  : f32,
-  rampCount    : f32,
-  colorCycle   : f32,
-  colorPhase   : f32,
-  ramp         : array<vec4<f32>, 8>,
-  imageAdjust  : vec4<f32>,
-  detail       : vec4<f32>,
-};`;
+struct LineOut {
+  @location(0) material : vec4<f32>,
+  @location(1) aux : vec4<f32>,
+};
 
-const ATTRACTOR_HELPERS = /* wgsl */ `
-const MODEL_PACK_FLAG : f32 = 4194304.0;
-const MODEL_PACK_BASE : f32 = 2048.0;
-const MODEL_PACK_MAX  : f32 = 2047.0;
+@fragment
+fn fs_line(in : VSOut) -> LineOut {
+  // Gentle depth cue so the far side recedes and the structure reads 3D.
+  let fade = clamp(1.4 / (1.0 + in.depth * in.depth * 0.10), 0.12, 1.0);
 
-fn attractorPackedChannel(i : u32) -> f32 {
-  if (i == 0u) { return u.imageAdjust.x; }
-  if (i == 1u) { return u.imageAdjust.y; }
-  if (i == 2u) { return u.imageAdjust.z; }
-  return u.imageAdjust.w;
-}
+  // Same low per-segment intensity as the former RGB path. Dense cores add
+  // many segments and build brightness without immediately clipping to white.
+  let intensity = 0.032 * fade;
+  let t = in.speed * 1.15;
+  let a = TAU * t;
 
-fn attractorModelParam(i : u32) -> f32 {
-  let v = attractorPackedChannel(i);
-  if (v < MODEL_PACK_FLAG - 0.5) { return 0.5; }
-  let q = v - MODEL_PACK_FLAG;
-  return clamp(floor(q / MODEL_PACK_BASE) / MODEL_PACK_MAX, 0.0, 1.0);
-}
-
-fn attractorRotate2(v : vec2<f32>, a : f32) -> vec2<f32> {
-  let c = cos(a);
-  let s = sin(a);
-  return vec2<f32>(c * v.x - s * v.y, s * v.x + c * v.y);
-}
-
-fn modelAttractorPosition(inPos : vec3<f32>) -> vec3<f32> {
-  let scale = mix(0.65, 1.35, attractorModelParam(0u));
-  let twist = mix(-2.0, 2.0, attractorModelParam(1u));
-  let stretch = mix(0.65, 1.35, attractorModelParam(2u));
-  let warp = mix(-0.3, 0.3, attractorModelParam(3u));
-  let id = i32(round(u.fractalType));
-  var p = inPos * scale;
-
-  if (id == 25) {
-    // Aizawa: coil around its long axis, then bow the ring slightly.
-    p.z = p.z * stretch;
-    let r = attractorRotate2(vec2<f32>(p.x, p.y), twist * p.z);
-    p.x = r.x; p.y = r.y;
-    p.z = p.z + warp * sin(3.2 * length(vec2<f32>(p.x, p.y)));
-  } else if (id == 26) {
-    // Lorenz: open/close the butterfly vertically and torsion the two lobes.
-    p.y = p.y * stretch;
-    let r = attractorRotate2(vec2<f32>(p.x, p.z), twist * p.y);
-    p.x = r.x; p.z = r.y;
-    p.x = p.x + warp * sin(2.7 * p.z);
-  } else {
-    // Rössler: preserve the broad spiral while exaggerating or softening its fold.
-    p.z = p.z * stretch;
-    let rad = length(vec2<f32>(p.x, p.y));
-    let r = attractorRotate2(vec2<f32>(p.x, p.y), twist * rad);
-    p.x = r.x; p.y = r.y;
-    p.z = p.z + warp * sin(3.0 * rad);
-  }
-  return p;
+  var out : LineOut;
+  // Keep both coordinate representations. Cosine presets can have different
+  // per-channel frequencies and therefore are not necessarily period-1, so a
+  // linear weighted mean preserves their unwrapped t. Imported stop ramps are
+  // explicitly cyclic, so the auxiliary attachment carries a circular mean
+  // that treats 0.99 and 0.01 as neighbours instead of averaging them to 0.5.
+  // Emission is scalar and palette-independent, so it lives beside the linear
+  // coordinate rather than consuming another circular channel.
+  out.material = vec4<f32>(in.speed * 1.15 * intensity,
+                           intensity,
+                           intensity * 0.7 * u.glowStrength,
+                           0.0);
+  out.aux = vec4<f32>(cos(a) * intensity,
+                      sin(a) * intensity,
+                      intensity,
+                      0.0);
+  return out;
 }
 `;
-
-let shader = replaceOnce(
-  CORE_ATTRACTOR_WGSL,
-  '  viewProj     : mat4x4<f32>,\n};',
-  TRAILING_UNIFORMS,
-  'uniform tail',
-);
-shader = replaceOnce(
-  shader,
-  'const TAU : f32 = 6.28318530718;',
-  'const TAU : f32 = 6.28318530718;\n' + ATTRACTOR_HELPERS,
-  'helper insertion',
-);
-shader = replaceOnce(
-  shader,
-  '  var out : VSOut;\n  out.pos = u.viewProj * vec4<f32>(inPos, 1.0);\n  out.speed = inSpeed;\n  out.depth = length(inPos - u.camPos);',
-  '  var out : VSOut;\n' +
-  '  let shapedPos = modelAttractorPosition(inPos);\n' +
-  '  out.pos = u.viewProj * vec4<f32>(shapedPos, 1.0);\n' +
-  '  out.speed = inSpeed;\n' +
-  '  out.depth = length(shapedPos - u.camPos);',
-  'vertex deformation',
-);
-
-export const ATTRACTOR_WGSL = shader;

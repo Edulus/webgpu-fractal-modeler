@@ -42,8 +42,6 @@ ok(material.includes('webFbm3') && material.includes('webFilament') && material.
    'field contains fBm hierarchy, filament extraction, and void gating');
 ok(material.includes('stepCount = max(28, min(stepCount, 88));'),
    'volume integration scales with the adaptive detail rung');
-ok(material.includes('let p = modelSpace(pos, u.fractalType).p;'),
-   'Cosmic Web samples the live per-shape model-space controls');
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

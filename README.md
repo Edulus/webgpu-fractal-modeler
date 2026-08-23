@@ -68,6 +68,7 @@ mathematicians named there.
 │   ├── palettes.js               Inigo Quilez cosine-palette presets
 │   ├── quality.js                adaptive-quality governor (pure, no WebGPU)
 │   ├── tour.js                   boot-tour steps and timing (pure, no DOM)
+│   ├── shape-params.js           per-shape parameter registry + constraints (pure)
 │   └── shaders/
 │       ├── fractal.wgsl.js       distance estimators + clearance compute shader
 │       ├── engel.wgsl.js         generated plesiohedron tables + its estimator
@@ -76,6 +77,7 @@ mathematicians named there.
 │       └── attractor.wgsl.js     palette-independent strange-attractor lines
 ├── tools/
 │   ├── shader-check.html         compiles every WGSL module and reports errors
+│   ├── param-extremes.html       renders every shape parameter at min/default/max
 │   ├── camera.test.js            camera unit tests (node tools/camera.test.js)
 │   ├── palette.test.js           palette import/persistence unit tests
 │   ├── recovery.test.js          GPU device-loss recovery decisions
@@ -85,7 +87,8 @@ mathematicians named there.
 │   ├── engel.test.js             plesiohedron tables, tiling and Lipschitz bound
 │   ├── quality.test.js           governor behaviour against simulated devices
 │   ├── registry.test.js          shape tables, selector and shader bands agree
-│   └── tour.test.js              boot-tour sequencing and step targets
+│   ├── tour.test.js              boot-tour sequencing and step targets
+│   └── shape-params.test.js      parameter ranges, constraints and packing
 └── .github/workflows/pages.yml   deploys the demo to GitHub Pages
 ```
 
@@ -293,6 +296,64 @@ Recommended canvas CSS:
 | `resume()` | Resume rendering while respecting visibility gating. |
 | `destroy()` | Tear down observers, listeners, textures, and the WebGPU device. |
 | `info` | Model, quality, ladder rung, march steps, iteration depth, smoothed frame time, FPS, reduced-motion, explorer, fly, speed, position, zoom, whether the orbit pivot is pinned, camera clearance, accumulated sample count, cycle rate, and the image settings. |
+
+## Shape parameters
+
+Some shapes expose their own mathematical constants as sliders:
+
+```js
+handle.setShapeParam('power', 6.5);   // Mandelbulb exponent
+handle.resetShapeParams();            // back to that shape's defaults
+handle.info.shapeParams;              // what is in force now
+```
+
+Four shapes are parameterised so far — Mandelbulb (power, bailout), Mandelbox (scale, min radius, fixed radius), Menger sponge (recursion depth) and quaternion Julia (the four components of `c`). **Every other shape shows no sliders, and that is the correct state for it**, not an omission: a constant is not exposed until it has been measured.
+
+### Why the discipline
+
+An earlier attempt gave every shape four sliders by applying a generic twist/stretch/warp deformation to the coordinates *before* the estimator saw them, with `family = id % 6` picking a variant from the shape's id and a hand-tuned divisor bolted on to stop sphere tracing from breaking. That is a deformation applied **to** mathematics rather than a parameter **of** it. It also had to smuggle its values to the GPU packed as integers inside `imageAdjust`, so the composite pass decoded its own controls back out before using them, and each shader became a wrapper rewriting an `X-core` file's source at load time.
+
+All of that is gone. Parameters now have dedicated uniform storage — two `vec4<f32>`, eight floats, holding only the active shape's values — and each estimator reads the slots it declares.
+
+### The registry
+
+`src/shape-params.js` is the single source. Each entry carries a range, a default, and — the load-bearing part — a **constraint** and a note recording what the measurement found:
+
+| Kind | Meaning |
+| --- | --- |
+| `free` | nothing else in the estimator moves with it |
+| `derived` | the shader must recompute something from it; a literal left behind is a silent bug, because the geometry moves and the distance bound does not |
+| `relational` | must satisfy an inequality against a sibling parameter |
+| `extent` | changes the model's bounding radius |
+| `cost` | materially changes marching cost |
+
+Two of those are gates rather than labels. **Nothing may ship with `extent`** while `CAM_RADIUS` is a hand-written per-shape table, because such a parameter would silently stop framing the object; `tools/shape-params.test.js` refuses it. And a `relational` constraint is enforced **twice** — clamped in JS *and* in the shader — because the estimator must never evaluate an invalid pair however the uniform came to hold one.
+
+The Mandelbox is the live relational case. Overshoot appeared at exactly `minRadius` 1.2 against `fixedRadius` 1.0 — the moment the inner radius passes the outer one and the two fold branches invert — so the inner one is held below the outer rather than below a constant.
+
+**A narrowed range is reported, not merely enforced.** `effectiveRange()` returns the span a parameter can actually reach given its siblings, and the panel sizes the slider to it and captions *"held below Fixed radius"*. Silent clamping would look like a broken control: the track would appear to allow travel the thumb refuses. The test pins the reported cap and the enforced clamp to the same number at several sibling values, so the UI cannot promise a reach the setter declines.
+
+### How the ranges were chosen
+
+By measurement, with a Node port of each estimator: rays are sphere-traced against a dense reference march at each value, reporting whether the object still exists, whether it has collapsed to a featureless ball, and whether the estimator has begun marching through surfaces. Every shipped range is the clean interval that produced. Some examples of ranges set by that evidence rather than by taste:
+
+- Mandelbulb **power** stops at 2 because 1.5 marched through surfaces on 3 rays in 160 — and 2 is also where the escape-time construction stops being a Mandelbulb.
+- Mandelbulb **bailout** stops at 2 for the opposite reason: *no* overshoot was measured even at 1.2, but a point with `|z| > 2` provably escapes, so a smaller bailout truncates the set rather than resolving it. The range reflects the mathematics, not the failure.
+- Mandelbox **scale** keeps `|scale|` above about 1.5; below it the iteration contracts instead of escaping (measured overshoot at −1.2 and −0.8). The positive branch 2..3 is clean and is a different-looking family, but a contiguous slider cannot reach it without crossing the middle, where 1.5 measured as a featureless ball that *also* overshot.
+
+### Two boundaries worth keeping straight
+
+**The governor keeps the rendering budget.** `u.detail.y` is the adaptive-quality iteration count and is not a slider. This is encoded rather than merely intended: every entry declares a `domain`, only `geometry` is admissible in the registry, and the test refuses anything else. A quality knob here would let the user fight the governor — and the governor would win, so the control would read as broken rather than as obviously wrong.
+
+Iteration counts are where the two collide, since both are "how many times round the loop". A parameter marked `isIteration` promises it is the *mathematical* count, and the test checks its estimator does not also read `u.detail.y`. The Menger sponge is the live case: its recursion depth is part of the object, and `deMenger` never took a count from the governor, so exposing it contends with nothing.
+
+**A value cannot be both animated and controlled.** Two autonomous animations were removed to make room for their sliders: the Mandelbulb's power used to breathe between 7 and 9 on a timer, and the Julia constant `c` used to orbit. Both defaults are the pose those timers held at `t = 0`, which is also what reduced-motion already showed.
+
+Changing any parameter clears the progressive average, or the converged frame would blend the old shape into the new one.
+
+### The extremes are a permanent fixture
+
+`tools/param-extremes.html` renders every parameterised shape at the minimum, default and maximum of each parameter and checks a frame actually came out, reporting pixel coverage per value. It exists for the one failure the Node sweeps cannot see: a value inside its measured range that renders as nothing anyway, because the estimator stopped converging on real hardware rather than in a port of it. A pass means non-empty and error-free, not *correct* — correctness of the range is what the sweeps and `tools/shape-params.test.js` establish; this guards the step between a measured range and a picture. Currently 30/30.
 
 ## Loading palettes
 

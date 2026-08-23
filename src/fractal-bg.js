@@ -21,6 +21,7 @@ import {
   govInit, govSample, govResync, rung, clampIndex, showcaseIndex, planMode, maxRungForLimit,
 } from './quality.js';
 import { getPalette } from './palettes.js';
+import { packParams, clampParams, defaultsFor, paramsFor } from './shape-params.js';
 import { clampStops, averageColor, MAX_STOPS } from './palette-io.js';
 import {
   makeFlyCamera, stepFlyCamera, aimFlyCamera, dollyFlyCamera, scaleFlySpeed,
@@ -81,8 +82,21 @@ const U = {
   // (exposure, contrast, saturation, hue turns). Byte 384, 16-byte aligned.
   imageAdjust: 96,
   detail: 100,
+  // Per-shape mathematical parameters: two vec4, eight floats, holding only the
+  // ACTIVE shape's values. Dedicated storage rather than smuggled inside
+  // imageAdjust, which is what the previous attempt did -- that forced the
+  // composite pass to decode its own controls back out of packed integers
+  // before it could use them, and coupled two features with nothing to do with
+  // one another. Appended after detail so the material, composite and attractor
+  // shaders, whose structs end there, stay valid against this buffer.
+  //
+  // power / mbScale / mbMinRadius / mbFixedRadius above are RETIRED by this and
+  // now written as zero. They are left declared because the struct is repeated
+  // in four shader files and removing a field shifts every offset after it; only
+  // fractal.wgsl ever read them, and it reads shapeParams now.
+  shapeParams: 104,   // 2 * vec4 -> slots 104..111 (byte 416, 16-byte aligned)
 };
-const UNIFORM_FLOATS = 104;
+const UNIFORM_FLOATS = 112;
 const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 416
 
 // Distance-estimated fractals occupy ids 0..23; the volumetric/line-rendered
@@ -127,6 +141,16 @@ const FRACTAL_IDS = {
   // a heightfield over a plane.
   cubestack: 30,
 };
+
+// The registry is keyed by name while the renderer works in ids, so the two
+// need one bridge. Built once from FRACTAL_IDS rather than restated, so it
+// cannot drift from it.
+const FRACTAL_NAMES = Object.fromEntries(
+  Object.entries(FRACTAL_IDS).map(([name, id]) => [id, name]));
+
+function shapeName(id) {
+  return FRACTAL_NAMES[id] ?? 'mandelbulb';
+}
 
 function isAttractorType(id) {
   return id >= FRACTAL_IDS.attractor && id <= FRACTAL_IDS.rossler;
@@ -284,6 +308,14 @@ export async function initFractalBackground(canvas, options = {}) {
     bindGroups: {},
     // config
     fractalType: FRACTAL_IDS[opts.fractal] ?? 0,
+    // Mathematical parameters of the ACTIVE shape only, kept as named values
+    // plus the packed eight floats the uniform block wants. Values are not
+    // carried across a shape change: `power` means something to the Mandelbulb
+    // and nothing to the Menger sponge, so each shape starts at its own
+    // measured defaults.
+    shapeParamValues: defaultsFor(opts.fractal ?? 'mandelbulb'),
+    shapeParamsPacked: packParams(opts.fractal ?? 'mandelbulb',
+                                  defaultsFor(opts.fractal ?? 'mandelbulb')),
     palette: getPalette(opts.palette),
     // An imported palette, kept as its own stops rather than fitted to cosine
     // coefficients. Null means the cosine preset above is in use.
@@ -943,8 +975,6 @@ export async function initFractalBackground(canvas, options = {}) {
       }
     }
 
-    // Fractal parameter morphing.
-    const power = rm ? 8.0 : 8.0 + Math.sin(t * 0.15) * 1.0; // breathe 7..9
 
     // resolution / time / dpr
     d[U.resolution] = state.targets ? state.targets.w : canvas.width;
@@ -968,10 +998,13 @@ export async function initFractalBackground(canvas, options = {}) {
     d[U.camTarget + 2] = tgtZ;
 
     d[U.fractalType] = state.fractalType;
-    d[U.power] = power;
-    d[U.mbScale] = -1.85;
-    d[U.mbMinRadius] = 0.35;
-    d[U.mbFixedRadius] = 1.0;
+    // Retired -- see the layout note. Written explicitly rather than left alone
+    // so a stale value cannot outlive the estimator that used to read it.
+    d[U.power] = 0;
+    d[U.mbScale] = 0;
+    d[U.mbMinRadius] = 0;
+    d[U.mbFixedRadius] = 0;
+    for (let i = 0; i < 8; i++) d[U.shapeParams + i] = state.shapeParamsPacked[i];
 
     // The rate remains public API state; the composite shader consumes the
     // integrated phase. Separating this clock from animTime is what lets colour
@@ -1988,6 +2021,10 @@ export async function initFractalBackground(canvas, options = {}) {
         state.probeDist = Infinity;
         state.probeHit = -1;
         state.accumSamples = 0;
+        // Each shape owns its own parameters, so a shape change resets them to
+        // that shape's defaults rather than carrying numbers across.
+        state.shapeParamValues = defaultsFor(name);
+        state.shapeParamsPacked = packParams(name, state.shapeParamValues);
         if (state.fly) placeFlyCamera(false);
         // The attractor family needs its trajectory buffer built before use.
         if (isAttractorType(state.fractalType)) ensureAttractorTrajectory();
@@ -2035,6 +2072,29 @@ export async function initFractalBackground(canvas, options = {}) {
       // frame immediately rather than throwing away 96 geometry samples.
       if (!state.running) renderFrame(performance.now(), true);
     },
+    // ---- Shape parameters ------------------------------------------------
+    // Changing one changes the geometry, so it must clear the progressive
+    // average: without that the converged frame blends the old shape into the
+    // new one and the picture dissolves rather than changes.
+    setShapeParam(key, value) {
+      const name = shapeName(state.fractalType);
+      if (!paramsFor(name).some((p) => p.key === key)) return;
+      state.shapeParamValues = clampParams(name, {
+        ...state.shapeParamValues, [key]: value,
+      });
+      state.shapeParamsPacked = packParams(name, state.shapeParamValues);
+      state.accumSamples = 0;
+      nudgeRender();
+    },
+
+    resetShapeParams() {
+      const name = shapeName(state.fractalType);
+      state.shapeParamValues = defaultsFor(name);
+      state.shapeParamsPacked = packParams(name, state.shapeParamValues);
+      state.accumSamples = 0;
+      nudgeRender();
+    },
+
     setQuality(mode) {
       state.qualityMode = mode;
       state.accumSamples = 0;
@@ -2142,6 +2202,7 @@ export async function initFractalBackground(canvas, options = {}) {
     get info() {
       return {
         fractalType: state.fractalType,
+        shapeParams: { ...state.shapeParamValues },
         qualityMode: state.qualityMode,
         qualityScale: +state.qualityScale.toFixed(2),
         rung: state.detailRung,
