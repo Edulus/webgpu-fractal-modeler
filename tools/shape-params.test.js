@@ -135,9 +135,19 @@ ok(true, 'no shipped parameter declares a derived quantity yet (none of the four
 for (const shape of shapes) {
   for (const p of paramsFor(shape)) {
     if (p.constraint.kind !== 'relational') continue;
-    const other = p.constraint.rel?.below;
+    // Either form -- capped below a sibling, or locked until a sibling reaches a
+    // threshold -- has to point at a parameter that exists. A typo here would
+    // read as an unconstrained control rather than as an error.
+    const rel = p.constraint.rel || {};
+    const other = rel.below ?? rel.unless?.param;
     ok(paramsFor(shape).some((q) => q.key === other),
        `${shape}.${p.key}: its relation names a real sibling parameter (${other})`);
+    if (rel.locksTo !== undefined) {
+      ok(rel.locksTo >= p.min && rel.locksTo <= p.max,
+         `${shape}.${p.key}: the locked value ${rel.locksTo} is inside its own range`);
+      ok(Number.isFinite(rel.unless?.atLeast),
+         `${shape}.${p.key}: names the threshold that unlocks it`);
+    }
   }
 }
 
@@ -179,6 +189,76 @@ for (const fixed of [0.4, 0.8, 1.0, 1.5, 2.0]) {
   ok(Math.abs(c.minRadius - r.max) < 1e-9,
      `at fixedRadius ${fixed} the reported cap ${r.max.toFixed(3)} is exactly what the clamp enforces`);
 }
+
+// ---- The lock: a precondition, not a narrowed range ------------------------
+// The generalized Mandelbulb's angle ratios are safe only from power 8 upward.
+// That is measured, not assumed: at power 2 the sweep marched through surfaces
+// on seven of thirteen ratio pairs, and at 8 and above none did. Below the
+// threshold the parameter has one admissible value rather than a smaller range,
+// so it is reported as locked and clamped to exactly that value.
+const GATE = 8;
+for (const key of ['polarRatio', 'azimuthRatio']) {
+  const open = effectiveRange('mandelbulb', key, { power: GATE });
+  ok(open.locked === false, `${key}: unlocked at power ${GATE}`);
+  ok(open.min === 0.25 && open.max === 1.75,
+     `${key}: and reaches its full measured range there (${open.min}..${open.max})`);
+
+  // The boundary is inclusive, and it is checked on both sides of the step so a
+  // stray > for >= cannot pass unnoticed.
+  ok(effectiveRange('mandelbulb', key, { power: GATE - 0.01 }).locked === true,
+     `${key}: still locked just below the threshold`);
+  ok(effectiveRange('mandelbulb', key, { power: GATE + 0.01 }).locked === false,
+     `${key}: open just above it`);
+
+  const shut = effectiveRange('mandelbulb', key, { power: 4 });
+  ok(shut.locked === true && shut.min === 1 && shut.max === 1,
+     `${key}: below the threshold the range is a single value`);
+  ok(shut.lockedBy === 'power' && shut.needs === GATE,
+     `${key}: and says what would unlock it (${shut.lockedByLabel} >= ${shut.needs})`);
+  ok(typeof shut.lockedByLabel === 'string' && shut.lockedByLabel.length > 0,
+     `${key}: with a human label for the gating parameter`);
+
+  // A missing or junk gate value must lock, not open: the failure mode of
+  // guessing wrong here is rays punching through the surface.
+  ok(effectiveRange('mandelbulb', key, {}).locked === true,
+     `${key}: an absent gate value locks rather than opens`);
+  ok(effectiveRange('mandelbulb', key, { power: NaN }).locked === true,
+     `${key}: so does a NaN one`);
+}
+
+// Report and enforcement must agree here too, or the slider would show a value
+// the setter immediately discards.
+for (const power of [2, 4, 7.9, 8, 12, 16]) {
+  const c = clampParams('mandelbulb', { power, polarRatio: 1.7, azimuthRatio: 0.3 });
+  const r = effectiveRange('mandelbulb', 'polarRatio', { power });
+  if (r.locked) {
+    ok(c.polarRatio === 1 && c.azimuthRatio === 1,
+       `at power ${power} the clamp snaps both ratios back to the locked value`);
+  } else {
+    ok(c.polarRatio === 1.7 && c.azimuthRatio === 0.3,
+       `at power ${power} the clamp leaves the ratios alone`);
+  }
+}
+
+// Ratio 1 must be the classic bulb exactly, or the defaults would silently
+// change a shape that has been on screen since the first commit.
+const bulbDefaults = defaultsFor('mandelbulb');
+ok(bulbDefaults.polarRatio === 1 && bulbDefaults.azimuthRatio === 1,
+   'the ratios default to 1, which reproduces the classic map bit for bit');
+
+// The shader must not trust the uniform either: the registry clamp protects the
+// slider, the select() protects everything else that can write the buffer.
+const bulb = shader.slice(shader.indexOf('fn deMandelbulb'),
+                          shader.indexOf('\n}', shader.indexOf('fn deMandelbulb')));
+ok(/let generalized = power >= 8\.0;/.test(bulb),
+   'the shader re-checks the power gate itself');
+ok(/select\(1\.0, shapeParam\(2u\), generalized\)/.test(bulb)
+   && /select\(1\.0, shapeParam\(3u\), generalized\)/.test(bulb),
+   'and collapses both ratios to 1 below it, whatever the uniform holds');
+ok(/theta = theta \* power \* pRatio;/.test(bulb) && /phi = phi \* power \* qRatio;/.test(bulb),
+   'the ratios multiply the angles, leaving the radial power alone');
+ok(/dr = pow\(rr, power - 1\.0\) \* power \* dr \+ 1\.0;/.test(bulb),
+   'the derivative rule is unchanged, which is what the power floor is protecting');
 
 // ---- Clamping and packing --------------------------------------------------
 for (const shape of shapes) {
@@ -241,6 +321,10 @@ ok(/effectiveRange\(name, p\.key, live\)/.test(index),
    'the panel sizes each slider to the range actually reachable');
 ok(/held below \$\{range\.cappedByLabel\}/.test(index),
    'and says which parameter narrowed it rather than clamping silently');
+ok(/input\.disabled = !!range\.locked;/.test(index),
+   'a locked slider is disabled rather than left looking movable');
+ok(/needs \$\{range\.lockedByLabel\} ≥ \$\{range\.needs\}/.test(index),
+   'and states the precondition, so the lock is something the user can go and satisfy');
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

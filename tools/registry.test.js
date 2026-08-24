@@ -56,7 +56,11 @@ const hudNames = index
 ok(hudNames.length === maxId + 1, `HUD name list has an entry per id (${hudNames.length}/${maxId + 1})`);
 ok(hudNames.every((n, i) => IDS[n] === i), 'every HUD name sits at its own registry id');
 
-const selector = index.match(/<select id="sel-fractal">([\s\S]*?)<\/select>/)[1];
+// Attribute-tolerant: the select carries an aria-label now that the panel's
+// sections are disclosures and the <label> wrapper that used to name it is
+// gone. Matching the open tag exactly made this fail on an accessibility
+// attribute, which is not what the test is about.
+const selector = index.match(/<select id="sel-fractal"[^>]*>([\s\S]*?)<\/select>/)[1];
 const options = [...selector.matchAll(/<option value="(\w+)"/g)].map((m) => m[1]);
 ok(options.every((o) => o in IDS), 'every selector option names a registered shape');
 

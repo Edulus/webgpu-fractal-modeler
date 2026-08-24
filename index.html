@@ -70,7 +70,7 @@
       min-width: 0;
     }
     #panel > *, #panel label, #panel .row > *,
-    #panel #pal-io > *, #panel #img-io > *, #panel #diag-io > * { min-width: 0; }
+    #panel details > * { min-width: 0; }
     /* A text input carries an intrinsic size of ~20 characters regardless of
        its container, which pushed the Save button past the panel edge even
        after the grid tracks were freed. */
@@ -92,16 +92,41 @@
       gap: 8px;
     }
     #panel label.check input { width: auto; accent-color: var(--accent); }
+    /* Every section in the panel is a disclosure, and they are styled as one
+       family so a nested submenu is visibly subordinate to its parent rather
+       than looking like another top-level group. */
+    #panel details { min-width: 0; }
+    #panel details > summary {
+      cursor: pointer;
+      padding: 2px 0;
+      color: var(--muted);
+      font-size: 12px;
+      list-style: none;
+      /* The triangle is drawn below, so the UA marker is suppressed on both
+         engines: ::-webkit-details-marker for WebKit/Blink, list-style for the
+         rest. Without both, one of them shows two markers. */
+    }
+    #panel details > summary::-webkit-details-marker { display: none; }
+    #panel details > summary::before {
+      content: '\25B8';                 /* right-pointing triangle */
+      display: inline-block;
+      width: 1em;
+      color: var(--muted);
+      transition: transform 0.15s ease;
+    }
+    #panel details[open] > summary::before { transform: rotate(90deg); }
+    #panel details > *:not(summary) { margin-top: 7px; }
+    /* A nested section is indented and rendered a shade quieter, so the
+       hierarchy is readable in a 210px column. */
+    #panel details details > summary { font-size: 11.5px; opacity: 0.9; }
+    #panel details details { margin-left: 8px; }
+
     /* Image sliders, collapsed by default so the panel stays as compact as it
        was -- it is only 208px wide on a phone. */
     #img-io { color: var(--muted); font-size: 12px; }
-    #img-io summary { cursor: pointer; padding: 2px 0; }
-    #img-io > *:not(summary) { margin-top: 7px; }
     /* Developer diagnostics: closed by default and refreshed at HUD cadence,
        so observing the renderer does not become a per-frame DOM workload. */
     #diag-io { color: var(--muted); font-size: 12px; }
-    #diag-io summary { cursor: pointer; padding: 2px 0; }
-    #diag-io > *:not(summary) { margin-top: 7px; }
     #diag-readout {
       margin: 0;
       max-height: 260px;
@@ -141,8 +166,6 @@
 
     /* Palette loader */
     #pal-io { color: var(--muted); font-size: 12px; }
-    #pal-io summary { cursor: pointer; padding: 2px 0; color: var(--muted); }
-    #pal-io > *:not(summary) { margin-top: 7px; }
     #pal-io textarea, #pal-io input[type="text"] {
       width: 100%;
       background: rgba(6, 8, 16, 0.7);
@@ -163,14 +186,7 @@
     #panel .row button { flex: 1; }
     /* Shape maths: the current model's own constants, distinct from Image
        (which is a post-process) and from Quality (which is the governor's). */
-    #shape-params { display: grid; gap: 7px; }
-    #shape-params-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-    }
-    #shape-params-title { color: var(--muted); font-size: 12px; }
+    #shape-params-head { display: flex; justify-content: flex-end; }
     #shape-params-reset {
       width: auto;
       padding: 2px 8px;
@@ -539,8 +555,14 @@
       <span id="panel-title">Controls</span>
       <span id="panel-tri">▾</span>
     </button>
-    <label>Shape
-      <select id="sel-fractal">
+    <!-- Every group is a disclosure section. The panel is small and the
+         sections accumulate, so anything not in use should fold away -- including
+         the groups that were previously loose controls with no way to collapse
+         them at all. Sections visible today open by default, so this reorganises
+         the panel without hiding anything that was not already hidden. -->
+    <details id="sec-shape" open>
+      <summary>Shape</summary>
+      <select id="sel-fractal" aria-label="Shape">
         <option value="mandelbulb">Mandelbulb</option>
         <option value="mandelbox">Mandelbox</option>
         <option value="menger">Menger sponge</option>
@@ -573,17 +595,36 @@
         <option value="lorenz">Strange attractor (Lorenz)</option>
         <option value="rossler">Strange attractor (Rössler)</option>
       </select>
-    </label>
-    <label>Palette
-      <select id="sel-palette">
+      <!-- Mathematical parameters of the current shape, built from the
+           registry in src/shape-params.js. A shape with none has no section at
+           all, which is the correct state for constants that have not been
+           measured -- not an omission. Nested inside Shape because that is what
+           it belongs to. -->
+      <details id="shape-params" hidden open>
+        <summary>Shape maths</summary>
+        <div id="shape-params-head">
+          <button id="shape-params-reset" type="button">Reset</button>
+        </div>
+        <div id="shape-params-list"></div>
+      </details>
+    </details>
+
+    <details id="sec-palette" open>
+      <summary>Palette</summary>
+      <select id="sel-palette" aria-label="Palette">
         <option value="aurora">Aurora</option>
         <option value="ember">Ember</option>
         <option value="oil-slick">Oil slick</option>
         <option value="mono-ice">Mono ice</option>
         <option value="iridescence">Iridescence</option>
       </select>
-    </label>
-    <details id="pal-io">
+      <label class="slider">
+        <span>Shift colours · <output id="cycle-speed-value">1</output></span>
+        <input type="range" id="cycle-speed" min="0" max="5" step="1" value="1"
+               aria-label="Colour shift speed, 0 is off and 5 is fastest"
+               title="0 = off; 1 = original speed; 5 = fastest" />
+      </label>
+      <details id="pal-io">
       <summary>Load palette…</summary>
       <textarea id="pal-input" rows="3" placeholder="Paste a coolors.co link, hex list, or .gpl contents"></textarea>
       <div class="row">
@@ -597,42 +638,31 @@
         <button id="pal-save">Save</button>
         <button id="pal-del" hidden>Delete</button>
       </div>
-      <div id="pal-swatches"></div>
-      <div id="pal-msg"></div>
+        <div id="pal-swatches"></div>
+        <div id="pal-msg"></div>
+      </details>
     </details>
-    <label class="slider">
-      <span>Shift colours · <output id="cycle-speed-value">1</output></span>
-      <input type="range" id="cycle-speed" min="0" max="5" step="1" value="1"
-             aria-label="Colour shift speed, 0 is off and 5 is fastest"
-             title="0 = off; 1 = original speed; 5 = fastest" />
-    </label>
-    <label>Quality
-      <select id="sel-quality">
+
+    <details id="sec-quality" open>
+      <summary>Quality</summary>
+      <select id="sel-quality" aria-label="Quality">
         <option value="low">Low</option>
         <option value="medium">Medium</option>
         <option value="high">High</option>
         <option value="auto" selected>Auto</option>
         <option value="max">Max</option>
       </select>
-    </label>
-    <div class="row">
-      <button id="btn-pause">Pause</button>
-      <button id="btn-resume">Resume</button>
-    </div>
-    <button id="btn-fly">Fly through</button>
-    <button id="btn-reset">Reset view</button>
+    </details>
 
-    <!-- Mathematical parameters of the current shape. Built from the registry
-         in src/shape-params.js, so a shape with none simply has no section --
-         which is the correct state for a shape whose constants have not been
-         measured yet, not an omission. -->
-    <div id="shape-params" hidden>
-      <div id="shape-params-head">
-        <span id="shape-params-title">Shape maths</span>
-        <button id="shape-params-reset" type="button">Reset</button>
+    <details id="sec-view" open>
+      <summary>View</summary>
+      <div class="row">
+        <button id="btn-pause">Pause</button>
+        <button id="btn-resume">Resume</button>
       </div>
-      <div id="shape-params-list"></div>
-    </div>
+      <button id="btn-fly">Fly through</button>
+      <button id="btn-reset">Reset view</button>
+    </details>
 
     <details id="img-io">
       <summary>Image…</summary>
@@ -1229,14 +1259,12 @@
       {
         const box = document.getElementById('shape-params');
         const list = document.getElementById('shape-params-list');
-        const title = document.getElementById('shape-params-title');
 
         function buildShapeParams(name) {
           const schema = paramsFor(name);
           list.textContent = '';
           box.hidden = schema.length === 0;
           if (!schema.length) return;
-          title.textContent = schema.length === 1 ? 'Shape maths' : 'Shape maths';
           const rows = [];
           for (const p of schema) {
             const label = document.createElement('label');
@@ -1273,11 +1301,18 @@
               const range = effectiveRange(name, p.key, live) || { min: p.min, max: p.max };
               input.min = String(range.min);
               input.max = String(range.max);
+              // A locked parameter is disabled rather than merely pinned by a
+              // zero-width range: a thumb that will not move is indistinguishable
+              // from a broken one, whereas a greyed control plus the reason reads
+              // as a precondition the user can go and satisfy.
+              input.disabled = !!range.locked;
               if (String(input.value) !== String(value)) input.value = String(value);
               out.textContent = p.integer ? String(value) : Number(value).toFixed(3);
-              hint.textContent = range.cappedBy
-                ? `max ${Number(range.max).toFixed(3)} — held below ${range.cappedByLabel}`
-                : '';
+              hint.textContent = range.locked
+                ? `locked at ${Number(range.lockedAt).toFixed(3)} — needs ${range.lockedByLabel} ≥ ${range.needs}`
+                : range.cappedBy
+                  ? `max ${Number(range.max).toFixed(3)} — held below ${range.cappedByLabel}`
+                  : '';
             });
           }
           for (const r of rows) r();
