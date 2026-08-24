@@ -41,7 +41,7 @@ A shape with no proven-safe parameters should continue to have no Shape maths se
 
 ## Current state
 
-The selector currently exposes **31 shapes**. Four have Shape maths controls today.
+The selector currently exposes **31 shapes**. Five have Shape maths controls today.
 
 ### Already parameterized
 
@@ -51,8 +51,9 @@ The selector currently exposes **31 shapes**. Four have Shape maths controls tod
 | Mandelbox | Scale; Min radius; Fixed radius | 3 |
 | Menger sponge | Recursion depth | 1 |
 | Quaternion Julia | c · real; c · i; c · j; c · k | 4 |
+| Gyroid | Cell size; Level offset; Wall thickness | 3 |
 
-There are currently **12 shape-specific sliders across 4 of 31 shapes**.
+There are currently **15 shape-specific sliders across 5 of 31 selectable shapes**.
 
 ### Existing constraint machinery
 
@@ -64,15 +65,23 @@ There are currently **12 shape-specific sliders across 4 of 31 shapes**.
 - `extent` — the model's bounding radius changes.
 - `cost` — the parameter materially changes rendering cost.
 
-The Mandelbox radius relationship and Mandelbulb generalized-angle gate are important precedents: a safety relation is enforced both in JS and in the shader, so another writer cannot bypass the UI clamp and feed the estimator an invalid pair.
+The Mandelbox radius relationship, Mandelbulb generalized-angle gate, and Gyroid cell-size-derived distance bound are important precedents: a safety relation is encoded with the mathematical parameter rather than left as a stale constant.
 
 The active shape currently has **8 float parameter slots** (`shapeParams`, two `vec4`s). Eight is a ceiling, not a target.
 
 ---
 
-# Inventory of unparameterized shapes
+# Inventory and roadmap
 
-## 1. Apollonian sphere packing
+## 1. Apollonian-style fold/inversion packing (`apollonian`)
+
+### Identity of the current model
+
+The current `apollonian` estimator is an **Apollonian-style fold/inversion construction**, not a canonical five-sphere Descartes packing.
+
+It repeatedly folds space into a periodic cell and applies a sphere inversion. The result has the nested packing appearance associated with Apollonian constructions, and its inversion scale is a genuine parameter of this estimator, but it does **not** begin from five mutually tangent spheres and recursively solve the 3D Descartes/Soddy–Gossett tangency relation.
+
+That distinction matters for Shape maths: the controls below are honest parameters of the model we actually render, while classical Descartes curvatures would belong to a different estimator.
 
 ### Genuine variables already present
 
@@ -91,11 +100,40 @@ The active shape currently has **8 float parameter slots** (`shapeParams`, two `
 
 ### Notes
 
-Packing tightness already changes autonomously. Once it becomes a slider, the slider should own the value and the old animation should be removed, following the Mandelbulb and Julia precedent.
+Packing tightness already changes autonomously. Once it becomes a slider, the slider should own the value and the old animation should be removed, following the Mandelbulb, Julia, and Gyroid precedents.
 
 The bounding radius is primarily presentation/clipping and should not automatically become a Shape maths control.
 
 **Priority: high.**
+
+### Future canonical Apollonian / Descartes sphere packing
+
+If we want a mathematically canonical 3D Apollonian sphere packing, it should be implemented deliberately as its own construction rather than silently treating the current fold/inversion estimator as one.
+
+A 3D Descartes configuration contains **five mutually tangent oriented spheres**. Writing each bend/curvature as
+
+`kappa_i = 1 / r_i`
+
+with the usual signed-curvature convention for an enclosing sphere, their bends satisfy the 3D Soddy–Gossett relation:
+
+`(kappa_1 + kappa_2 + kappa_3 + kappa_4 + kappa_5)^2 = 3 * (kappa_1^2 + kappa_2^2 + kappa_3^2 + kappa_4^2 + kappa_5^2)`
+
+The five curvatures therefore cannot be five independent sliders.
+
+#### Recommended controls for a future canonical model
+
+1. **Seed curvature ratios** — expose a normalized subset of independent ratios, then solve the remaining bend from the Descartes constraint.
+2. **Recursion / generation depth** — how many generations of tangent gap-filling are explicitly represented.
+3. Potentially a higher-level **seed asymmetry** control, but only if it maps to a mathematically defined family of valid Descartes configurations.
+
+#### Derived or non-slider quantities
+
+- **Overall scale** is a similarity transformation and should normally remain presentation, not Shape maths.
+- **Position and orientation** are viewer transforms, not packing parameters.
+- **Packing density / porosity** is derived from the chosen seed and generation policy.
+- **Fractal dimension** is a property of the resulting infinite residual set, not a value the user can independently dial. The familiar dimension near `2.4739` belongs to the classical 3D Apollonian residual set and should be displayed as information when applicable, not exposed as a slider.
+
+**Recommendation:** if built, give the canonical Descartes packing its own clearly named selector entry and estimator. Do not replace the existing `apollonian` model unless we intentionally decide to retire its current fold/inversion construction.
 
 ---
 
@@ -170,29 +208,38 @@ Sphere radius must remain below half the cell spacing because only the sphere in
 
 ---
 
-## 5. Gyroid
+## 5. Gyroid — implemented
 
-### Genuine variables already present
+### Current sliders
 
-- **Level-set offset**
-  - Currently `0.3 * sin(time * 0.08)`.
-- **Frequency** `FREQ = 5.5`.
-- **Wall half-thickness** `HALF = 0.34`.
-- Clipping radius `R = 1.35`.
+1. **Cell size**
+   - User-facing cubic unit-cell period `a`.
+   - Current range: `0.65 .. 2.0`.
+   - Default: `2*pi/5.5 ≈ 1.14239733`, reproducing the previously shipped geometry.
+2. **Level offset**
+   - Selects the isosurface `f = t`.
+   - Current range: `-0.3 .. 0.3`.
+   - Default: `0`.
+3. **Wall thickness**
+   - Half-thickness `h` of the solid sheet around the chosen level set.
+   - Current range: `0.17 .. 0.51`.
+   - Default: `0.34`.
 
-### Recommended sliders
+### Derived relationship
 
-1. **Level**.
-2. **Frequency**.
-3. **Wall thickness**.
+The shader derives
 
-### Why this is an especially good candidate
+`frequency = 2*pi / cellSize`
 
-The current estimator has an analytic global Lipschitz bound. Its distance divisor is `sqrt(3) * frequency`, so Frequency can be a **derived** parameter rather than a guessed safety factor.
+and then derives the conservative sphere-tracing divisor from that same value:
 
-Level already moves through a family where one labyrinth widens while the other narrows, and the implementation notes say the current amplitude remains within the connected regime.
+`Lipschitz divisor = sqrt(3) * frequency`
 
-**Priority: highest. Recommended next implementation.**
+so changing Cell size cannot leave the distance bound stale.
+
+The old autonomous level animation `0.3 * sin(time * 0.08)` has been removed. The slider now owns Level offset.
+
+**Status: implemented.**
 
 ---
 
@@ -377,6 +424,16 @@ Those are not equivalent to changing the honeycomb itself.
 
 ## 19. Kleinian sphere packing `{5,3,6}`
 
+### Identity of this model
+
+This is a third, distinct packing construction:
+
+- it is **not** the current periodic fold/inversion `apollonian` estimator;
+- it is **not** a classical five-sphere Descartes recursion;
+- it **is** the orbit of a seed horoball under the cusped Kleinian/Coxeter group `[5,3,6]`.
+
+Its natural parameter is therefore a horoball parameter, not a vector of Descartes seed curvatures.
+
 ### Genuine coupled parameter
 
 - **Horoball radius** `HR = 0.26298370`.
@@ -384,13 +441,19 @@ Those are not equivalent to changing the honeycomb itself.
 
 The current value is the **maximal cusp**: the horoballs touch their neighbours without overlap and remain tangent to the sphere at infinity.
 
+For a fixed ideal boundary point `v`, the seed centre follows
+
+`HO = (1 - HR) * v`
+
+so changing `HR` must move the centre at the same time. Changing the radius alone would break boundary tangency.
+
 ### Recommended slider
 
 1. **Horoball size** — from smaller separated horoballs up to the maximal cusp.
 
 ### Constraint
 
-This must be implemented as a **derived/coupled** parameter. Changing `HR` alone while leaving `HO` fixed would destroy the intended boundary tangency. The centre must move consistently with the radius.
+This must be implemented as a **derived/coupled** parameter. The maximal-cusp value is an upper geometric boundary, not merely a UI preference.
 
 **Priority: medium-high, mathematically valuable.**
 
@@ -613,11 +676,12 @@ As with Lorenz and Aizawa, coefficient changes require reintegration and automat
 | Mandelbox | Scale, Min radius, Fixed radius | Implemented |
 | Menger sponge | Recursion depth | Implemented |
 | Quaternion Julia | Quaternion c components | Implemented |
-| Apollonian | Packing tightness, depth | Strong candidate |
+| Gyroid | Cell size, Level offset, Wall thickness | Implemented |
+| Apollonian-style fold/inversion | Packing tightness, depth | Strong candidate |
+| Future canonical Apollonian / Descartes | Seed curvature ratios, depth | New estimator / future model |
 | Sphere pack | Packing tightness, depth | Strong candidate |
 | Encrusted planet | Packing tightness, coverage, crust thickness | Strong candidate |
 | Surface pack | Sphere size, shell thickness, density | Strong candidate |
-| Gyroid | Level, frequency, wall thickness | Best next candidate |
 | Kleinian limit set | Inversion radius | Strong but narrow range |
 | Barth sextic | — | Keep canonical |
 | Kissing Schottky | — | Keep canonical; boundary of hyperbolic family |
@@ -626,7 +690,7 @@ As with Lorenz and Aizawa, coefficient changes require reintegration and automat
 | Envelope octahedral | — | Keep canonical for now |
 | Envelope dodecahedral | — | Keep canonical for now |
 | 6 hyperbolic honeycombs | Edge/tube thickness | Shared implementation candidate |
-| Kleinian sphere packing | Horoball size | Coupled/derived candidate |
+| Kleinian sphere packing `{5,3,6}` | Horoball size; centre derived | Coupled/derived candidate |
 | Engel tiling | Joint gap / erosion | Clean single slider |
 | Cosmic Web | Void size, scale, filament thickness, warp | Rich volumetric candidate |
 | Ziggurat | Step height, cube size, terraces, spacing | Very strong candidate |
@@ -658,7 +722,7 @@ If a safety divisor must change because geometry changes, it is a **derived quan
 
 ## 2. User control and autonomous animation cannot own the same value
 
-Several unparameterized shapes currently animate genuine mathematical values for visual liveliness.
+Several shapes currently animate genuine mathematical values for visual liveliness.
 
 When such a value becomes a slider:
 
@@ -666,14 +730,13 @@ When such a value becomes a slider:
 - use the old reduced-motion/static pose as the default when appropriate;
 - let the slider be the sole owner of the value.
 
-This follows the precedent already established for Mandelbulb Power and Quaternion Julia `c`.
+This follows the precedent already established for Mandelbulb Power, Quaternion Julia `c`, and Gyroid Level offset.
 
-Candidates affected include at least:
+Candidates still affected include at least:
 
-- Apollonian packing tightness;
+- Apollonian-style packing tightness;
 - Sphere Pack packing tightness;
 - Encrusted packing tightness;
-- Gyroid level;
 - Kleinian inversion radius;
 - Hyperbolic Schottky separation;
 - Ziggurat step height.
@@ -701,8 +764,9 @@ Tests should look for:
 Examples already known:
 
 - Quasicrystal Frequency: `LIP = 2 * phi * K`.
-- Gyroid Frequency: divisor scales with `sqrt(3) * FREQ`.
-- Kleinian packing Horoball size: centre must move with radius to preserve boundary tangency.
+- Gyroid Cell size: `FREQ = 2*pi/a`, then divisor `sqrt(3) * FREQ`.
+- Kleinian packing Horoball size: `HO = (1 - HR) * v` for the fixed ideal point `v`.
+- Future canonical Apollonian seed: remaining bend(s) must satisfy the 3D Soddy–Gossett relation rather than being independently dragged off tangency.
 - Mandelbox: Min radius must remain below Fixed radius.
 - Mandelbulb generalized angles: ratios lock to 1 below the measured Power threshold.
 
@@ -747,39 +811,41 @@ A shape with three excellent parameters is better than one with eight obscure co
 
 # Recommended rollout
 
+Gyroid was the first item in this roadmap and is now complete.
+
 ## Phase 1 — easiest high-value surface parameters
 
-1. **Gyroid** — Level, Frequency, Wall thickness.
-2. **Icosahedral quasicrystal** — Threshold, Frequency.
-3. **Apollonian** — Packing tightness, then depth.
-4. **Sphere Pack** — Packing tightness, then depth.
-5. **Encrusted** — Packing tightness, coverage, thickness.
-6. **Hyperbolic Schottky** — Separation.
-7. **Ziggurat** — Step height, cube size, terrace count.
-8. **Cube Stack** — Cube size, depth, terrace spacing.
-9. **Engel** — Joint gap.
+1. **Icosahedral quasicrystal** — Threshold, Frequency.
+2. **Apollonian-style fold/inversion packing** — Packing tightness, then depth.
+3. **Sphere Pack** — Packing tightness, then depth.
+4. **Encrusted** — Packing tightness, coverage, thickness.
+5. **Hyperbolic Schottky** — Separation.
+6. **Ziggurat** — Step height, cube size, terrace count.
+7. **Cube Stack** — Cube size, depth, terrace spacing.
+8. **Engel** — Joint gap.
 
 These give a large increase in parameterized coverage while mostly reusing constants already intended to vary.
 
 ## Phase 2 — shared/coupled systems
 
-10. **Surface Pack** — size/density/shell constraints.
-11. **Six Hyperbolic Honeycombs** — shared edge-thickness control.
-12. **Kleinian limit set** — carefully measured inversion-radius band.
-13. **Kleinian sphere packing** — coupled horoball radius/centre.
-14. **Cosmic Web** — choose a restrained structural subset.
+9. **Surface Pack** — size/density/shell constraints.
+10. **Six Hyperbolic Honeycombs** — shared edge-thickness control.
+11. **Kleinian limit set** — carefully measured inversion-radius band.
+12. **Kleinian sphere packing `{5,3,6}`** — coupled horoball radius/centre.
+13. **Cosmic Web** — choose a restrained structural subset.
 
 ## Phase 3 — attractor parameter system
 
-15. Add CPU-side parameter ownership, trajectory reintegration, automatic bounds, and refitting.
-16. **Lorenz** — sigma, rho, beta.
-17. **Rössler** — a, b, c.
-18. **Aizawa** — begin with the most useful coefficients, expanding up to all six if warranted.
+14. Add CPU-side parameter ownership, trajectory reintegration, automatic bounds, and refitting.
+15. **Lorenz** — sigma, rho, beta.
+16. **Rössler** — a, b, c.
+17. **Aizawa** — begin with the most useful coefficients, expanding up to all six if warranted.
 
-## Phase 4 — intentionally generalized families
+## Phase 4 — intentionally generalized or new families
 
-Only after the straightforward real parameters are covered should we consider inventing broader families for currently rigid named objects such as:
+Only after the straightforward real parameters are covered should we consider inventing broader families for currently rigid named objects or adding new canonical constructions such as:
 
+- **Canonical 3D Apollonian / Descartes sphere packing** — seed curvature ratios constrained by Soddy–Gossett, plus recursion depth;
 - Barth sextic;
 - Tetrabrot;
 - Octahedral envelope extrusion;
