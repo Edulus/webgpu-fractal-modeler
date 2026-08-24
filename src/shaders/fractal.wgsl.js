@@ -198,6 +198,15 @@ fn deMandelbulb(pos : vec3<f32>) -> DEResult {
   let power = shapeParam(0u);
   let bailout = shapeParam(1u);
   let deIters = i32(u.detail.y);
+  // Slots 2 and 3 generalize the map: the polar and azimuthal angles get their
+  // own multipliers instead of both taking the radial power. Ratio 1 is the
+  // classic bulb exactly. The gate is enforced here as well as in the registry
+  // because the estimator must never be handed an unsafe pair however the
+  // uniform came to hold it -- below power 8 the shipped dr rule under-counts
+  // the stretching these ratios introduce and rays march through the surface.
+  let generalized = power >= 8.0;
+  let pRatio = select(1.0, shapeParam(2u), generalized);
+  let qRatio = select(1.0, shapeParam(3u), generalized);
   for (var i = 0; i < DE_ITERS; i = i + 1) {
     if (i >= deIters) { break; }
     r = length(z);
@@ -212,8 +221,8 @@ fn deMandelbulb(pos : vec3<f32>) -> DEResult {
     var theta = acos(clamp(z.z / rr, -1.0, 1.0));
     var phi = atan2(z.y, z.x);
     let zr = pow(rr, power);
-    theta = theta * power;
-    phi = phi * power;
+    theta = theta * power * pRatio;
+    phi = phi * power * qRatio;
     z = zr * vec3<f32>(
       sin(theta) * cos(phi),
       sin(theta) * sin(phi),

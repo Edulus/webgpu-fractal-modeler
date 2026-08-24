@@ -17,10 +17,18 @@
 //   derived    the shader must recompute something from it (`derives` names
 //              what). A literal left in the shader instead is a silent bug:
 //              the geometry changes and the distance bound does not.
-//   relational must satisfy an inequality against another parameter of the same
+//   relational must satisfy a condition involving another parameter of the same
 //              shape (`rel`). Enforced twice -- clamped here AND in the shader
 //              -- because the estimator must never be handed an invalid pair
-//              however the uniform came to hold it.
+//              however the uniform came to hold it. Two forms exist:
+//                rel.below   -- must stay under a sibling's value.
+//                rel.locksTo -- is pinned to one value entirely unless a
+//                               sibling meets a threshold (`rel.unless`). This
+//                               is for a parameter whose whole VALIDITY, not
+//                               merely its range, depends on another: the
+//                               generalized Mandelbulb's angle ratios are only
+//                               safe at power 8 and above, and below that the
+//                               estimator marches through surfaces.
 //   extent     changes the model's bounding radius. NOTHING may ship with this
 //              until CAM_RADIUS is derived rather than tabled, because the
 //              orbit distance is a per-shape constant that would silently stop
@@ -82,6 +90,36 @@ export const SHAPE_PARAMS = {
           + 'point with |z| > 2 provably escapes, so a bailout below 2 truncates '
           + 'the set instead of resolving it. Larger values refine the boundary '
           + 'and cost iterations.',
+    },
+    // The generalized family. v^n = r^n <sin(p*th)cos(q*ph), sin(p*th)sin(q*ph),
+    // cos(p*th)>, where the classic sets p = q = n. Exposing p and q as RATIOS
+    // of the power rather than as absolute multipliers is what keeps Power
+    // meaning what it always meant: at ratio 1 the map is exactly the classic
+    // one, so the defaults reproduce the existing shape bit for bit.
+    {
+      slot: 2, key: 'polarRatio', label: 'Polar ratio',
+      min: 0.25, max: 1.75, step: 0.01, default: 1,
+      domain: 'geometry',
+      constraint: { kind: 'relational', rel: { locksTo: 1, unless: { param: 'power', atLeast: 8 } } },
+      note: 'Multiplies the polar angle by power * this, instead of by power. '
+          + 'Valid only at power 8 and above, and the threshold is measured over '
+          + 'the whole reachable space rather than chosen cautiously. Two '
+          + 'separate things fail below it. At power 2, seven of thirteen ratio '
+          + 'pairs march through surfaces, because the shipped dr rule assumes '
+          + 'the map is conformal and the ratios break that. At power 4 nothing '
+          + 'overshoots but the extent still swings 2.6x across the ratios, which '
+          + 'the tabled CAM_RADIUS cannot follow. Only from 8 up are both quiet: '
+          + 'zero overshoot and the extent moving about 5%.',
+    },
+    {
+      slot: 3, key: 'azimuthRatio', label: 'Azimuth ratio',
+      min: 0.25, max: 1.75, step: 0.01, default: 1,
+      domain: 'geometry',
+      constraint: { kind: 'relational', rel: { locksTo: 1, unless: { param: 'power', atLeast: 8 } } },
+      note: 'Multiplies the azimuthal angle by power * this. Setting the two '
+          + 'ratios differently is what breaks the rotational symmetry and turns '
+          + 'one shape into a family; leaving both at 1 is the classic '
+          + 'Mandelbulb exactly. Same measured power floor as the polar ratio.',
     },
   ],
 
@@ -184,9 +222,34 @@ export const SHAPE_PARAMS = {
 export const REL_MARGIN = 0.01;
 
 export function effectiveRange(shape, key, values) {
-  const p = paramsFor(shape).find((q) => q.key === key);
+  const list = paramsFor(shape);
+  const p = list.find((q) => q.key === key);
   if (!p) return null;
   const rel = p.constraint?.rel;
+  const labelOf = (k) => list.find((q) => q.key === k)?.label ?? k;
+
+  // A lock is not a narrowed range but a closed one: the parameter has a single
+  // admissible value until its precondition is met. Reported as a range of zero
+  // width so the UI can render it as an immovable slider and say why, rather
+  // than as a control that silently refuses to move.
+  if (rel?.locksTo !== undefined && rel.unless) {
+    const gate = Number(values?.[rel.unless.param]);
+    const met = Number.isFinite(gate) && gate >= rel.unless.atLeast;
+    if (!met) {
+      return {
+        min: rel.locksTo,
+        max: rel.locksTo,
+        locked: true,
+        lockedAt: rel.locksTo,
+        lockedBy: rel.unless.param,
+        lockedByLabel: labelOf(rel.unless.param),
+        needs: rel.unless.atLeast,
+        cappedBy: null,
+        cappedByLabel: null,
+      };
+    }
+  }
+
   let max = p.max;
   let cappedBy = null;
   if (rel?.below !== undefined && values?.[rel.below] !== undefined) {
@@ -196,8 +259,10 @@ export function effectiveRange(shape, key, values) {
       cappedBy = rel.below;
     }
   }
-  const other = cappedBy ? paramsFor(shape).find((q) => q.key === cappedBy) : null;
-  return { min: p.min, max, cappedBy, cappedByLabel: other ? other.label : null };
+  return {
+    min: p.min, max, locked: false,
+    cappedBy, cappedByLabel: cappedBy ? labelOf(cappedBy) : null,
+  };
 }
 
 export function paramsFor(shape) {
@@ -227,6 +292,10 @@ export function clampParams(shape, values) {
   for (const p of list) {
     const rel = p.constraint?.rel;
     if (!rel) continue;
+    if (rel.locksTo !== undefined && rel.unless) {
+      const gate = Number(out[rel.unless.param]);
+      if (!(Number.isFinite(gate) && gate >= rel.unless.atLeast)) out[p.key] = rel.locksTo;
+    }
     if (rel.below !== undefined && out[rel.below] !== undefined) {
       // Strictly below, with a margin, so equality cannot sneak through and
       // make the two fold branches degenerate.

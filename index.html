@@ -1301,11 +1301,18 @@
               const range = effectiveRange(name, p.key, live) || { min: p.min, max: p.max };
               input.min = String(range.min);
               input.max = String(range.max);
+              // A locked parameter is disabled rather than merely pinned by a
+              // zero-width range: a thumb that will not move is indistinguishable
+              // from a broken one, whereas a greyed control plus the reason reads
+              // as a precondition the user can go and satisfy.
+              input.disabled = !!range.locked;
               if (String(input.value) !== String(value)) input.value = String(value);
               out.textContent = p.integer ? String(value) : Number(value).toFixed(3);
-              hint.textContent = range.cappedBy
-                ? `max ${Number(range.max).toFixed(3)} — held below ${range.cappedByLabel}`
-                : '';
+              hint.textContent = range.locked
+                ? `locked at ${Number(range.lockedAt).toFixed(3)} — needs ${range.lockedByLabel} ≥ ${range.needs}`
+                : range.cappedBy
+                  ? `max ${Number(range.max).toFixed(3)} — held below ${range.cappedByLabel}`
+                  : '';
             });
           }
           for (const r of rows) r();
