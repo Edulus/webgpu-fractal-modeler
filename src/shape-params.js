@@ -1,9 +1,42 @@
 // shape-params.js — public parameter registry.
 //
 // The established registry and constraint machinery live unchanged in the base
-// module. Gyroid is added here so the feature is isolated and every existing
-// shape keeps exactly the parameter definitions it already shipped with.
+// module. New measured shapes are layered here so existing definitions remain
+// byte-for-byte stable.
 import { SHAPE_PARAMS } from './shape-params-base.js';
+import { installApollonianDescartesUI } from './apollonian-descartes-ui.js';
+
+const APD_K_MIN = 1 + Math.sqrt(6) / 2;
+
+// Internal key `penrose` is the retired id-8 slot. The Penrose relief stopped
+// being selectable before Shape maths existed; reusing that dormant slot keeps
+// every numeric shape id after 8 stable. The UI presents this as a new canonical
+// Apollonian / Descartes sphere packing and never exposes the old internal name.
+SHAPE_PARAMS.penrose = [
+  {
+    slot: 0, key: 'seedCurvature', label: 'Seed curvature κ',
+    min: APD_K_MIN, max: 3.2, step: 0.005, default: APD_K_MIN,
+    domain: 'geometry',
+    constraint: { kind: 'derived', derives: ['fourth seed curvature', 'dual inversion spheres'] },
+    note: 'Curvature of three equal inner seed spheres inside the unit enclosing sphere. '
+        + 'The fourth inner curvature is solved from the 3D Soddy-Gossett / Descartes '
+        + 'equation, so it is deliberately not another slider. The lower bound '
+        + '1+sqrt(6)/2 is the symmetric tetrahedral configuration where all four inner '
+        + 'spheres are equal. The interval through 3.2 was checked for real Descartes '
+        + 'roots, pairwise tangency, valid dual inversions, and conservative marching.',
+  },
+  {
+    slot: 1, key: 'recursionDepth', label: 'Recursion depth',
+    min: 4, max: 24, step: 1, default: 18, integer: true,
+    domain: 'geometry',
+    isIteration: true,
+    constraint: { kind: 'cost' },
+    note: 'Maximum dual-Apollonian group-word depth used to resolve progressively '
+        + 'smaller tangent spheres. It is a mathematical truncation of the infinite '
+        + 'packing, not the adaptive renderer iteration budget. Higher values reveal '
+        + 'smaller generations and cost more distance-estimator work.',
+  },
+];
 
 SHAPE_PARAMS.gyroid = [
   {
@@ -41,5 +74,11 @@ SHAPE_PARAMS.gyroid = [
         + '0.34 value while preserving 0.34 exactly as the default.',
   },
 ];
+
+// index.html still has a hand-written selector and wall-label table. Until those
+// are generated from the same registry, this small browser-only adapter exposes
+// the new shape without renumbering or duplicating renderer state. It is a no-op
+// in Node/tests and in library use without the explorer page DOM.
+installApollonianDescartesUI();
 
 export * from './shape-params-base.js';
