@@ -345,8 +345,6 @@ export async function initFractalBackground(canvas, options = {}) {
     // Highest rung this display can actually allocate; set by resize().
     rungCap: TOP,
     showcaseRung: -1,
-    // Edge antialiasing for moving frames; see the composite pass.
-    fxaaOn: true,
     fpsEMA: 60,
     slowFrames: 0,
     fastFrames: 0,
@@ -518,9 +516,6 @@ export async function initFractalBackground(canvas, options = {}) {
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
         { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
         { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
-        // The composited LDR image, read only by the FXAA pass. One layout
-        // serves both pipelines; the composite pass simply never samples it.
-        { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
       ],
     });
 
@@ -604,26 +599,16 @@ export async function initFractalBackground(canvas, options = {}) {
       fragment: { module: compositeModule, entryPoint: 'fs_composite', targets: [{ format: state.format }] },
       primitive: { topology: 'triangle-list' },
     });
-
-    // Edge antialiasing for moving frames. Same layout and module as the
-    // composite; it differs only in reading the composited image back.
-    state.pipelines.fxaa = device.createRenderPipeline({
-      layout: device.createPipelineLayout({ bindGroupLayouts: [state._bgl.compositeBGL] }),
-      vertex: { module: compositeModule, entryPoint: 'vs_main' },
-      fragment: { module: compositeModule, entryPoint: 'fs_fxaa', targets: [{ format: state.format }] },
-      primitive: { topology: 'triangle-list' },
-    });
   }
 
   // ---- Offscreen render targets (recreated on resize / quality change) ----
-  function createTargets(renderW, renderH, swapW, swapH) {
+  function createTargets(renderW, renderH) {
     const device = state.device;
     if (state.targets) {
       state.targets.sceneTex.destroy();
       state.targets.auxTex.destroy();
       state.targets.bloomA.destroy();
       state.targets.bloomB.destroy();
-      state.targets.ldrTex.destroy();
     }
     const bw = Math.max(1, Math.floor(renderW / 2));
     const bh = Math.max(1, Math.floor(renderH / 2));
@@ -642,24 +627,14 @@ export async function initFractalBackground(canvas, options = {}) {
     const bloomA = mk(bw, bh);
     const bloomB = mk(bw, bh);
 
-    // The composited image, at display resolution, so FXAA can read it back.
-    // Swapchain format rather than HDR: this is the finished picture, already
-    // tonemapped and dithered, which is exactly what FXAA should judge.
-    const ldrTex = device.createTexture({
-      size: { width: Math.max(1, swapW), height: Math.max(1, swapH) },
-      format: state.format,
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-    });
-    const ldrView = ldrTex.createView();
-
     const sceneView = sceneTex.createView();
     const auxView = auxTex.createView();
     const bloomAView = bloomA.createView();
     const bloomBView = bloomB.createView();
 
     state.targets = {
-      sceneTex, auxTex, bloomA, bloomB, ldrTex,
-      sceneView, auxView, bloomAView, bloomBView, ldrView,
+      sceneTex, auxTex, bloomA, bloomB,
+      sceneView, auxView, bloomAView, bloomBView,
       w: renderW, h: renderH,
     };
     state.accumSamples = 0;
@@ -712,27 +687,6 @@ export async function initFractalBackground(canvas, options = {}) {
         { binding: 2, resource: sceneView },
         { binding: 3, resource: auxView },
         { binding: 4, resource: bloomBView },
-        // NOT ldrView. The composite pass renders INTO ldrTex, and WebGPU
-        // forbids a texture being a writable render attachment and a readable
-        // binding in the same pass. The composite entry point never samples
-        // slot 5, so any other live texture satisfies the layout; sceneView is
-        // already bound above and is never the target of this pass.
-        { binding: 5, resource: sceneView },
-      ],
-    });
-
-    // FXAA reads the composited image back. Same layout, but now ldrTex is the
-    // source and the swapchain is the target, so nothing is read and written at
-    // once.
-    state.bindGroups.fxaa = device.createBindGroup({
-      layout: state._bgl.compositeBGL,
-      entries: [
-        { binding: 0, resource: ub },
-        { binding: 1, resource: state.sampler },
-        { binding: 2, resource: sceneView },
-        { binding: 3, resource: auxView },
-        { binding: 4, resource: bloomBView },
-        { binding: 5, resource: ldrView },
       ],
     });
   }
@@ -921,7 +875,7 @@ export async function initFractalBackground(canvas, options = {}) {
       renderH = Math.max(1, Math.floor(renderH * renderFit));
     }
 
-    createTargets(renderW, renderH, pxW, pxH);
+    createTargets(renderW, renderH);
 
     if (!state.running || reducedMotion()) {
       renderFrame(performance.now(), true);
@@ -1242,14 +1196,7 @@ export async function initFractalBackground(canvas, options = {}) {
       pass.draw(3);
       pass.end();
     }
-    // Pass 4: composite -> swapchain, or -> LDR then FXAA -> swapchain.
-    //
-    // A converged frame is already antialiased, by up to 96 jittered samples,
-    // and running an edge filter over it would only soften detail that is real.
-    // A moving frame has one sample taken on the internal grid, so its
-    // silhouettes step; that is the case FXAA exists for. The extra pass is
-    // therefore spent only while moving, when it is also the only pass cheap
-    // enough to add without costing a rung.
+    // Pass 4: composite -> swapchain
     {
       let view;
       try {
@@ -1257,29 +1204,13 @@ export async function initFractalBackground(canvas, options = {}) {
       } catch (e) {
         return; // context not ready (e.g. zero-size) — skip frame
       }
-      const smoothing = state.fxaaOn && !acc && state.pipelines.fxaa && state.targets.ldrView;
-      const clear = { r: 0, g: 0, b: 0, a: 0 };
-      {
-        const pass = encoder.beginRenderPass({
-          colorAttachments: [{
-            view: smoothing ? state.targets.ldrView : view,
-            loadOp: 'clear', storeOp: 'store', clearValue: clear,
-          }],
-        });
-        pass.setPipeline(state.pipelines.composite);
-        pass.setBindGroup(0, state.bindGroups.composite);
-        pass.draw(3);
-        pass.end();
-      }
-      if (smoothing) {
-        const pass = encoder.beginRenderPass({
-          colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: clear }],
-        });
-        pass.setPipeline(state.pipelines.fxaa);
-        pass.setBindGroup(0, state.bindGroups.fxaa);
-        pass.draw(3);
-        pass.end();
-      }
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
+      });
+      pass.setPipeline(state.pipelines.composite);
+      pass.setBindGroup(0, state.bindGroups.composite);
+      pass.draw(3);
+      pass.end();
     }
 
     device.queue.submit([encoder.finish()]);
