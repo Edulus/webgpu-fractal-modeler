@@ -57,6 +57,7 @@ struct Uniforms {
 @group(0) @binding(1) var samp : sampler;
 @group(0) @binding(2) var srcTex : texture_2d<f32>;   // encoded material, or blur source
 @group(0) @binding(3) var auxTex : texture_2d<f32>;   // encoded auxiliary material
+@group(0) @binding(5) var ldrTex : texture_2d<f32>;
 @group(0) @binding(4) var bloomTex : texture_2d<f32>; // composite only
 
 const PI : f32 = 3.14159265359;
@@ -280,6 +281,63 @@ fn contrastCurve(c : vec3<f32>, bg : vec3<f32>, k : f32) -> vec3<f32> {
   let b = pow(vec3<f32>(1.0) - xc, vec3<f32>(k));
   let curved = bg + span * (a / max(a + b, vec3<f32>(1e-6)));
   return select(c, curved, x > vec3<f32>(0.0));
+}
+
+// ---- FXAA -----------------------------------------------------------------
+// Edge antialiasing for frames that are moving.
+//
+// A still view is antialiased properly: progressive accumulation averages up to
+// 96 jittered samples and the silhouettes come out clean. Nothing like that is
+// available while the camera moves -- there is one sample per frame, taken on
+// the internal grid, which at a low rung is half the width of the display. The
+// resolve already samples that with a linear filter, so the edge is a ramp
+// rather than a cliff, but the ramp still turns over on internal-pixel
+// boundaries and reads as a staircase.
+//
+// This runs over the finished image instead, so it costs nothing from the
+// raymarch budget and cannot push the quality governor down a rung. It is the
+// classic luma-edge FXAA: find the local contrast, decide whether the edge runs
+// mostly across or mostly down, and blend along it.
+//
+// Applied only while moving. Once the accumulator has converged it is skipped
+// entirely -- the image is genuinely resolved by then, and filtering it again
+// would only soften detail that is real.
+@fragment
+fn fs_fxaa(in : VSOut) -> @location(0) vec4<f32> {
+  let texel = 1.0 / max(u.resolution, vec2<f32>(1.0));
+  let mid = textureSampleLevel(ldrTex, samp, in.uv, 0.0);
+
+  let lN = luma(textureSampleLevel(ldrTex, samp, in.uv + vec2<f32>(0.0, -texel.y), 0.0).rgb);
+  let lS = luma(textureSampleLevel(ldrTex, samp, in.uv + vec2<f32>(0.0, texel.y), 0.0).rgb);
+  let lW = luma(textureSampleLevel(ldrTex, samp, in.uv + vec2<f32>(-texel.x, 0.0), 0.0).rgb);
+  let lE = luma(textureSampleLevel(ldrTex, samp, in.uv + vec2<f32>(texel.x, 0.0), 0.0).rgb);
+  let lM = luma(mid.rgb);
+
+  let lMin = min(lM, min(min(lN, lS), min(lW, lE)));
+  let lMax = max(lM, max(max(lN, lS), max(lW, lE)));
+  let range = lMax - lMin;
+
+  // Flat enough to be left alone. The absolute floor keeps the filter off the
+  // near-black backdrop, where the relative test alone would fire on dither.
+  if (range < max(0.0312, lMax * 0.125)) {
+    return mid;
+  }
+
+  // Which way does the edge run? Compare vertical against horizontal gradient.
+  let vert = abs(lN + lS - 2.0 * lM);
+  let horz = abs(lW + lE - 2.0 * lM);
+  let horizontal = horz >= vert;
+
+  // Step towards the darker side of the edge and blend a neighbour in, by an
+  // amount set by how far the centre sits between the local extremes.
+  let stepDir = select(
+    vec2<f32>(0.0, select(-texel.y, texel.y, lS < lN)),
+    vec2<f32>(select(-texel.x, texel.x, lE < lW), 0.0),
+    horizontal
+  );
+  let blend = clamp((lM - lMin) / max(range, 1e-5), 0.0, 1.0) * 0.5;
+  let neighbour = textureSampleLevel(ldrTex, samp, in.uv + stepDir, 0.0);
+  return mix(mid, neighbour, blend);
 }
 
 @fragment

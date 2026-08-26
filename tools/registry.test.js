@@ -140,5 +140,14 @@ const groups = [...selector.matchAll(/<optgroup label="([^"]+)"/g)].map((m) => m
 ok(groups.length > 0, `selector is grouped by family (${groups.length} groups)`);
 ok(new Set(options).size === options.length, 'no shape appears twice in the selector');
 
+// The FXAA pass is one entry point in the composite module plus one pipeline
+// that reads the composited image back. Both halves have to exist together: a
+// pipeline without the entry point fails at device creation, and an entry point
+// with nothing driving it is dead code that silently stops smoothing anything.
+ok(composite.includes('fn fs_fxaa'), 'composite.wgsl provides the FXAA entry point');
+ok(bg.includes("entryPoint: 'fs_fxaa'"), 'a pipeline is built from that entry point');
+ok(/smoothing[\s\S]{0,200}?!acc/.test(bg),
+  'FXAA is skipped once accumulation has converged, so a resolved frame is not refiltered');
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
