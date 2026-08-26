@@ -41,7 +41,7 @@ struct Uniforms {
   viewProj     : mat4x4<f32>,
   jitter       : vec2<f32>,
   accumWeight  : f32,
-  accumActive  : f32,
+  edgeAASkip   : f32,
   paletteMode  : f32,
   rampCount    : f32,
   colorCycle   : f32,
@@ -208,7 +208,7 @@ fn resolveSceneEdgeAA(uv : vec2<f32>) -> vec4<f32> {
   // to fix. Note the rung is NOT a proxy for this: the showcase pass settles
   // this machine at scale 0.70 while still, so gating on quality alone would
   // filter every converged frame at 60% strength.
-  if (!surfaceType || aaStrength <= 0.001 || u.accumActive > 0.5) {
+  if (!surfaceType || aaStrength <= 0.001 || u.edgeAASkip > 0.5) {
     return base;
   }
 

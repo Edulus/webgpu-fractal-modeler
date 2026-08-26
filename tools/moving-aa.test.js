@@ -142,21 +142,28 @@ ok(ratioSum / cases < 0.90,
 // showcase pass settles at scale 0.70 on the reference machine, so a gate on
 // quality alone would filter every converged frame at 60% strength.
 const bg = fs.readFileSync(path.join(__dirname, '..', 'src', 'fractal-bg.js'), 'utf8');
+const index = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
-ok(/aaStrength <= 0\.001 \|\| u\.accumActive > 0\.5/.test(shader),
+ok(/aaStrength <= 0\.001 \|\| u\.edgeAASkip > 0\.5/.test(shader),
   'a multi-sample average is returned unfiltered');
-ok(/d\[U\.accumActive\] = accNow && state\.accumSamples > 0 \? 1\.0 : 0\.0;/.test(bg),
-  'accumActive requires both accumulation and a sample already integrated');
+ok(/const settled = accNow && state\.accumSamples > 0;/.test(bg),
+  'settling requires both accumulation and a sample already integrated');
+ok(/d\[U\.edgeAASkip\] = settled \|\| !state\.edgeAA \? 1\.0 : 0\.0;/.test(bg),
+  'the filter is skipped when settled or switched off');
+// The switch exists so the change can be judged by comparison rather than by
+// impression, which is the only instrument available from outside a browser.
+ok(/edgeAA: opts\.edgeAA !== false,/.test(bg), 'edgeAA is an option, defaulting on');
+ok(/get\('edgeaa'\) !== '0'/.test(index), 'the page exposes it as ?edgeaa=0');
 // Neither half of that condition is sufficient alone, and the reasons differ:
 // a converged frame writes accumWeight 1 exactly as a moving frame does, and
 // accumSamples is left stale by paths that stop accumulation without clearing
 // it (a held key). Assert the slot too -- it reuses the old _pad2 and a moved
 // index would silently write into colour state.
-ok(/accumActive: 59\b/.test(bg), 'accumActive occupies the former _pad2 slot');
+ok(/edgeAASkip: 59\b/.test(bg), 'edgeAASkip occupies the former _pad2 slot');
 ok(!bg.includes('_pad2') && !shader.includes('_pad2'),
   'the pad it replaced is renamed in both the map and the shader struct');
-ok(/accumWeight  : f32,\s*\n\s*accumActive  : f32,/.test(shader),
-  'the shader struct keeps accumActive directly after accumWeight');
+ok(/accumWeight  : f32,\s*\n\s*edgeAASkip   : f32,/.test(shader),
+  'the shader struct keeps edgeAASkip directly after accumWeight');
 
 {
   const low = lowResEdge(12, 0.65, 0.15);

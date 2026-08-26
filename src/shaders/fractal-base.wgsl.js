@@ -52,7 +52,7 @@ const RAMP_MAX : u32 = 8u;
 //   160 viewProj     : mat4x4<f32>  (attractor line rasterization)
 //   224 jitter       : vec2<f32>   (subpixel offset, progressive accumulation)
 //   232 accumWeight  : f32         (1/(n+1) running-average weight)
-//   236 accumActive  : f32
+//   236 edgeAASkip   : f32
 //   240 paletteMode  : f32   (0 = cosine preset, 1 = imported stop ramp)
 //   244 rampCount    : f32   (live stops, 2..8)
 //   248 colorCycle   : f32   (palette cycles per second; 0 = static)
@@ -86,7 +86,7 @@ struct Uniforms {
   viewProj     : mat4x4<f32>,
   jitter       : vec2<f32>,
   accumWeight  : f32,
-  accumActive  : f32,
+  edgeAASkip   : f32,
   paletteMode  : f32,
   rampCount    : f32,
   colorCycle   : f32,
