@@ -119,5 +119,26 @@ for (const [name, src] of [['fractal', fractal], ['material', material], ['compo
   ok(!src.includes('`'), `${name}.wgsl contains no backtick that would close its template literal`);
 }
 
+// Every registered shape must be reachable from the selector.
+//
+// The reverse check above (every option is registered) does not catch a shape
+// that exists, works, and simply has no way to be chosen. That happened: id 8
+// was repurposed from the retired Penrose relief into the canonical Descartes
+// Apollonian packing, complete with its own estimator and test suite, but no
+// option was added and it could not be selected at all.
+//
+// A shape may be withheld deliberately, so list those here rather than dropping
+// the check -- an empty list means every shape is offered.
+const WITHHELD = [];
+const unreachable = names.filter((n) => !options.includes(n) && !WITHHELD.includes(n));
+ok(unreachable.length === 0,
+  `every registered shape is selectable${unreachable.length ? `: unreachable ${unreachable}` : ''}`);
+
+// Grouping is presentational, but a mis-nested optgroup silently drops its
+// options from the menu, so confirm the count survives the grouping.
+const groups = [...selector.matchAll(/<optgroup label="([^"]+)"/g)].map((m) => m[1]);
+ok(groups.length > 0, `selector is grouped by family (${groups.length} groups)`);
+ok(new Set(options).size === options.length, 'no shape appears twice in the selector');
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
