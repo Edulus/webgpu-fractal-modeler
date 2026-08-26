@@ -712,6 +712,26 @@ export async function initFractalBackground(canvas, options = {}) {
         { binding: 2, resource: sceneView },
         { binding: 3, resource: auxView },
         { binding: 4, resource: bloomBView },
+        // NOT ldrView. The composite pass renders INTO ldrTex, and WebGPU
+        // forbids a texture being a writable render attachment and a readable
+        // binding in the same pass. The composite entry point never samples
+        // slot 5, so any other live texture satisfies the layout; sceneView is
+        // already bound above and is never the target of this pass.
+        { binding: 5, resource: sceneView },
+      ],
+    });
+
+    // FXAA reads the composited image back. Same layout, but now ldrTex is the
+    // source and the swapchain is the target, so nothing is read and written at
+    // once.
+    state.bindGroups.fxaa = device.createBindGroup({
+      layout: state._bgl.compositeBGL,
+      entries: [
+        { binding: 0, resource: ub },
+        { binding: 1, resource: state.sampler },
+        { binding: 2, resource: sceneView },
+        { binding: 3, resource: auxView },
+        { binding: 4, resource: bloomBView },
         { binding: 5, resource: ldrView },
       ],
     });
@@ -1256,7 +1276,7 @@ export async function initFractalBackground(canvas, options = {}) {
           colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: clear }],
         });
         pass.setPipeline(state.pipelines.fxaa);
-        pass.setBindGroup(0, state.bindGroups.composite);
+        pass.setBindGroup(0, state.bindGroups.fxaa);
         pass.draw(3);
         pass.end();
       }
