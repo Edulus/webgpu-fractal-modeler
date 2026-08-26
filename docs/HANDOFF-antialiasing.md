@@ -1,12 +1,31 @@
 # Handoff: antialiasing while the view is moving
 
-Written for a fresh agent (ChatGPT Codex) picking up one unsolved problem in
-this repo. Everything below is what actually happened, including the parts that
-went wrong.
+**Status: solved, and confirmed by eye.** Kept as the record of how, because
+three attempts failed first and the reasons are worth not repeating.
 
 Repo: https://github.com/Edulus/webgpu-fractal-modeler
 Live: https://edulus.github.io/webgpu-fractal-modeler/
-Last good commit: `7db737b` (a revert — see "What was tried").
+A/B: append `?edgeaa=0` to turn the fix off and compare.
+
+## 0. Outcome
+
+Edge-aware silhouette reconstruction inside the existing composite pass
+(`5fcb075`..`7e2e1ad`, gated in `ab34af6`, switchable in `8a1b60b`). It reads
+the binary hit/miss coverage the material pass already writes to `aux.w`,
+estimates the local edge tangent from its gradient, and averages two short taps
+ALONG the edge rather than across it. No extra pass, no new binding, no extra
+render target.
+
+Measured at 0.881x MSE against supersampled reference coverage across 24
+combinations of render scale and edge angle — a ~12% improvement, which is
+small enough that it could not be trusted on its own. So the filter was made
+switchable and compared directly in a browser. Verdict from that comparison:
+**filter on is better.** That is the evidence that matters here; the synthetic
+figure only established the sign.
+
+It is spent only on single-sample frames. Once accumulation has more than one
+sample the silhouette is already resolved by up to 96 jittered samples, and
+refiltering it would soften real detail.
 
 ---
 
@@ -76,7 +95,7 @@ Useful constants: `LADDER` in `src/quality.js` (10 rungs, `scale` 0.40 → 2.00)
 
 ## 3. What was tried, and what happened
 
-### Attempt: FXAA as a fifth pass — **failed, reverted**
+### Attempt 1: FXAA as a fifth pass — **failed, reverted**
 
 Commits `8884cc3` → `8c84689` → `9393364`, all reverted in `7db737b`.
 `git show 8884cc3` for the original diff; it is worth reading before you redo it.
@@ -112,12 +131,19 @@ evidence is insufficient and was the direct cause of every one of the failures
 above. It cannot see a wrong texel size and it cannot see a resource-usage
 violation.
 
+### Attempt 2: edge-aware resolve inside the composite pass — **worked**
+
+See §0. The decisive difference from attempt 1 was not the filter maths, which
+is similar in spirit. It was staying inside a pass that already existed, so
+there was no new binding and no new render target — and therefore no way to
+commit either of the two bugs that killed attempt 1.
+
 ### Ruled out by reasoning, not tried
 
-- **Temporal reprojection (TAA).** Would keep accumulation across motion, which
-  is the real fix. Needs history rejection; without it, moving edges smear.
-  Nobody has attempted it. It is probably the correct answer if you have a way
-  to iterate visually.
+- **Temporal reprojection (TAA).** Would keep accumulation across motion, and
+  is a more complete answer than filtering one frame's edges. Needs history
+  rejection; without it, moving edges smear. Not attempted, and no longer
+  urgent now that the cheap fix is confirmed to work.
 - **MSAA on the raymarch pass.** Not useful as-is: the geometry is a full-screen
   triangle, so there are no primitive edges for MSAA to find. The silhouette is
   a discontinuity *inside* the fragment shader.
@@ -142,7 +168,9 @@ violation.
 
 ## 5. Obstacles in the working environment
 
-These are why the problem is still open, and they may or may not apply to you.
+These are why it took four attempts rather than one, and they may or may not
+apply to you. None of them went away; the fix landed in spite of them, by
+putting the change behind a switch and having a human compare.
 
 - **No usable WebGPU in the sandbox.** Headless SwiftShader initialises and then
   dies within about a second. No screenshots, and validation errors cannot be
@@ -188,19 +216,27 @@ silently discard uncommitted work in that file. **Commit first, mutate second.**
 
 ---
 
-## 7. Suggested next step
+## 7. If you pick this up again
 
-Whatever you do, **look at it in a real browser between writing it and pushing
-it.** If you also cannot run WebGPU, then write the change, hand the user a
-build, and get a screenshot *taken mid-drag* — not after the view settles, since
-accumulation makes a settled frame clean regardless of whether your change works.
+The problem is solved, so this section is about not undoing it.
 
-Two candidates, best first:
+**Look at it in a real browser between writing it and pushing it.** If you
+cannot run WebGPU, ship the change behind a switch and have someone compare,
+the way `?edgeaa=0` was used to settle this one. A screenshot must be taken
+*mid-drag* — a settled frame is clean regardless of whether the change works,
+so an after-the-fact screenshot proves nothing.
 
-1. **Temporal reprojection with history rejection.** Reproject the previous
-   frame by the camera delta and blend, rejecting samples whose depth or
-   material disagrees. This attacks the actual cause — one sample per moving
-   frame — rather than hiding it, and the accumulation buffer already exists.
-2. **FXAA again, done properly.** The design was never disproven; three
-   implementation bugs were. Take the texel from `textureDimensions()` of the
-   source, give it its own bind group, and confirm visually before pushing.
+Remaining directions, in order of what they would buy:
+
+1. **Strengthen the filter.** The blend is deliberately conservative: taps at
+   0.4 texel, maximum weight 0.7. Now that the effect is confirmed visible,
+   there is room to push both — bounded by over-softening, which the same A/B
+   will show.
+2. **Temporal reprojection.** The complete answer rather than a reconstruction
+   from one frame. Considerably more work, and it now has to beat something
+   that already works.
+
+And a caveat that still stands: `tools/moving-aa.test.js` measures a JS port of
+the filter, not the WGSL. The string assertions pin the shader; the numeric part
+does not. If you change the WGSL, change the port with it or the numbers will
+quietly describe code that is no longer running.
