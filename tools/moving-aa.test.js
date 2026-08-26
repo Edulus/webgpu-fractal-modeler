@@ -14,16 +14,35 @@ ok(shader.includes('fn surfaceCoverage'), 'surface hit/miss coverage drives movi
 ok(shader.includes('fn resolveSceneEdgeAA'), 'composite shader contains the edge-aware resolve');
 ok(/fn fs_composite[\s\S]*?resolveSceneEdgeAA\(in\.uv\)/.test(shader),
   'final composite uses the edge-aware resolve');
-ok(shader.includes('TAP_BASE : f32 = 0.88') && shader.includes('BLEND_BASE : f32 = 1.36'),
-  'the shader carries the strengthened constants this port mirrors');
-// Demonstrated, not assumed: loosening the tap cap in the WGSL alone left this
-// suite green, because the port below keeps its own copy of every number. Each
-// one the port duplicates needs pinning by name, or the numeric result silently
-// describes code that is no longer running.
-ok(/min\(TAP_BASE \* gain, 0\.9\)/.test(shader),
-  'a tap stays inside one texel, so it cannot cross into the next step');
-ok(/BLEND_BASE \* gain, 0\.95\)/.test(shader),
-  'the blend stops short of fully replacing the rendered pixel');
+// The numeric model below is a port of resolveSceneEdgeAA, and every constant
+// it duplicated was a chance to drift. That is not hypothetical: loosening the
+// tap cap in the WGSL alone once left this suite green, and so did changing the
+// port's own blend constant, because assertions pinned the shader's numbers
+// without ever tying the port to them.
+//
+// So the port reads them out of the shader instead of restating them. There is
+// nothing left to keep in sync -- a constant changed in the WGSL changes what
+// this test measures, and one that cannot be found here fails immediately
+// rather than being silently replaced by a stale default.
+function shaderConst(name) {
+  const m = shader.match(new RegExp(`const ${name} : f32 = ([\\d.]+);`));
+  if (!m) throw new Error(`${name} not found in composite.wgsl -- the port cannot mirror it`);
+  return Number(m[1]);
+}
+function shaderCap(expr) {
+  const m = shader.match(new RegExp(`${expr} \\* gain, ([\\d.]+)\\)`));
+  if (!m) throw new Error(`cap on ${expr} not found in composite.wgsl`);
+  return Number(m[1]);
+}
+const TAP_BASE = shaderConst('TAP_BASE');
+const BLEND_BASE = shaderConst('BLEND_BASE');
+const TAP_CAP = shaderCap('TAP_BASE');
+const BLEND_CAP = shaderCap('BLEND_BASE');
+ok(TAP_CAP <= 0.9,
+  `a tap stays inside one texel, so it cannot cross into the next step (cap ${TAP_CAP})`);
+ok(BLEND_CAP < 1.0,
+  `the blend stops short of fully replacing the rendered pixel (cap ${BLEND_CAP})`);
+console.log(`  .. mirroring shader constants: tap ${TAP_BASE}/${TAP_CAP}, blend ${BLEND_BASE}/${BLEND_CAP}`);
 ok(shader.includes('(1.0 - u.qualityScale) * 2.0'),
   'edge smoothing fades out as internal resolution reaches native resolution');
 ok(shader.includes('centerCoverage <= 0.01 || centerCoverage >= 0.99'),
@@ -66,17 +85,12 @@ function idealCoverage(n, slope, intercept, ss = 6) {
       return hits / (ss * ss);
     }));
 }
-// Mirrors resolveSceneEdgeAA. TAP_BASE/BLEND_BASE and the two caps must track
-// the WGSL constants of the same name; nothing here reads the shader, so a
-// change made in one place and not the other leaves these numbers describing
-// code that is no longer running.
-const TAP_BASE = 0.88;
-const BLEND_BASE = 1.36;
+// Mirrors resolveSceneEdgeAA, using the constants read from it above.
 function edgeResolve(img, outN, quality, gain = 1) {
   const h = img.length, w = img[0].length;
   const texelX = 1 / w, texelY = 1 / h;
   const strength = clamp((1 - quality) * 2, 0, 1);
-  const tap = Math.min(TAP_BASE * gain, 0.9);
+  const tap = Math.min(TAP_BASE * gain, TAP_CAP);
   return Array.from({ length: outN }, (_, y) =>
     Array.from({ length: outN }, (_, x) => {
       const u = (x + 0.5) / outN, v = (y + 0.5) / outN;
@@ -96,7 +110,7 @@ function edgeResolve(img, outN, quality, gain = 1) {
       const a = bilinear(img, u + tx * tap, v + ty * tap);
       const b = bilinear(img, u - tx * tap, v - ty * tap);
       const mean = (a + b) * 0.5;
-      const blend = Math.min(strength * smoothstep(0.05, 0.5, g) * BLEND_BASE * gain, 0.95);
+      const blend = Math.min(strength * smoothstep(0.05, 0.5, g) * BLEND_BASE * gain, BLEND_CAP);
       return base * (1 - blend) + mean * blend;
     }));
 }
