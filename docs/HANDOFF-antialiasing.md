@@ -228,10 +228,11 @@ so an after-the-fact screenshot proves nothing.
 
 Remaining directions, in order of what they would buy:
 
-1. **Strengthen the filter.** The blend is deliberately conservative: taps at
-   0.4 texel, maximum weight 0.7. Now that the effect is confirmed visible,
-   there is room to push both — bounded by over-softening, which the same A/B
-   will show.
+1. **Strengthen the filter — mostly spent.** Two rounds of comparison took it
+   from 0.4/0.7 to 0.88/1.36, and the tap now sits just under its 0.9 cap, so
+   further gain only deepens the blend. The cap is not arbitrary: a tap reaching
+   a full texel samples across into the next step of the staircase. Try
+   `?edgeaa=1.3` and look for a silhouette that has crept or gone mushy.
 2. **Temporal reprojection.** The complete answer rather than a reconstruction
    from one frame. Considerably more work, and it now has to beat something
    that already works.

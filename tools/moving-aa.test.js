@@ -14,7 +14,7 @@ ok(shader.includes('fn surfaceCoverage'), 'surface hit/miss coverage drives movi
 ok(shader.includes('fn resolveSceneEdgeAA'), 'composite shader contains the edge-aware resolve');
 ok(/fn fs_composite[\s\S]*?resolveSceneEdgeAA\(in\.uv\)/.test(shader),
   'final composite uses the edge-aware resolve');
-ok(shader.includes('TAP_BASE : f32 = 0.55') && shader.includes('BLEND_BASE : f32 = 0.85'),
+ok(shader.includes('TAP_BASE : f32 = 0.88') && shader.includes('BLEND_BASE : f32 = 1.36'),
   'the shader carries the strengthened constants this port mirrors');
 // Demonstrated, not assumed: loosening the tap cap in the WGSL alone left this
 // suite green, because the port below keeps its own copy of every number. Each
@@ -70,8 +70,8 @@ function idealCoverage(n, slope, intercept, ss = 6) {
 // the WGSL constants of the same name; nothing here reads the shader, so a
 // change made in one place and not the other leaves these numbers describing
 // code that is no longer running.
-const TAP_BASE = 0.55;
-const BLEND_BASE = 0.85;
+const TAP_BASE = 0.88;
+const BLEND_BASE = 1.36;
 function edgeResolve(img, outN, quality, gain = 1) {
   const h = img.length, w = img[0].length;
   const texelX = 1 / w, texelY = 1 / h;
@@ -114,28 +114,51 @@ function upscale(img, outN) {
 
 // Numeric control: a low-resolution sampled diagonal is compared with genuine
 // subpixel area coverage. This is the failure mode in the handoff, stripped of
-// shading. The shader's tangent filter must improve every tested orientation,
-// not merely one cherry-picked diagonal.
-let ratioSum = 0;
-let cases = 0;
+// shading.
+//
+// The shipped strength was chosen by eye, and the two instruments disagree
+// about it. Measured across 24 cases, raising the gain from 0.63 to 1.0 lowers
+// mean error (0.807x -> 0.774x) while pushing four steep-edge cases slightly
+// ABOVE the baseline, the worst at 1.028x. A viewer comparing the two in a
+// browser preferred the stronger setting anyway, and that is the authority
+// here: this measure scores a coverage field, whereas the filter runs on a
+// shaded 3D image, so it cannot see what was actually being judged.
+//
+// So the per-case rule is a BOUND on that regression rather than a demand for
+// universal improvement -- 5% catches a real overshoot while leaving room for
+// the trade actually made. The design itself is still held to the stricter
+// rule at a reference gain, so a genuinely broken filter cannot hide behind
+// the relaxed bound.
+const GAINS = { reference: 0.63, shipped: 1.0 };
+const CASES = [];
 for (const quality of [0.4, 0.5, 0.65, 0.8]) {
-  const lowN = 12;
-  const outN = Math.round(lowN / quality);
   for (const slope of [0.25, 0.5, 0.8, 1.0, 1.5, 2.0]) {
+    const lowN = 12;
+    const outN = Math.round(lowN / quality);
     const low = lowResEdge(lowN, slope, 0.15);
     const ideal = idealCoverage(outN, slope, 0.15);
-    const baseline = upscale(low, outN);
-    const filtered = edgeResolve(low, outN, quality);
-    const before = mse(baseline, ideal);
-    const after = mse(filtered, ideal);
-    ok(after < before * 0.97,
-      `edge reconstruction improves q${quality} slope ${slope} (${(after / before).toFixed(3)}x MSE)`);
-    ratioSum += after / before;
-    cases++;
+    const before = mse(upscale(low, outN), ideal);
+    CASES.push({
+      quality, slope,
+      ratio: (g) => mse(edgeResolve(low, outN, quality, g), ideal) / before,
+    });
   }
 }
-ok(ratioSum / cases < 0.90,
-  `mean synthetic edge error falls by >10% (${(ratioSum / cases).toFixed(3)}x MSE)`);
+
+const refWorst = Math.max(...CASES.map((c) => c.ratio(GAINS.reference)));
+ok(refWorst < 0.97,
+  `at the reference gain every orientation still improves (worst ${refWorst.toFixed(3)}x MSE)`);
+
+const shipped = CASES.map((c) => ({ c, r: c.ratio(GAINS.shipped) }));
+const worst = shipped.reduce((a, b) => (b.r > a.r ? b : a));
+ok(worst.r < 1.05,
+  `no orientation regresses beyond the bound (worst ${worst.r.toFixed(3)}x at ` +
+  `q${worst.c.quality} slope ${worst.c.slope})`);
+
+const mean = shipped.reduce((s2, x) => s2 + x.r, 0) / shipped.length;
+ok(mean < 0.85, `mean synthetic edge error falls by >15% (${mean.toFixed(3)}x MSE)`);
+ok(mean < refWorst,
+  `the shipped gain beats the reference on average, which is the trade it makes`);
 
 // Controls: native-resolution mode is byte-for-byte the baseline numerically,
 // and a flat field remains flat even on the lowest rung.

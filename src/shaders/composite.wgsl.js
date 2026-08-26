@@ -192,11 +192,17 @@ fn resolveScene(uv : vec2<f32>) -> vec4<f32> {
 // target, no new bind group, and no texture can ever be bound for reading while
 // it is also the current render attachment. Strength falls to zero at native
 // resolution, so high rungs keep the original resolve exactly.
-// Confirmed by direct comparison to be an improvement at 0.4 / 0.7, so both
-// are raised from there. The filter is judged by eye, not by the synthetic
-// measure, which only ever established the sign of the effect.
-const TAP_BASE : f32 = 0.55;
-const BLEND_BASE : f32 = 0.85;
+// Set by comparison in a browser, which is the only instrument that can judge
+// this: 0.4/0.7 beat no filter, 0.55/0.85 beat that, and 1.6x of the latter
+// beat that in turn. These are those values, so a gain of 1 is the setting that
+// was actually looked at and approved.
+//
+// The tap now sits just under its own cap. Raising the gain further therefore
+// only deepens the blend -- the taps cannot move, because a tap that reaches a
+// full texel would sample across into the next step of the staircase, which is
+// the thing being removed.
+const TAP_BASE : f32 = 0.88;
+const BLEND_BASE : f32 = 1.36;
 
 fn surfaceCoverage(uv : vec2<f32>) -> f32 {
   return 1.0 - clamp(textureSampleLevel(auxTex, samp, uv, 0.0).w, 0.0, 1.0);
