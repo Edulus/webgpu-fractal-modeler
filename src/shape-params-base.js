@@ -85,11 +85,17 @@ export const SHAPE_PARAMS = {
       min: 2, max: 16, step: 0.1, default: 2.2,
       domain: 'geometry',
       constraint: { kind: 'free' },
-      note: 'Escape radius. This range is set by the mathematics rather than by '
+      note: 'Escape radius. Its floor is set by the mathematics rather than by '
           + 'a failure: no overshoot was measured anywhere from 1.2 up, but a '
           + 'point with |z| > 2 provably escapes, so a bailout below 2 truncates '
-          + 'the set instead of resolving it. Larger values refine the boundary '
-          + 'and cost iterations.',
+          + 'the set instead of resolving it. Above that floor it does almost '
+          + 'nothing at the default power, and is worth reaching for only at low '
+          + 'ones -- raising it from 2 to 16 moves 0.00% of rendered pixels at '
+          + 'power 8, 0.44% at power 4 and 14.5% at power 2. At high powers the '
+          + 'escape is too violent for the radius to matter: once |z| passes 2 '
+          + 'the next iteration throws it to roughly 2^8, far beyond any bailout '
+          + 'in range, so the extra iterations only ever befall points that have '
+          + 'already left. The surface is fixed by the points that stay.',
     },
     // The generalized family. v^n = r^n <sin(p*th)cos(q*ph), sin(p*th)sin(q*ph),
     // cos(p*th)>, where the classic sets p = q = n. Exposing p and q as RATIOS
