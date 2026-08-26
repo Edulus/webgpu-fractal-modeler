@@ -562,38 +562,65 @@
          the panel without hiding anything that was not already hidden. -->
     <details id="sec-shape" open>
       <summary>Shape</summary>
+      <!-- Grouped by construction, not by name. Thirty-two entries in one flat
+           list gave no clue that six of them are the same honeycomb truncated
+           differently, or that five separate packings are all sphere packings.
+           <optgroup> is native, so the platform picker on a phone groups them
+           too, and the labels can drop the family prefix each option used to
+           repeat. -->
       <select id="sel-fractal" aria-label="Shape">
-        <option value="mandelbulb">Mandelbulb</option>
-        <option value="mandelbox">Mandelbox</option>
-        <option value="menger">Menger sponge</option>
-        <option value="julia">Quaternion Julia</option>
-        <option value="apollonian">Apollonian (sphere packing)</option>
-        <option value="spherepack">Sphere pack (nested spheres)</option>
-        <option value="encrusted">Ornate planet (polar bloom)</option>
-        <option value="surfacepack">Packed spheres (studded body)</option>
-        <option value="gyroid">Gyroid (minimal surface labyrinth)</option>
-        <option value="kleinian">Kleinian limit set (inversion group)</option>
-        <option value="barth">Barth sextic (65 nodes, icosahedral)</option>
-        <option value="schottky">Kissing Schottky group (parabolic)</option>
-        <option value="schottkyh">Schottky group (hyperbolic)</option>
-        <option value="tetrabrot">Tetrabrot (bicomplex Mandelbrot)</option>
-        <option value="envoct">Envelope extrusion (octahedral seed)</option>
-        <option value="envdodec">Envelope extrusion (dodecahedral seed)</option>
-        <option value="hyp534">Hyperbolic honeycomb {5,3,4}</option>
-        <option value="hyp534t">Hyperbolic honeycomb {5,3,4}, truncated</option>
-        <option value="hyp534o">Hyperbolic honeycomb {5,3,4}, omnitruncated</option>
-        <option value="hyp435">Hyperbolic honeycomb {4,3,5}</option>
-        <option value="hyp435t">Hyperbolic honeycomb {4,3,5}, truncated</option>
-        <option value="hyp435o">Hyperbolic honeycomb {4,3,5}, omnitruncated</option>
-        <option value="kleinpack">Kleinian sphere packing {5,3,6}</option>
-        <option value="engel">Engel plesiohedron tiling (38 faces)</option>
-        <option value="cosmicweb">Cosmic Web</option>
-        <option value="ziggurat">Ziggurat (cube terraces)</option>
-        <option value="cubestack">Cube stack (block of cubes)</option>
-        <option value="quasicrystal">Icosahedral quasicrystal (six waves)</option>
-        <option value="attractor">Strange attractor (Aizawa)</option>
-        <option value="lorenz">Strange attractor (Lorenz)</option>
-        <option value="rossler">Strange attractor (Rössler)</option>
+        <optgroup label="Escape-time fractals">
+          <option value="mandelbulb">Mandelbulb</option>
+          <option value="mandelbox">Mandelbox</option>
+          <option value="julia">Quaternion Julia</option>
+          <option value="tetrabrot">Tetrabrot (bicomplex)</option>
+        </optgroup>
+        <optgroup label="Sphere packings">
+          <option value="penrose">Canonical Apollonian (Descartes)</option>
+          <option value="apollonian">Apollonian packing</option>
+          <option value="spherepack">Nested sphere packing</option>
+          <option value="surfacepack">Studded surface packing</option>
+          <option value="kleinpack">Kleinian packing {5,3,6}</option>
+          <option value="encrusted">Ornate planet (polar bloom)</option>
+        </optgroup>
+        <optgroup label="Limit sets of groups">
+          <option value="kleinian">Kleinian limit set</option>
+          <option value="schottky">Kissing Schottky (parabolic)</option>
+          <option value="schottkyh">Schottky (hyperbolic)</option>
+        </optgroup>
+        <optgroup label="Hyperbolic honeycombs">
+          <option value="hyp534">{5,3,4}</option>
+          <option value="hyp534t">{5,3,4} truncated</option>
+          <option value="hyp534o">{5,3,4} omnitruncated</option>
+          <option value="hyp435">{4,3,5}</option>
+          <option value="hyp435t">{4,3,5} truncated</option>
+          <option value="hyp435o">{4,3,5} omnitruncated</option>
+        </optgroup>
+        <optgroup label="Surfaces">
+          <option value="gyroid">Gyroid (minimal surface)</option>
+          <option value="barth">Barth sextic (65 nodes)</option>
+        </optgroup>
+        <optgroup label="Stellations">
+          <option value="envoct">Envelope, octahedral seed</option>
+          <option value="envdodec">Envelope, dodecahedral seed</option>
+        </optgroup>
+        <optgroup label="Tilings and quasicrystals">
+          <option value="engel">Engel plesiohedron (38 faces)</option>
+          <option value="quasicrystal">Icosahedral quasicrystal</option>
+        </optgroup>
+        <optgroup label="Cube lattices">
+          <option value="menger">Menger sponge</option>
+          <option value="ziggurat">Ziggurat (cube terraces)</option>
+          <option value="cubestack">Cube stack (block of cubes)</option>
+        </optgroup>
+        <optgroup label="Strange attractors">
+          <option value="attractor">Aizawa</option>
+          <option value="lorenz">Lorenz</option>
+          <option value="rossler">Rössler</option>
+        </optgroup>
+        <optgroup label="Volumetric fields">
+          <option value="cosmicweb">Cosmic Web</option>
+        </optgroup>
       </select>
       <!-- Mathematical parameters of the current shape, built from the
            registry in src/shape-params.js. A shape with none has no section at
@@ -1130,6 +1157,8 @@
           'A cube with a cross bored through it, then the same cross bored through every piece that remains, forever.'],
         julia: ['Quaternion Julia set',
           'A Julia set built from quaternions, which is four-dimensional, cut down to the three-dimensional slice you can see.'],
+        penrose: ['Canonical Apollonian (Descartes)',
+          'The true three-dimensional Apollonian packing. Four mutually touching spheres sit inside a fifth, with the fourth size fixed by Descartes\u2019 circle theorem rather than chosen, and the gaps are filled forever by reflecting in the spheres that touch them.'],
         apollonian: ['Apollonian packing',
           'Spheres dropped into the gaps between spheres, and into the gaps those leave, without end.'],
         spherepack: ['Nested sphere packing',
