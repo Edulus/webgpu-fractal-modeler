@@ -16,6 +16,14 @@ ok(/fn fs_composite[\s\S]*?resolveSceneEdgeAA\(in\.uv\)/.test(shader),
   'final composite uses the edge-aware resolve');
 ok(shader.includes('TAP_BASE : f32 = 0.55') && shader.includes('BLEND_BASE : f32 = 0.85'),
   'the shader carries the strengthened constants this port mirrors');
+// Demonstrated, not assumed: loosening the tap cap in the WGSL alone left this
+// suite green, because the port below keeps its own copy of every number. Each
+// one the port duplicates needs pinning by name, or the numeric result silently
+// describes code that is no longer running.
+ok(/min\(TAP_BASE \* gain, 0\.9\)/.test(shader),
+  'a tap stays inside one texel, so it cannot cross into the next step');
+ok(/BLEND_BASE \* gain, 0\.95\)/.test(shader),
+  'the blend stops short of fully replacing the rendered pixel');
 ok(shader.includes('(1.0 - u.qualityScale) * 2.0'),
   'edge smoothing fades out as internal resolution reaches native resolution');
 ok(shader.includes('centerCoverage <= 0.01 || centerCoverage >= 0.99'),
