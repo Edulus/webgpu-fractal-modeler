@@ -169,6 +169,27 @@ ok(worst.r < 1.05,
   `no orientation regresses beyond the bound (worst ${worst.r.toFixed(3)}x at ` +
   `q${worst.c.quality} slope ${worst.c.slope})`);
 
+// The error measure saturates where the filter does, so it cannot see a blend
+// constant raised past the cap: quadrupling BLEND_BASE leaves it unmoved. What
+// that change really costs is the dial. Once most edge samples are pinned at
+// the cap, ?edgeaa stops varying anything a viewer could compare, and the whole
+// method of settling this -- look at two settings side by side -- quietly stops
+// working. That is a property worth holding directly.
+{
+  let pinned = 0, total = 0;
+  for (const quality of [0.4, 0.5, 0.65, 0.8]) {
+    const strength = clamp((1 - quality) * 2, 0, 1);
+    for (let g = 0.06; g <= 0.9; g += 0.02) {
+      total++;
+      if (strength * smoothstep(0.05, 0.5, g) * BLEND_BASE >= BLEND_CAP) pinned++;
+    }
+  }
+  const share = pinned / total;
+  ok(share < 0.6,
+    `the gain still has room to move at the shipped strength ` +
+    `(${(share * 100).toFixed(0)}% of edge samples pinned at the cap)`);
+}
+
 const mean = shipped.reduce((s2, x) => s2 + x.r, 0) / shipped.length;
 ok(mean < 0.85, `mean synthetic edge error falls by >15% (${mean.toFixed(3)}x MSE)`);
 ok(mean < refWorst,
