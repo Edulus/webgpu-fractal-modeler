@@ -52,6 +52,22 @@ while (at < CAP) { const b = accumBatchFor(at, CAP); for (let i = 0; i < b; i++)
 ok('every sample index is visited exactly once, in order',
   visited.length === CAP && visited.every((v, i) => v === i));
 
+// The shipped numbers divide evenly -- 96 - 12 = 84, exactly 21 frames of 4 --
+// so they never exercise the clamp that stops a frame overshooting the cap.
+// Testing only those was proven insufficient: removing the clamp entirely left
+// this suite green. Caps that leave a remainder are what actually hold it.
+for (const cap of [50, 63, 95, 97, 13, 12, 5, 1]) {
+  let n = 0, f = 0, bad = false;
+  while (n < cap && f < 1000) {
+    const b = accumBatchFor(n, cap);
+    if (b <= 0) break;
+    if (n + b > cap) bad = true;
+    n += b; f += 1;
+  }
+  ok(`a cap of ${cap} lands exactly, with no overshooting frame (${f} frames)`,
+    n === cap && !bad);
+}
+
 // Junk in must not produce a negative or fractional batch, which would either
 // stall accumulation forever or step the index off the sequence.
 ok('a negative count is treated as none taken yet', accumBatchFor(-5, CAP) === 1);
