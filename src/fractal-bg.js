@@ -71,7 +71,7 @@ const U = {
   viewProj: 40, // mat4 -> slots 40..55 (byte 160, 16-byte aligned)
   jitter: 56,   // vec2 -> 56,57 (byte 224)
   accumWeight: 58,
-  edgeAASkip: 59,   // 1 when the edge filter must leave the image alone
+  edgeAAGain: 59,   // blend multiplier; 0 means leave the image alone
   paletteMode: 60,  // 0 = cosine preset, 1 = imported stop ramp
   rampCount: 61,
   colorCycle: 62,   // palette cycles per second; 0 = static
@@ -279,7 +279,7 @@ const HDR_FORMAT = 'rgba16float';
  * @param {string}  [options.palette='aurora']
  * @param {string}  [options.quality='auto']  'low'|'medium'|'high'|'auto'
  * @param {boolean} [options.transparent=true]
- * @param {boolean} [options.edgeAA=true]  moving-frame silhouette filter
+ * @param {number}  [options.edgeAA=1]  moving-frame silhouette filter gain; 0 disables
  * @param {(reason:string)=>void} [options.onUnsupported]
  * @returns {Promise<object|null>} handle, or null if unsupported
  */
@@ -411,10 +411,11 @@ export async function initFractalBackground(canvas, options = {}) {
     // Neutral by default, so the shipped image is unchanged.
     image: { exposure: 1, contrast: 1, saturation: 1, hue: 0 },
     accumOn: true,
-    // The moving-edge filter. Defaulted on; ?edgeaa=0 turns it off so the two
-    // can be compared directly, which is the only way to judge a change this
-    // small from outside this environment.
-    edgeAA: opts.edgeAA !== false,
+    // The moving-edge filter, as a blend multiplier rather than a switch: 0 is
+    // off, 1 is the shipped strength, and values between or above let it be
+    // compared at several settings instead of one. Judging it needs a browser,
+    // so the dial belongs in the URL rather than in a constant here.
+    edgeAA: Number.isFinite(opts.edgeAA) ? Math.max(0, opts.edgeAA) : 1,
     // active pointers for drag / pinch tracking
     pointers: new Map(),
     pinchDist0: 0,       // finger separation at the previous move event
@@ -1090,7 +1091,7 @@ export async function initFractalBackground(canvas, options = {}) {
     // has more than one sample in it, or the filter is switched off for an
     // A/B comparison. The shader asks one question, so both are folded here.
     const settled = accNow && state.accumSamples > 0;
-    d[U.edgeAASkip] = settled || !state.edgeAA ? 1.0 : 0.0;
+    d[U.edgeAAGain] = settled ? 0.0 : state.edgeAA;
     d[U._pad] = 0.0;
 
     // View-projection for the attractor line pass (matches the raymarcher's

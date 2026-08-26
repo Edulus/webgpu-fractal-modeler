@@ -934,10 +934,14 @@
       // Match the Shape Explorer presentation from the first rendered frame.
       // Entering Explorer then changes camera ownership only, with no colour cut.
       transparent: false,
-      // ?edgeaa=0 disables the moving-frame silhouette filter, so the same
-      // scene can be compared with and without it in two tabs. The effect is
-      // small enough that an impression is not evidence either way.
-      edgeAA: new URLSearchParams(location.search).get('edgeaa') !== '0',
+      // ?edgeaa=<gain> scales the moving-frame silhouette filter: 0 off, 1 the
+      // shipped strength, higher for more. Anything unparseable falls back to
+      // the default rather than silently disabling it.
+      edgeAA: (() => {
+        const raw = new URLSearchParams(location.search).get('edgeaa');
+        const n = raw === null ? NaN : Number(raw);
+        return Number.isFinite(n) ? Math.max(0, n) : 1;
+      })(),
       onUnsupported: (reason) => {
         console.warn('Fractal renderer unsupported:', reason);
         canvas.style.display = 'none';

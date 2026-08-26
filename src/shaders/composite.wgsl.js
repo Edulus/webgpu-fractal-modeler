@@ -41,7 +41,7 @@ struct Uniforms {
   viewProj     : mat4x4<f32>,
   jitter       : vec2<f32>,
   accumWeight  : f32,
-  edgeAASkip   : f32,
+  edgeAAGain   : f32,
   paletteMode  : f32,
   rampCount    : f32,
   colorCycle   : f32,
@@ -192,6 +192,12 @@ fn resolveScene(uv : vec2<f32>) -> vec4<f32> {
 // target, no new bind group, and no texture can ever be bound for reading while
 // it is also the current render attachment. Strength falls to zero at native
 // resolution, so high rungs keep the original resolve exactly.
+// Confirmed by direct comparison to be an improvement at 0.4 / 0.7, so both
+// are raised from there. The filter is judged by eye, not by the synthetic
+// measure, which only ever established the sign of the effect.
+const TAP_BASE : f32 = 0.55;
+const BLEND_BASE : f32 = 0.85;
+
 fn surfaceCoverage(uv : vec2<f32>) -> f32 {
   return 1.0 - clamp(textureSampleLevel(auxTex, samp, uv, 0.0).w, 0.0, 1.0);
 }
@@ -208,7 +214,10 @@ fn resolveSceneEdgeAA(uv : vec2<f32>) -> vec4<f32> {
   // to fix. Note the rung is NOT a proxy for this: the showcase pass settles
   // this machine at scale 0.70 while still, so gating on quality alone would
   // filter every converged frame at 60% strength.
-  if (!surfaceType || aaStrength <= 0.001 || u.edgeAASkip > 0.5) {
+  // The gain also carries the off switch and the settled state: the renderer
+  // writes zero for both, so there is one question here rather than three.
+  let gain = u.edgeAAGain;
+  if (!surfaceType || aaStrength <= 0.001 || gain <= 0.001) {
     return base;
   }
 
@@ -229,12 +238,22 @@ fn resolveSceneEdgeAA(uv : vec2<f32>) -> vec4<f32> {
     return base;
   }
 
+  // Both halves of "strength" scale with the gain: how far along the edge the
+  // taps sit, and how much of their mean is taken. Reaching further alone just
+  // samples a different part of the same staircase, and blending harder alone
+  // cannot reach past the step it is standing on -- the two only work together.
+  //
+  // TAP is bounded well under a texel so a tap never crosses into the next
+  // step, and the blend stops short of 1.0 so the filtered pixel always keeps
+  // some of the value actually rendered there.
+  let tap = min(TAP_BASE * gain, 0.9);
   let edgeTangent = vec2<f32>(-grad.y, grad.x) / sqrt(grad2) * texel;
-  let alongA = resolveScene(uv + edgeTangent * 0.4);
-  let alongB = resolveScene(uv - edgeTangent * 0.4);
+  let alongA = resolveScene(uv + edgeTangent * tap);
+  let alongB = resolveScene(uv - edgeTangent * tap);
   let alongMean = (alongA + alongB) * 0.5;
   let edge = smoothstep(0.05, 0.5, sqrt(grad2));
-  return mix(base, alongMean, aaStrength * edge * 0.7);
+  let blend = min(aaStrength * edge * BLEND_BASE * gain, 0.95);
+  return mix(base, alongMean, blend);
 }
 
 // 9-tap Gaussian weights (normalized).

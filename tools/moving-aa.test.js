@@ -14,6 +14,8 @@ ok(shader.includes('fn surfaceCoverage'), 'surface hit/miss coverage drives movi
 ok(shader.includes('fn resolveSceneEdgeAA'), 'composite shader contains the edge-aware resolve');
 ok(/fn fs_composite[\s\S]*?resolveSceneEdgeAA\(in\.uv\)/.test(shader),
   'final composite uses the edge-aware resolve');
+ok(shader.includes('TAP_BASE : f32 = 0.55') && shader.includes('BLEND_BASE : f32 = 0.85'),
+  'the shader carries the strengthened constants this port mirrors');
 ok(shader.includes('(1.0 - u.qualityScale) * 2.0'),
   'edge smoothing fades out as internal resolution reaches native resolution');
 ok(shader.includes('centerCoverage <= 0.01 || centerCoverage >= 0.99'),
@@ -56,15 +58,22 @@ function idealCoverage(n, slope, intercept, ss = 6) {
       return hits / (ss * ss);
     }));
 }
-function edgeResolve(img, outN, quality, accumActive = 0) {
+// Mirrors resolveSceneEdgeAA. TAP_BASE/BLEND_BASE and the two caps must track
+// the WGSL constants of the same name; nothing here reads the shader, so a
+// change made in one place and not the other leaves these numbers describing
+// code that is no longer running.
+const TAP_BASE = 0.55;
+const BLEND_BASE = 0.85;
+function edgeResolve(img, outN, quality, gain = 1) {
   const h = img.length, w = img[0].length;
   const texelX = 1 / w, texelY = 1 / h;
   const strength = clamp((1 - quality) * 2, 0, 1);
+  const tap = Math.min(TAP_BASE * gain, 0.9);
   return Array.from({ length: outN }, (_, y) =>
     Array.from({ length: outN }, (_, x) => {
       const u = (x + 0.5) / outN, v = (y + 0.5) / outN;
       const base = bilinear(img, u, v);
-      if (strength <= 0.001 || accumActive > 0.5) return base;
+      if (strength <= 0.001 || gain <= 0.001) return base;
       const centerCoverage = bilinear(img, u, v);
       if (centerCoverage <= 0.01 || centerCoverage >= 0.99) return base;
       const cL = bilinear(img, u - texelX, v);
@@ -76,10 +85,10 @@ function edgeResolve(img, outN, quality, accumActive = 0) {
       if (g2 < 0.0025) return base;
       const g = Math.sqrt(g2);
       const tx = (-gy / g) * texelX, ty = (gx / g) * texelY;
-      const a = bilinear(img, u + tx * 0.4, v + ty * 0.4);
-      const b = bilinear(img, u - tx * 0.4, v - ty * 0.4);
+      const a = bilinear(img, u + tx * tap, v + ty * tap);
+      const b = bilinear(img, u - tx * tap, v - ty * tap);
       const mean = (a + b) * 0.5;
-      const blend = strength * smoothstep(0.05, 0.5, g) * 0.7;
+      const blend = Math.min(strength * smoothstep(0.05, 0.5, g) * BLEND_BASE * gain, 0.95);
       return base * (1 - blend) + mean * blend;
     }));
 }
@@ -144,32 +153,34 @@ ok(ratioSum / cases < 0.90,
 const bg = fs.readFileSync(path.join(__dirname, '..', 'src', 'fractal-bg.js'), 'utf8');
 const index = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
-ok(/aaStrength <= 0\.001 \|\| u\.edgeAASkip > 0\.5/.test(shader),
+ok(/aaStrength <= 0\.001 \|\| gain <= 0\.001/.test(shader),
   'a multi-sample average is returned unfiltered');
 ok(/const settled = accNow && state\.accumSamples > 0;/.test(bg),
   'settling requires both accumulation and a sample already integrated');
-ok(/d\[U\.edgeAASkip\] = settled \|\| !state\.edgeAA \? 1\.0 : 0\.0;/.test(bg),
-  'the filter is skipped when settled or switched off');
+ok(/d\[U\.edgeAAGain\] = settled \? 0\.0 : state\.edgeAA;/.test(bg),
+  'a settled frame is sent a gain of zero, which is the same off switch');
 // The switch exists so the change can be judged by comparison rather than by
 // impression, which is the only instrument available from outside a browser.
-ok(/edgeAA: opts\.edgeAA !== false,/.test(bg), 'edgeAA is an option, defaulting on');
-ok(/get\('edgeaa'\) !== '0'/.test(index), 'the page exposes it as ?edgeaa=0');
+ok(/edgeAA: Number\.isFinite\(opts\.edgeAA\) \? Math\.max\(0, opts\.edgeAA\) : 1,/.test(bg),
+  'edgeAA is a gain, defaulting to 1 and never negative');
+ok(/get\('edgeaa'\)/.test(index) && /Number\.isFinite\(n\) \? Math\.max\(0, n\) : 1/.test(index),
+  'the page exposes it as ?edgeaa=<gain>, falling back to the default');
 // Neither half of that condition is sufficient alone, and the reasons differ:
 // a converged frame writes accumWeight 1 exactly as a moving frame does, and
 // accumSamples is left stale by paths that stop accumulation without clearing
 // it (a held key). Assert the slot too -- it reuses the old _pad2 and a moved
 // index would silently write into colour state.
-ok(/edgeAASkip: 59\b/.test(bg), 'edgeAASkip occupies the former _pad2 slot');
+ok(/edgeAAGain: 59\b/.test(bg), 'edgeAAGain occupies the former _pad2 slot');
 ok(!bg.includes('_pad2') && !shader.includes('_pad2'),
   'the pad it replaced is renamed in both the map and the shader struct');
-ok(/accumWeight  : f32,\s*\n\s*edgeAASkip   : f32,/.test(shader),
-  'the shader struct keeps edgeAASkip directly after accumWeight');
+ok(/accumWeight  : f32,\s*\n\s*edgeAAGain   : f32,/.test(shader),
+  'the shader struct keeps edgeAAGain directly after accumWeight');
 
 {
   const low = lowResEdge(12, 0.65, 0.15);
   const outN = 30;
-  const moving = edgeResolve(low, outN, 0.5, 0);
-  const settled = edgeResolve(low, outN, 0.5, 1);
+  const moving = edgeResolve(low, outN, 0.5, 1);
+  const settled = edgeResolve(low, outN, 0.5, 0);
   const baseline = upscale(low, outN);
   ok(mse(moving, baseline) > 0, 'a single-sample frame is filtered');
   ok(mse(settled, baseline) === 0, 'an accumulated frame is left exactly as resolved');
