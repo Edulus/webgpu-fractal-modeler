@@ -213,6 +213,33 @@ const TRAJECTORY_POINTS = 600000;
 // which also drops idle GPU load to almost nothing.
 const ACCUM_CAP = 96;
 
+// Samples taken per accumulation FRAME. One per frame is the obvious reading of
+// "re-render with a jitter each frame", but it is not a constraint the picture
+// imposes -- it is just how the loop happened to be written. At one per frame,
+// 96 samples is 1.6s of visible refinement.
+//
+// Lowering the cap instead was measured and rejected: each sample is binary, so
+// the mean of K of them can only express coverage in steps of 1/K. Stopping at
+// 32 leaves edge pixels 13 display levels from where they end up, and even 80
+// leaves 5. The samples are all needed; only their pacing was negotiable.
+//
+// So a still view takes several per frame. The total work is identical and the
+// result is bit-for-bit the same image -- it simply arrives in ~33 frames
+// instead of 96. Batching is held back until the view has been still a while,
+// because a multi-sample frame is correspondingly slower to notice that a drag
+// has started, and that only stops mattering once nothing is happening.
+export const ACCUM_BATCH_AFTER = 12;
+export const ACCUM_BATCH_MAX = 4;
+export function accumBatchFor(samples, cap = ACCUM_CAP,
+                              after = ACCUM_BATCH_AFTER, max = ACCUM_BATCH_MAX) {
+  const done = Math.max(0, samples | 0);
+  if (done >= cap) return 0;
+  const size = done < after ? 1 : max;
+  // Never overshoot the cap: the frame that reaches it must land exactly on it,
+  // or the running mean is divided by a count of samples it did not take.
+  return Math.min(size, cap - done);
+}
+
 // The clearance probe is one thread marching the estimator, so it serialises
 // against the whole GPU. 20Hz is ample for what consumes it.
 const PROBE_INTERVAL_MS = 50;
@@ -1107,6 +1134,60 @@ export async function initFractalBackground(canvas, options = {}) {
     state.device.queue.writeBuffer(state.uniformBuffer, 0, state.uniformData);
   }
 
+  // Jitter and blend weight for one accumulation sample. Only these fields
+  // change between the samples of a batch, and they sit together at the end of
+  // the block, so this writes 16 bytes rather than re-uploading every uniform.
+  function writeAccumSample(index) {
+    const d = state.uniformData;
+    const j = r2jitter(index);
+    d[U.jitter] = j[0];
+    d[U.jitter + 1] = j[1];
+    d[U.accumWeight] = 1 / (index + 1);
+    state.device.queue.writeBuffer(
+      state.uniformBuffer, U.jitter * 4, d.buffer, U.jitter * 4, 16);
+  }
+
+  // One raymarch sample into the material attachments. Extracted because an
+  // accumulation frame runs it more than once, each with its own jitter.
+  function encodeScenePass(encoder, T, acc) {
+    {
+      const continuing = acc && state.accumSamples > 0;
+      const blendWeight = acc ? 1 / (state.accumSamples + 1) : 1;
+      const loadOp = continuing ? 'load' : 'clear';
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [
+          {
+            view: T.sceneView,
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp,
+            storeOp: 'store',
+          },
+          {
+            view: T.auxView,
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp,
+            storeOp: 'store',
+          },
+        ],
+      });
+      pass.setBlendConstant({ r: blendWeight, g: blendWeight, b: blendWeight, a: blendWeight });
+      pass.setPipeline(state.pipelines.raymarch);
+      pass.setBindGroup(0, state.bindGroups.raymarch);
+      pass.draw(3);
+
+      // Attractor line material is weighted-additive. The raymarch draw above
+      // has already averaged the background sample; every segment now adds its
+      // current sample contribution with the same 1/(n+1) weight.
+      if (isAttractorType(state.fractalType) && state.trajBuffer) {
+        pass.setPipeline(state.pipelines.attractor);
+        pass.setBindGroup(0, state.bindGroups.raymarch);
+        pass.setVertexBuffer(0, state.trajBuffer);
+        pass.draw(state.trajCount);
+      }
+      pass.end();
+    }
+  }
+
   // ---- Single frame ----
   function renderFrame(nowMs, force) {
     if (state.disposed || !state.device || !state.targets) return;
@@ -1154,46 +1235,29 @@ export async function initFractalBackground(canvas, options = {}) {
       encoder.copyBufferToBuffer(state.probeBuffer, 0, state.probeStaging, 0, 8);
     }
 
+    // Extra samples for this frame, if the view has been still long enough to
+    // batch. Each needs its own jitter in the uniform buffer, and a queue write
+    // only orders against SUBMITS -- writes made between passes of one encoder
+    // would all land before any of them ran, so every sample but the last is
+    // its own encoder and its own submit. They are cheap: one full-screen draw
+    // and no post chain, which runs once at the end over the finished average.
+    if (drawScene && acc) {
+      const extra = accumBatchFor(state.accumSamples) - 1;
+      for (let i = 0; i < extra; i++) {
+        const enc = device.createCommandEncoder();
+        encodeScenePass(enc, T, acc);
+        device.queue.submit([enc.finish()]);
+        state.accumSamples += 1;
+        writeAccumSample(state.accumSamples);
+      }
+    }
+
     // Pass 1: raymarch -> palette-independent material attachments. While
     // accumulating, blend the new jitter sample into the running average in
     // place. The first sample clears; subsequent samples load the prior mean.
     if (drawScene) {
-      const continuing = acc && state.accumSamples > 0;
-      const blendWeight = acc ? 1 / (state.accumSamples + 1) : 1;
-      const loadOp = continuing ? 'load' : 'clear';
-      const pass = encoder.beginRenderPass({
-        colorAttachments: [
-          {
-            view: T.sceneView,
-            clearValue: { r: 0, g: 0, b: 0, a: 0 },
-            loadOp,
-            storeOp: 'store',
-          },
-          {
-            view: T.auxView,
-            clearValue: { r: 0, g: 0, b: 0, a: 0 },
-            loadOp,
-            storeOp: 'store',
-          },
-        ],
-      });
-      pass.setBlendConstant({ r: blendWeight, g: blendWeight, b: blendWeight, a: blendWeight });
-      pass.setPipeline(state.pipelines.raymarch);
-      pass.setBindGroup(0, state.bindGroups.raymarch);
-      pass.draw(3);
-
-      // Attractor line material is weighted-additive. The raymarch draw above
-      // has already averaged the background sample; every segment now adds its
-      // current sample contribution with the same 1/(n+1) weight.
-      if (isAttractorType(state.fractalType) && state.trajBuffer) {
-        pass.setPipeline(state.pipelines.attractor);
-        pass.setBindGroup(0, state.bindGroups.raymarch);
-        pass.setVertexBuffer(0, state.trajBuffer);
-        pass.draw(state.trajCount);
-      }
-      pass.end();
+      encodeScenePass(encoder, T, acc);
     }
-
     // Pass 2: bloom horizontal -> bloomA. Sources the average while
     // accumulating, the raw scene otherwise.
     {
