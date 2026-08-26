@@ -789,7 +789,11 @@
       clearTourHighlight();
       // A step whose target is missing is skipped rather than left pointing at
       // nothing; tools/tour.test.js is what keeps that from happening silently.
-      if (!el) { tourTip.classList.remove('show'); return; }
+      // A target that exists but is not laid out is skipped for the same
+      // reason: Shape maths carries `hidden` until the current shape has
+      // parameters to show, and a hidden element has no box to point a tooltip
+      // at -- it would be placed at the origin instead.
+      if (!el || !el.offsetParent) { tourTip.classList.remove('show'); return; }
       // Highlight the whole labelled field where there is one, so the caption
       // above the control is lit with it rather than orphaned.
       (el.closest('label') || el).classList.add('tour-target');

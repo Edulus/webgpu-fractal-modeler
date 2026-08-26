@@ -29,6 +29,11 @@ export const TOUR_STEPS = [
     body: 'Thirty-one objects, from the Mandelbulb to hyperbolic honeycombs. Every one is drawn live, not loaded.',
   },
   {
+    target: '#shape-params',
+    title: 'Shape maths',
+    body: 'The chosen shape\'s own constants, not a filter over it. Move one and the mathematics is re-solved as you drag.',
+  },
+  {
     target: '#sel-palette',
     title: 'Palette',
     body: 'Recolour the shape as you watch. You can paste in your own from a coolors.co link or a .gpl file.',
