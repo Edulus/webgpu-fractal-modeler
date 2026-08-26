@@ -16,6 +16,8 @@ ok(/fn fs_composite[\s\S]*?resolveSceneEdgeAA\(in\.uv\)/.test(shader),
   'final composite uses the edge-aware resolve');
 ok(shader.includes('(1.0 - u.qualityScale) * 2.0'),
   'edge smoothing fades out as internal resolution reaches native resolution');
+ok(shader.includes('centerCoverage <= 0.01 || centerCoverage >= 0.99'),
+  'interior and background pixels skip the neighbor-tap work');
 ok(!shader.includes('@binding(5)'),
   'moving-edge fix adds no new texture binding or read/write attachment hazard');
 ok(!shader.includes('fs_fxaa'),
@@ -63,6 +65,8 @@ function edgeResolve(img, outN, quality) {
       const u = (x + 0.5) / outN, v = (y + 0.5) / outN;
       const base = bilinear(img, u, v);
       if (strength <= 0.001) return base;
+      const centerCoverage = bilinear(img, u, v);
+      if (centerCoverage <= 0.01 || centerCoverage >= 0.99) return base;
       const cL = bilinear(img, u - texelX, v);
       const cR = bilinear(img, u + texelX, v);
       const cU = bilinear(img, u, v - texelY);
