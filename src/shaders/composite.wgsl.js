@@ -204,8 +204,13 @@ fn resolveSceneEdgeAA(uv : vec2<f32>) -> vec4<f32> {
     return base;
   }
 
+  let centerCoverage = surfaceCoverage(uv);
+  if (centerCoverage <= 0.01 || centerCoverage >= 0.99) {
+    return base;
+  }
+
   let dims = max(vec2<f32>(textureDimensions(auxTex, 0)), vec2<f32>(1.0));
-  let texel = 1.0 / dims;
+  let texel = vec2<f32>(1.0 / dims.x, 1.0 / dims.y);
   let cL = surfaceCoverage(uv - vec2<f32>(texel.x, 0.0));
   let cR = surfaceCoverage(uv + vec2<f32>(texel.x, 0.0));
   let cU = surfaceCoverage(uv - vec2<f32>(0.0, texel.y));
