@@ -104,5 +104,20 @@ const covered = surfaceIds.filter((id) => id < Math.max(...thresholds) || id > I
 ok(covered.length === surfaceIds.length,
   `every surface id is reachable in mapDE (${covered.length}/${surfaceIds.length})`);
 
+// ---- Shader sources must survive being JavaScript template literals --------
+// Every WGSL module is carried in a JS backtick string, so a stray backtick or
+// an unescaped ${ inside shader source or its comments silently ends the
+// literal. That is not a shader error and no WGSL tool sees it -- the module
+// simply fails to parse, the renderer never starts, and the page is blank.
+//
+// It has happened: a comment reading `factor` in the Apollonian estimator broke
+// six suites at once. Importing the modules at the top of this file is itself
+// the regression test, but assert on the payload too so the failure names the
+// cause rather than appearing as an unrelated syntax error.
+for (const [name, src] of [['fractal', fractal], ['material', material], ['composite', composite]]) {
+  ok(typeof src === 'string' && src.length > 0, `${name}.wgsl loaded as a string (${src.length} chars)`);
+  ok(!src.includes('`'), `${name}.wgsl contains no backtick that would close its template literal`);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

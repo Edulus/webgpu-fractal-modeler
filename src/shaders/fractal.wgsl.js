@@ -134,7 +134,7 @@ fn dePenrose(pos : vec3<f32>) -> DEResult {
   // Reduce the query point into the root Descartes cell. The interiors of the
   // dual spheres are precisely the recursive gaps. Inverting the deepest
   // violation at each step walks a group word back towards the four seed
-  // spheres while `factor` accumulates the conformal scale change.
+  // spheres while 'factor' accumulates the conformal scale change.
   let depth = i32(clamp(round(shapeParam(1u)), 4.0, f32(APD_MAX_DEPTH)));
   var p = pos;
   var factor = 1.0;
