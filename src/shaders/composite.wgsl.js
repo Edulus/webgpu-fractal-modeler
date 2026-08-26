@@ -5,7 +5,7 @@
 // selected palette at the live cycle phase, so cycling re-indexes the palette
 // instead of hue-rotating an already shaded pixel.
 //
-// Two fragment entry points share one fullscreen-triangle vertex stage:
+// Three fragment entry points share one fullscreen-triangle vertex stage:
 //   fs_bloom_h  : resolve material, prefilter, horizontal Gaussian blur
 //   fs_bloom_v  : vertical Gaussian blur
 //   fs_composite: resolve material + bloom, image controls, tonemap, alpha
@@ -180,6 +180,50 @@ fn resolveScene(uv : vec2<f32>) -> vec4<f32> {
   return vec4<f32>(color, m.w);
 }
 
+// Low-rung silhouette reconstruction. The material pass already gives us a
+// binary hit/miss signal in aux.w for distance-estimated surfaces: hits write 0,
+// misses write 1, and the sampler turns that into fractional coverage at an
+// edge. Use that signal to estimate the local edge tangent, then average two
+// short taps ALONG the edge rather than across it. This damps the visible
+// stair-step turns produced by a half-resolution moving frame without widening
+// the silhouette the way a generic blur would.
+//
+// This deliberately stays inside the existing composite pass: no extra render
+// target, no new bind group, and no texture can ever be bound for reading while
+// it is also the current render attachment. Strength falls to zero at native
+// resolution, so high rungs keep the original resolve exactly.
+fn surfaceCoverage(uv : vec2<f32>) -> f32 {
+  return 1.0 - clamp(textureSampleLevel(auxTex, samp, uv, 0.0).w, 0.0, 1.0);
+}
+
+fn resolveSceneEdgeAA(uv : vec2<f32>) -> vec4<f32> {
+  let base = resolveScene(uv);
+  let surfaceType = u.fractalType < 24.5 || u.fractalType > 28.5;
+  let aaStrength = clamp((1.0 - u.qualityScale) * 2.0, 0.0, 1.0);
+  if (!surfaceType || aaStrength <= 0.001) {
+    return base;
+  }
+
+  let dims = max(vec2<f32>(textureDimensions(auxTex, 0)), vec2<f32>(1.0));
+  let texel = 1.0 / dims;
+  let cL = surfaceCoverage(uv - vec2<f32>(texel.x, 0.0));
+  let cR = surfaceCoverage(uv + vec2<f32>(texel.x, 0.0));
+  let cU = surfaceCoverage(uv - vec2<f32>(0.0, texel.y));
+  let cD = surfaceCoverage(uv + vec2<f32>(0.0, texel.y));
+  let grad = vec2<f32>(cR - cL, cD - cU);
+  let grad2 = dot(grad, grad);
+  if (grad2 < 0.0025) {
+    return base;
+  }
+
+  let edgeTangent = vec2<f32>(-grad.y, grad.x) / sqrt(grad2) * texel;
+  let alongA = resolveScene(uv + edgeTangent * 0.4);
+  let alongB = resolveScene(uv - edgeTangent * 0.4);
+  let alongMean = (alongA + alongB) * 0.5;
+  let edge = smoothstep(0.05, 0.5, sqrt(grad2));
+  return mix(base, alongMean, aaStrength * edge * 0.7);
+}
+
 // 9-tap Gaussian weights (normalized).
 const W0 : f32 = 0.227027;
 const W1 : f32 = 0.194594;
@@ -284,7 +328,7 @@ fn contrastCurve(c : vec3<f32>, bg : vec3<f32>, k : f32) -> vec3<f32> {
 
 @fragment
 fn fs_composite(in : VSOut) -> @location(0) vec4<f32> {
-  let scene = resolveScene(in.uv);
+  let scene = resolveSceneEdgeAA(in.uv);
   let bloom = textureSampleLevel(bloomTex, samp, in.uv, 0.0).rgb;
   let hdr = scene.rgb + bloom * 1.1;
 
