@@ -54,5 +54,33 @@ check('leaving fly-through returns to Explorer rather than a third state',
 const palettes = readFileSync(new URL('../src/palettes.js', import.meta.url), 'utf8');
 check('palettes.js touches no DOM', !palettes.includes('document'));
 
+// ---- Starting up ----------------------------------------------------------
+// The wait is announced in exactly one place. It used to be a word in the panel
+// as well, which said the same thing twice and then sat there stale, since the
+// panel readout is only replaced once the renderer reports a frame.
+check('the panel readout starts empty rather than naming the wait',
+  /<div id="hud"><\/div>/.test(html));
+check('the boot card is what states the renderer is starting',
+  /<div id="boot-title">Starting the renderer<\/div>/.test(html));
+check('the empty readout still holds its height, so the panel does not jump',
+  /#hud \{[^}]*min-height:/.test(html));
+
+// The bar is indeterminate by intent: nothing between "compile requested" and
+// "compiled" tells us how far along it is. A one-way sweep that restarts reads
+// as a queue being drained -- a claim about progress this cannot make -- so it
+// travels back instead.
+const barCss = html.slice(html.indexOf('#boot-bar i {'), html.indexOf('body.booting #panel {'));
+check('the bar reverses rather than sweeping and snapping back',
+  /animation:[^;]*alternate/.test(barCss));
+check('the bar travels between the ends of its track, staying visible',
+  /from \{ transform: translateX\(0\); \}/.test(barCss)
+  && /to   \{ transform: translateX\(163%\); \}/.test(barCss));
+// 38% wide, so 163% of its own width is exactly the remaining track. Getting
+// this wrong slides it out of view at one end, which looks like a stall.
+const barWidth = Number(barCss.match(/width: ([\d.]+)%;/)[1]);
+const travel = Number(barCss.match(/to   \{ transform: translateX\((\d+)%\); \}/)[1]);
+check('the travel matches the bar width, so it lands flush at each end',
+  Math.abs((100 - barWidth) / barWidth * 100 - travel) < 2);
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

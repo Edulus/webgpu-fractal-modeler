@@ -145,5 +145,13 @@ ok(
 );
 ok(BOOT_PHASES[0].at === 0, 'there is always something to say at t=0');
 
+// A step has to be long enough to read a sentence and look at what is being
+// pointed at. 2200ms was reported as too quick, so the floor is set above it --
+// a future tidy-up that quietly restores the old value fails here rather than
+// silently making the tour unreadable again.
+ok(STEP_MS >= 4000, `a step is long enough to read (${STEP_MS}ms)`);
+ok(TOUR_STEPS.length * STEP_MS > 30000,
+  `the whole tour outlasts a fast start by design (${(TOUR_STEPS.length * STEP_MS / 1000).toFixed(1)}s)`);
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

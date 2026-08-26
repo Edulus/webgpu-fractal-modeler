@@ -217,6 +217,11 @@
       color: var(--accent);
       font-size: 12px;
       opacity: 0.85;
+      /* Empty until the renderer reports its first frame. The height is held so
+         the panel does not jump when the readout arrives -- the boot card is
+         what says the renderer is starting, and the panel should not need a
+         placeholder word to keep its shape. */
+      min-height: 1.25em;
     }
 
     /* ---- Starting up ------------------------------------------------------
@@ -269,11 +274,17 @@
       height: 100%;
       border-radius: 999px;
       background: var(--accent);
-      animation: boot-slide 1.15s ease-in-out infinite;
+      /* alternate is what makes it travel back rather than sweep off one end
+         and reappear at the other. A repeating one-way sweep reads as a queue
+         being consumed, which is a claim about progress this cannot make. */
+      animation: boot-slide 1.05s ease-in-out infinite alternate;
     }
+    /* The travel is expressed in the bar's OWN width, which is what translateX
+       resolves against: (100 - 38) / 38 = 163%. So it stops exactly at each end
+       of the track and stays wholly visible, rather than sliding out of view. */
     @keyframes boot-slide {
-      0%   { transform: translateX(-100%); }
-      100% { transform: translateX(365%); }
+      from { transform: translateX(0); }
+      to   { transform: translateX(163%); }
     }
 
     /* While starting, the panel is on show but not yet wired, so it is dimmed
@@ -715,7 +726,7 @@
       <div id="diag-msg" aria-live="polite"></div>
     </details>
 
-    <div id="hud">initializing…</div>
+    <div id="hud"></div>
   </div>
 
   <!-- Navigation hint (shown only in explorer mode) -->

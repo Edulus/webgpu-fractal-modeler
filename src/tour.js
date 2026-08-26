@@ -11,9 +11,15 @@
 // the DOM half -- positioning the tooltip, moving the highlight.
 
 // One step is about as long as it takes to read a short line and glance at what
-// is being pointed at. Much under two seconds and the tooltip is gone before it
-// has been read; much over three and the tour outlasts the wait it was filling.
-export const STEP_MS = 2200;
+// is being pointed at. 2200ms was measured to be too quick to read comfortably,
+// so each step now holds two seconds longer.
+//
+// This does mean the tour long outlasts the wait: cold start here is ~640ms
+// against 33.6s of tour across eight steps. That is deliberate and already how
+// it worked -- the card claiming the renderer is starting has its own lifetime
+// and disappears on the first frame, while the tour runs on as a lesson over a
+// live picture, dismissable at any point.
+export const STEP_MS = 4200;
 
 // The panel, in the order someone meets it. Shape first because it is what the
 // page is for; the setup controls before the view controls; Image last, since
