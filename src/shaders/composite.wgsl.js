@@ -41,7 +41,7 @@ struct Uniforms {
   viewProj     : mat4x4<f32>,
   jitter       : vec2<f32>,
   accumWeight  : f32,
-  _pad2        : f32,
+  accumActive  : f32,
   paletteMode  : f32,
   rampCount    : f32,
   colorCycle   : f32,
@@ -200,7 +200,15 @@ fn resolveSceneEdgeAA(uv : vec2<f32>) -> vec4<f32> {
   let base = resolveScene(uv);
   let surfaceType = u.fractalType < 24.5 || u.fractalType > 28.5;
   let aaStrength = clamp((1.0 - u.qualityScale) * 2.0, 0.0, 1.0);
-  if (!surfaceType || aaStrength <= 0.001) {
+  // Once the average has more than one sample in it the silhouette is already
+  // antialiased properly, by up to 96 jittered samples of the real surface.
+  // Filtering that again would soften detail that is genuinely resolved, and
+  // the still image is the one that was never the complaint. So this is spent
+  // only on a single-sample frame, which is exactly when there is a staircase
+  // to fix. Note the rung is NOT a proxy for this: the showcase pass settles
+  // this machine at scale 0.70 while still, so gating on quality alone would
+  // filter every converged frame at 60% strength.
+  if (!surfaceType || aaStrength <= 0.001 || u.accumActive > 0.5) {
     return base;
   }
 

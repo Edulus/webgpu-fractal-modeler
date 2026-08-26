@@ -56,7 +56,7 @@ function idealCoverage(n, slope, intercept, ss = 6) {
       return hits / (ss * ss);
     }));
 }
-function edgeResolve(img, outN, quality) {
+function edgeResolve(img, outN, quality, accumActive = 0) {
   const h = img.length, w = img[0].length;
   const texelX = 1 / w, texelY = 1 / h;
   const strength = clamp((1 - quality) * 2, 0, 1);
@@ -64,7 +64,7 @@ function edgeResolve(img, outN, quality) {
     Array.from({ length: outN }, (_, x) => {
       const u = (x + 0.5) / outN, v = (y + 0.5) / outN;
       const base = bilinear(img, u, v);
-      if (strength <= 0.001) return base;
+      if (strength <= 0.001 || accumActive > 0.5) return base;
       const centerCoverage = bilinear(img, u, v);
       if (centerCoverage <= 0.01 || centerCoverage >= 0.99) return base;
       const cL = bilinear(img, u - texelX, v);
@@ -133,6 +133,39 @@ ok(ratioSum / cases < 0.90,
   const out = edgeResolve(flat, 30, 0.4);
   const err = out.flat().reduce((s, x) => s + Math.abs(1 - x), 0);
   ok(err < 1e-12, 'flat-field control is unchanged');
+}
+
+// ---- The filter must be spent on single-sample frames only ----------------
+// Progressive accumulation already antialiases a still view with up to 96
+// jittered samples. Refiltering that softens real detail, and the still image
+// was never the complaint. The quality rung is NOT a proxy for stillness: the
+// showcase pass settles at scale 0.70 on the reference machine, so a gate on
+// quality alone would filter every converged frame at 60% strength.
+const bg = fs.readFileSync(path.join(__dirname, '..', 'src', 'fractal-bg.js'), 'utf8');
+
+ok(/aaStrength <= 0\.001 \|\| u\.accumActive > 0\.5/.test(shader),
+  'a multi-sample average is returned unfiltered');
+ok(/d\[U\.accumActive\] = accNow && state\.accumSamples > 0 \? 1\.0 : 0\.0;/.test(bg),
+  'accumActive requires both accumulation and a sample already integrated');
+// Neither half of that condition is sufficient alone, and the reasons differ:
+// a converged frame writes accumWeight 1 exactly as a moving frame does, and
+// accumSamples is left stale by paths that stop accumulation without clearing
+// it (a held key). Assert the slot too -- it reuses the old _pad2 and a moved
+// index would silently write into colour state.
+ok(/accumActive: 59\b/.test(bg), 'accumActive occupies the former _pad2 slot');
+ok(!bg.includes('_pad2') && !shader.includes('_pad2'),
+  'the pad it replaced is renamed in both the map and the shader struct');
+ok(/accumWeight  : f32,\s*\n\s*accumActive  : f32,/.test(shader),
+  'the shader struct keeps accumActive directly after accumWeight');
+
+{
+  const low = lowResEdge(12, 0.65, 0.15);
+  const outN = 30;
+  const moving = edgeResolve(low, outN, 0.5, 0);
+  const settled = edgeResolve(low, outN, 0.5, 1);
+  const baseline = upscale(low, outN);
+  ok(mse(moving, baseline) > 0, 'a single-sample frame is filtered');
+  ok(mse(settled, baseline) === 0, 'an accumulated frame is left exactly as resolved');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

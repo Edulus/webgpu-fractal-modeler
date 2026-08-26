@@ -71,7 +71,7 @@ const U = {
   viewProj: 40, // mat4 -> slots 40..55 (byte 160, 16-byte aligned)
   jitter: 56,   // vec2 -> 56,57 (byte 224)
   accumWeight: 58,
-  _pad2: 59,
+  accumActive: 59,   // 1 while the presented image is a multi-sample average
   paletteMode: 60,  // 0 = cosine preset, 1 = imported stop ramp
   rampCount: 61,
   colorCycle: 62,   // palette cycles per second; 0 = static
@@ -1073,6 +1073,15 @@ export async function initFractalBackground(canvas, options = {}) {
     } else {
       d[U.jitter] = 0; d[U.jitter + 1] = 0; d[U.accumWeight] = 1;
     }
+    // Whether the image the composite pass is about to read is an average of
+    // several jittered samples, rather than a single one. accumWeight cannot
+    // answer this: a converged frame takes the branch above and writes 1, the
+    // same value a moving frame writes, because the raymarch is skipped and
+    // nothing consumes the weight. accumSamples alone cannot either, since it
+    // is not cleared by every path that stops accumulation -- holding a key
+    // leaves the old count in place while the view moves. Both conditions
+    // together are exact: accumulating, and more than one sample in.
+    d[U.accumActive] = accNow && state.accumSamples > 0 ? 1.0 : 0.0;
     d[U._pad] = 0.0;
 
     // View-projection for the attractor line pass (matches the raymarcher's
