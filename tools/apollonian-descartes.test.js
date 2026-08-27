@@ -127,9 +127,17 @@ for (const k of [KMIN, 2.4, 2.8, 3.2]) {
   }
 }
 
+const html = fs.readFileSync('index.html','utf8');
+ok(html.includes('<option value="penrose">Canonical Apollonian (Descartes)</option>'),
+   'static selector owns the canonical public shape entry');
+ok(html.includes("penrose: ['Canonical Apollonian (Descartes)'"),
+   'static NOTES table owns the canonical wall label');
+
 const ui = fs.readFileSync('src/apollonian-descartes-ui.js','utf8');
-ok(ui.includes('Canonical Apollonian sphere packing (Descartes)') && ui.includes("INTERNAL_KEY = 'penrose'"),
-   'browser adapter exposes the retired slot under its canonical public name');
+ok(ui.includes("INTERNAL_KEY = 'penrose'") && ui.includes("PUBLIC_HUD = 'apollonian-descartes'"),
+   'compatibility adapter translates only the historical id-8 HUD name');
+ok(!ui.includes('createElement') && !ui.includes('queueMicrotask'),
+   'compatibility adapter no longer injects selector options or wall-note content');
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
