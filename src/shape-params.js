@@ -75,10 +75,9 @@ SHAPE_PARAMS.gyroid = [
   },
 ];
 
-// index.html still has a hand-written selector and wall-label table. Until those
-// are generated from the same registry, this small browser-only adapter exposes
-// the new shape without renumbering or duplicating renderer state. It is a no-op
-// in Node/tests and in library use without the explorer page DOM.
+// The canonical packing is already present in index.html's selector and NOTES
+// table. This browser-only hook now exists solely to translate historical id-8
+// HUD text from `penrose` to the public canonical name without renumbering ids.
 installApollonianDescartesUI();
 
 export * from './shape-params-base.js';
