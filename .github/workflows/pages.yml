@@ -17,7 +17,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # This project has no package manager or build step. The tests are plain
+      # Node programs, so run every suite that exists rather than maintaining a
+      # second hand-written list that can drift when a new regression test lands.
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in src/*.js src/shaders/*.js tools/*.test.js; do
+            node --check "$f"
+          done
+
+      - name: Run repository tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in tools/*.test.js; do
+            echo "::group::$f"
+            node "$f"
+            echo "::endgroup::"
+          done
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     environment:
       name: github-pages
