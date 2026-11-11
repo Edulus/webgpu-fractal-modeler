@@ -25,7 +25,29 @@ struct MaterialOut {
   // z = seam palette weight
   // w = miss/background coverage (resolved as opaque or transparent later)
   @location(1) aux : vec4<f32>,
+  // x = distance along the ray to what this pixel shows. Not shaded and not
+  // accumulated: the temporal resolve uses it to find where the same point
+  // sat on screen in the previous frame.
+  @location(2) depth : vec4<f32>,
 };
+
+// Hit epsilon per unit distance for one march.
+//
+// The fixed epsilon is several times finer than a pixel at ordinary sizes.
+// That is right for a still view, where up to 96 jittered samples integrate
+// the sub-pixel detail it finds. On a moving frame there is one sample, and
+// detail smaller than the pixel it lands in can only show up as speckle that
+// crawls as the view turns. So a moving frame stops at the pixel's own
+// footprint instead: the cone a pixel subtends, u.temporal.x pixels in radius.
+// It is never finer than the fixed epsilon, so supersampled rungs are
+// unaffected, and JS writes 0 while accumulating, which restores the fixed
+// epsilon exactly.
+fn hitEpsilon() -> f32 {
+  let epsScale = mix(2.5, 1.0, clamp(u.qualityScale, 0.0, 1.0));
+  let fixedEps = BASE_EPS * epsScale;
+  let pixelAngle = 2.0 * tan(u.fov * 0.5) / max(u.resolution.y, 1.0);
+  return max(fixedEps, pixelAngle * u.temporal.x);
+}
 
 // ---------------------------------------------------------------------------
 // Cosmic Web — a bounded volumetric multifractal density field.
@@ -188,6 +210,8 @@ fn cosmicWebMaterial(ro : vec3<f32>, rd : vec3<f32>) -> MaterialOut {
   var out : MaterialOut;
   out.material = vec4<f32>(0.0);
   out.aux = vec4<f32>(0.0);
+  // Rays that miss the volume reproject as if at its centre distance.
+  out.depth = vec4<f32>(max(-dot(ro, rd), 0.5), 0.0, 0.0, 0.0);
 
   // Intersect the bounded volume first so empty screen-space rays do no density
   // work. This also gives each quality rung a known finite integration span.
@@ -217,6 +241,7 @@ fn cosmicWebMaterial(ro : vec3<f32>, rd : vec3<f32>) -> MaterialOut {
   var indexWeight = 0.0;
   var paletteWeight = 0.0;
   var glow = 0.0;
+  var depthWeight = 0.0;   // brightness-weighted mean distance of the emission
 
   for (var i = 0; i < 88; i = i + 1) {
     if (i >= stepCount) { break; }
@@ -229,6 +254,7 @@ fn cosmicWebMaterial(ro : vec3<f32>, rd : vec3<f32>) -> MaterialOut {
       let w = transmittance * alpha * brightness;
       paletteWeight = paletteWeight + w;
       indexWeight = indexWeight + s.coord * w;
+      depthWeight = depthWeight + t * w;
       glow = glow + w * (0.20 + 2.9 * s.knot + 0.20 * s.density);
       transmittance = transmittance * (1.0 - alpha * 0.88);
     }
@@ -245,6 +271,11 @@ fn cosmicWebMaterial(ro : vec3<f32>, rd : vec3<f32>) -> MaterialOut {
   // In opaque mode the composite pass uses this as the amount of backdrop that
   // remains visible through the volume. Transparent mode ignores it.
   out.aux.w = clamp(transmittance, 0.0, 1.0);
+  // A volume has no single depth; the distance its light mostly comes from is
+  // the one that keeps it steady under reprojection.
+  if (paletteWeight > 1e-5) {
+    out.depth.x = depthWeight / paletteWeight;
+  }
   return out;
 }
 
@@ -262,6 +293,7 @@ fn fs_material(in : VSOut) -> MaterialOut {
   var out : MaterialOut;
   out.material = vec4<f32>(0.0);
   out.aux = vec4<f32>(0.0);
+  out.depth = vec4<f32>(0.0);
 
   // Attractors are rasterized as line geometry after this draw. The raymarch
   // contributes one full background/miss sample; the post chain decides whether
@@ -272,11 +304,15 @@ fn fs_material(in : VSOut) -> MaterialOut {
 
   if (u.fractalType > 24.5 && u.fractalType < 27.5) {
     out.aux.w = 1.0;
+    // The lines are drawn over this and have no depth of their own. They sit
+    // around the camera target, so reproject every pixel as if it lay on the
+    // plane through the target that faces the camera.
+    let fwd = normalize(ta - ro);
+    out.depth.x = length(ta - ro) / max(dot(rd, fwd), 0.2);
     return out;
   }
 
-  let epsScale = mix(2.5, 1.0, clamp(u.qualityScale, 0.0, 1.0));
-  let hitEps = BASE_EPS * epsScale;
+  let hitEps = hitEpsilon();
 
   var ro2 = ro;
   if (u.flyMode > 0.5) {
@@ -291,14 +327,28 @@ fn fs_material(in : VSOut) -> MaterialOut {
   var hit = false;
   var trap = 1.0;
   var glow = 0.0;
+  // Closest approach of a ray that never lands, by angle. A near-miss shows
+  // the background, but the silhouette it grazes is what it moves with.
+  var tNear = t;
+  var nearRatio = 1e9;
 
+  // MAX_STEPS is only the compile-time ceiling. The live ceiling is the quality
+  // rung's, in u.detail.x -- without this break every rung marched to 320 and
+  // the ladder's step column bought nothing.
+  let maxSteps = i32(u.detail.x);
   for (var i = 0; i < MAX_STEPS; i = i + 1) {
+    if (i >= maxSteps) { break; }
     let pos = ro2 + rd * t;
     let de = mapDE(pos);
     let d = de.dist;
 
     let near = exp(-d * 42.0);
     glow = glow + near / (1.0 + t * t * 0.35);
+
+    if (d < nearRatio * t) {
+      nearRatio = d / t;
+      tNear = t;
+    }
 
     let hitThresh = hitEps * t;
     if (d < hitThresh) {
@@ -379,6 +429,7 @@ fn fs_material(in : VSOut) -> MaterialOut {
   // drag the palette lookup toward zero merely because some jitter samples miss.
   out.material = vec4<f32>(baseIndex * baseWeight, baseWeight, specWeight, glowOut);
   out.aux = vec4<f32>(bgWeight, seamIndex * seamWeight, seamWeight, missWeight);
+  out.depth = vec4<f32>(select(tNear, t, hit), 0.0, 0.0, 0.0);
   return out;
 }
 `;

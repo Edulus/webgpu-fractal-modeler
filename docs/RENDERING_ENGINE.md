@@ -29,12 +29,14 @@ The design follows several principles:
 - `src/quality.js` — pure adaptive-quality decision logic, quality ladder, mode planning, texture-limit rung calculation, and optional environment-free diagnostic observation hooks.
 - `src/diagnostics.js` — developer snapshots, bounded rung history, report formatting, and the optional browser-facing diagnostics controller.
 - `src/camera.js` — pure orbit/fly mathematics, drift, zoom-rate helpers, and device-loss policy.
+- `src/temporal.js` — pure policy for temporal antialiasing of moving frames: jitter sequence, history weights, and the hand-overs to and from progressive accumulation.
 - `src/palettes.js` — built-in cosine palettes.
 - `src/palette-io.js` — imported palette parsing and persistence.
 - `src/shaders/fractal.wgsl.js` — distance estimators and the clearance/centre-hit compute probe.
 - `src/shaders/material.wgsl.js` — palette-independent surface/material pass.
 - `src/shaders/attractor.wgsl.js` — strange-attractor line rendering.
 - `src/shaders/composite.wgsl.js` — palette resolution, bloom, image controls, tonemapping, and final presentation.
+- `src/shaders/temporal.wgsl.js` — the temporal resolve pass: reprojects last frame's material and blends the new frame into it.
 - `src/shaders/engel.wgsl.js` — generated Engel plesiohedron data and estimator.
 
 `quality.js` decides **how much work should be done** and whether a quality rung can actually fit. `fractal-bg.js` applies those decisions to render-target size and shader uniforms. `diagnostics.js` observes the resulting public state and quality events; it has no authority to change a governor decision.
@@ -69,15 +71,52 @@ The probe supports clearance-relative fly movement and orbit surface re-pinning 
 
 ### 4.2 Material pass
 
-The first render pass writes two full-resolution `rgba16float` attachments, `sceneTex` and `auxTex`. The pass stores material summaries rather than final RGB.
+The first render pass writes two full-resolution `rgba16float` attachments, `sceneTex` and `auxTex`, and a third `r16float` attachment, `depthTex`, holding the distance along each ray to what the pixel shows. The pass stores material summaries rather than final RGB. The depth is not shaded and not accumulated; it exists only for the temporal resolve (section 4.3).
 
-### 4.3 Bloom
+The march stops at the quality rung's step ceiling (`u.detail.x`). `MAX_STEPS` is only the compile-time bound; the live break matters because without it every rung marched to 320 steps and the ladder's step column bought nothing.
 
-Bloom is a two-pass 9-tap Gaussian blur. Palette resolution and bright/emissive extraction occur before the horizontal blur. Bloom runs at half internal resolution.
+A frame that is **not** being accumulated stops the march at the pixel's own footprint rather than at the fixed epsilon: a ray is a hit once the surface is within `MOVING_CONE_RADIUS` render pixels of it at that distance (`hitEpsilon()` in `material.wgsl.js`). Fractals have detail at every scale, and anything smaller than the pixel it lands in cannot be drawn by one sample; it only appears as speckle that crawls as the view turns. The footprint is never finer than the fixed epsilon, so supersampled rungs are unaffected. An accumulating frame keeps the fixed, finer epsilon, because its 96 samples integrate exactly that sub-pixel detail.
 
-### 4.4 Composite
+### 4.3 Temporal resolve (moving frames)
 
-The final pass resolves material through the live palette, combines bloom, applies explicit Hue, exposure, ACES tonemapping, gamma, saturation, backdrop-relative contrast, and then writes to the swapchain.
+A still view is antialiased by progressive accumulation (section 6). A moving view cannot simply be averaged, so it used to be one unjittered sample per pixel: staircased edges and speckle. The temporal resolve keeps averaging across motion by first working out where each surface point was on screen in the previous frame.
+
+Each moving frame is rendered with a sub-pixel jitter from a 16-entry Halton(2,3) cycle. `fs_temporal` then, per pixel:
+
+1. takes the nearest ray distance in a small cross, so a silhouette pixel follows the foreground's motion;
+2. rebuilds the world point from the current camera and projects it through the **previous** frame's camera, including the Shape Explorer yaw basis (`prevCamPos`, `prevCamTarget`, `prevYaw`);
+3. reads the previous resolved material there with a Catmull-Rom filter (bilinear would soften history a little each frame, and the softness compounds);
+4. clamps that history into the range of the current 3x3 neighbourhood, so a stale value can never show something the current frame does not have nearby; and
+5. blends at `HISTORY_WEIGHT_MOVING = 0.9`.
+
+The material stores palette coordinates pre-multiplied by their weight, so clamping `x` and `y` separately would let their ratio — the coordinate, i.e. the colour — land outside anything nearby. The coordinate gets a range of its own. The line attractors use those channels differently and are exempt.
+
+This is a pass of its own, with its own bindings, on purpose. The composite pass has a standing rule that it gains no binding and no render target (`tools/moving-aa.test.js`), because a texture bound for reading while it is also the attachment being written is an invalid pass. History is two pairs of textures: the pass reads one pair and writes the other, and they swap every frame, so that cannot happen by construction.
+
+Hand-overs with accumulation are handled by `planTemporalFrame()`:
+
+- **Coming to rest.** If the picture is unchanged, history is copied into the material targets and the in-place average starts from `ACCUM_SEED_SAMPLES` rather than from one raw sample, which used to be a visible flicker every time the view settled.
+- **Starting to move.** The accumulated image becomes the history to reproject from.
+
+Temporal filtering is only used at scale 1.0 and below (`temporalAllowed`); supersampled rungs already put several samples in every display pixel, and the history textures double the material memory. A frame that goes through it has its own silhouette averaged, so the moving-edge filter (section 4.5) stands down for it and runs only on frames that are still single-sample.
+
+When nothing is moving but the loop is not running (reduced motion, or paused), the renderer keeps drawing until the temporal average has settled, then stops; with nothing moving those frames average exactly.
+
+`setTemporalAA(bool)`, the `taa` option and `?taa=0` in the demo switch it off to compare against the single-sample moving frame.
+
+### 4.4 Bloom
+
+Bloom is a chain of five levels: half the internal resolution, then a quarter, an eighth and so on (`BLOOM_LEVELS`). Palette resolution and bright/emissive extraction happen while downsampling into the first level, using a soft knee and a Karis average so a single hot pixel cannot turn into a flickering blob. Each level is then added back into the one above with a tent filter. The narrow levels keep the glow tight around bright detail and the wide ones give it a long soft falloff, which a single blur at one size cannot do.
+
+### 4.5 Composite
+
+The final pass resolves material through the live palette, applies a contrast-limited sharpen to temporally resolved frames, combines bloom, applies explicit Hue, exposure, ACES tonemapping, gamma, saturation, backdrop-relative contrast, and then writes to the swapchain.
+
+The sharpen pushes each pixel away from the mean of its four neighbours and clamps to their range, so it cannot ring. It wins back the edge contrast the temporal filter trades for stability, and it is gated off for accumulated frames, which are genuinely resolved.
+
+The march glow is laid over the surface only at `GLOW_TINT = 0.18` (it was 0.4). That term exists only on pixels where the ray landed, so at the old strength it was a tinted veil that lifted crevices towards the glow colour and flattened the modelling. The halo around bright detail is the bloom's job and is unaffected.
+
+In transparent mode, page coverage comes from the brightest channel rather than luminance. A saturated blue surface has a luminance weight of 0.07 and used to read as see-through; it now covers the page as solidly as a white one.
 
 The ordering is deliberate: palette cycling and image controls stay out of the raymarch so they do not invalidate accumulated geometry samples.
 

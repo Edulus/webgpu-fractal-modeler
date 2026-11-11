@@ -105,6 +105,16 @@ struct Uniforms {
   // another control's bits -- an earlier attempt smuggled these through
   // imageAdjust and the composite pass had to decode its own controls back out.
   shapeParams  : array<vec4<f32>, 2>,
+  // Temporal reprojection of moving frames (see temporal.wgsl.js). The camera
+  // of the previous frame, how much of its result to keep, and its Shape
+  // Explorer yaw (the value detail.w held then).
+  prevCamPos   : vec3<f32>,
+  historyWeight: f32,
+  prevCamTarget: vec3<f32>,
+  prevYaw      : f32,
+  // (hit-cone radius in render pixels or 0 for the fixed epsilon, output
+  //  sharpening strength, spare, spare)
+  temporal     : vec4<f32>,
 };
 
 // Slot accessor, so estimators read shapeParam(1u) rather than indexing into

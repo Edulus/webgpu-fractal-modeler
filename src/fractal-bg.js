@@ -14,12 +14,16 @@
 
 import { FRACTAL_WGSL } from './shaders/fractal.wgsl.js';
 import { MATERIAL_WGSL } from './shaders/material.wgsl.js';
-import { COMPOSITE_WGSL } from './shaders/composite.wgsl.js';
+import { COMPOSITE_WGSL, BLOOM_LEVELS } from './shaders/composite.wgsl.js';
+import { TEMPORAL_WGSL } from './shaders/temporal.wgsl.js';
 import { ATTRACTOR_WGSL } from './shaders/attractor.wgsl.js';
 import {
   LADDER, TOP, PRESET_RUNG, BUDGET_MS,
   govInit, govSample, govResync, rung, clampIndex, showcaseIndex, planMode, maxRungForLimit,
 } from './quality.js';
+import {
+  temporalJitter, temporalAllowed, planTemporalFrame, STILL_CAP,
+} from './temporal.js';
 import { getPalette } from './palettes.js';
 import { packParams, clampParams, defaultsFor, paramsFor } from './shape-params.js';
 import { clampStops, averageColor, MAX_STOPS } from './palette-io.js';
@@ -95,9 +99,33 @@ const U = {
   // in four shader files and removing a field shifts every offset after it; only
   // fractal.wgsl ever read them, and it reads shapeParams now.
   shapeParams: 104,   // 2 * vec4 -> slots 104..111 (byte 416, 16-byte aligned)
+  // Temporal reprojection of moving frames (temporal.wgsl.js): the previous
+  // frame's camera, how much of its result to keep, and its explorer yaw.
+  prevCamPos: 112,    // vec3 -> 112..114 (byte 448)
+  historyWeight: 115,
+  prevCamTarget: 116, // vec3 -> 116..118
+  prevYaw: 119,
+  // (hit-cone radius in render pixels or 0, output sharpening, spare, spare)
+  temporal: 120,      // vec4 -> 120..123 (byte 480)
 };
-const UNIFORM_FLOATS = 112;
-const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 416
+const UNIFORM_FLOATS = 124;
+const UNIFORM_BYTES = UNIFORM_FLOATS * 4; // 496
+
+// The uniform slots that define WHAT is drawn: camera, clock, shape and march
+// settings. Two frames that agree on all of these trace identical rays, so
+// their samples can be averaged exactly. Everything else in the block is
+// either post-chain state (palette, colour cycle, image controls, backdrop),
+// which never invalidates stored material, or changes every frame by design
+// (jitter, weights, the previous camera).
+const GEOMETRY_SLOTS = (() => {
+  const out = [];
+  const span = (from, n) => { for (let i = 0; i < n; i++) out.push(from + i); };
+  span(U.resolution, 2); span(U.time, 1);
+  span(U.camPos, 3); span(U.fov, 1); span(U.camTarget, 3); span(U.fractalType, 1);
+  span(U.glowStrength, 4); span(U.qualityScale, 1); span(U.flyMode, 1);
+  span(U.detail, 4); span(U.shapeParams, 8);
+  return out;
+})();
 
 // Distance-estimated fractals occupy ids 0..23; the volumetric/line-rendered
 // attractors follow at 24+ and must stay contiguous at the end. The shader keys off that split (see the
@@ -271,6 +299,16 @@ function mat4Mul(out, a, b) {
 }
 
 const HDR_FORMAT = 'rgba16float';
+// Ray distance per pixel, for temporal reprojection. One channel; half float
+// is ample, since an error in it only matters in proportion to how far the
+// camera moved in one frame.
+const DEPTH_FORMAT = 'r16float';
+
+// Moving frames stop the march at the pixel's footprint: a cone this many
+// render pixels in radius (see hitEpsilon() in material.wgsl.js).
+const MOVING_CONE_RADIUS = 0.4;
+// Output sharpening applied to temporally resolved frames (see fs_composite).
+const TEMPORAL_SHARPEN = 0.4;
 
 /**
  * @param {HTMLCanvasElement} canvas
@@ -280,6 +318,7 @@ const HDR_FORMAT = 'rgba16float';
  * @param {string}  [options.quality='auto']  'low'|'medium'|'high'|'auto'
  * @param {boolean} [options.transparent=true]
  * @param {number}  [options.edgeAA=1]  moving-frame silhouette filter gain; 0 disables
+ * @param {boolean} [options.taa=true]  temporal antialiasing of moving frames
  * @param {(reason:string)=>void} [options.onUnsupported]
  * @returns {Promise<object|null>} handle, or null if unsupported
  */
@@ -310,7 +349,7 @@ export async function initFractalBackground(canvas, options = {}) {
     uniformData: new Float32Array(UNIFORM_FLOATS),
     uniformU32: null, // aliased view (unused for now; all fields are f32)
     pipelines: {},
-    targets: null, // { sceneTex, auxTex, bloomA, bloomB, w, h }
+    targets: null, // material/depth/history/bloom textures + views (see createTargets)
     bindGroups: {},
     // config
     fractalType: FRACTAL_IDS[opts.fractal] ?? 0,
@@ -400,6 +439,16 @@ export async function initFractalBackground(canvas, options = {}) {
     probeAt: 0,          // last probe dispatch, for throttling
     // Progressive accumulation
     accumSamples: 0,
+    // Temporal antialiasing of moving frames. The policy is in temporal.js;
+    // this is the state it carries from one frame to the next.
+    taaOn: opts.taa !== false,
+    temporal: { historyValid: false, stillCount: 0, accumHeld: 0 },
+    temporalPlan: null,      // this frame's decision, set by updateUniforms
+    historyIndex: 0,         // which history pair holds the latest resolve
+    frameCount: 0,           // drives the moving-frame jitter sequence
+    geometryKey: new Float32Array(GEOMETRY_SLOTS.length),
+    prevCam: new Float32Array(7), // last frame's camPos, camTarget, yaw
+    settleRaf: 0,
     // Palette cycles per second. Phase advances independently of the geometry
     // clock so it keeps moving after progressive accumulation has converged.
     colorCycle: opts.colorCycle ?? 0.025,
@@ -525,7 +574,21 @@ export async function initFractalBackground(canvas, options = {}) {
       ],
     });
 
-    state._bgl = { raymarchBGL, probeBGL, blurBGL, resolveBGL, compositeBGL };
+    // Temporal resolve: this frame's material + aux + ray distance, and the
+    // previous frame's resolved material + aux. Depth is read with textureLoad.
+    const temporalBGL = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      ],
+    });
+
+    state._bgl = { raymarchBGL, probeBGL, blurBGL, resolveBGL, compositeBGL, temporalBGL };
 
     // Progressive accumulation is done by fixed-function blending directly in
     // the material targets. For sample n, source contributes 1/(n+1) and the
@@ -561,6 +624,8 @@ export async function initFractalBackground(canvas, options = {}) {
         targets: [
           { format: HDR_FORMAT, blend: weightedAddBlend },
           { format: HDR_FORMAT, blend: weightedAddBlend },
+          // Lines carry no depth of their own; keep the background draw's.
+          { format: DEPTH_FORMAT, writeMask: 0 },
         ],
       },
       primitive: { topology: 'line-strip' },
@@ -575,7 +640,22 @@ export async function initFractalBackground(canvas, options = {}) {
         targets: [
           { format: HDR_FORMAT, blend: averageBlend },
           { format: HDR_FORMAT, blend: averageBlend },
+          // Ray distance: overwritten each frame, never averaged.
+          { format: DEPTH_FORMAT },
         ],
+      },
+      primitive: { topology: 'triangle-list' },
+    });
+
+    // Temporal resolve -> the history pair not being read this frame.
+    const temporalModule = device.createShaderModule({ code: TEMPORAL_WGSL });
+    state.pipelines.temporal = device.createRenderPipeline({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [temporalBGL] }),
+      vertex: { module: temporalModule, entryPoint: 'vs_main' },
+      fragment: {
+        module: temporalModule,
+        entryPoint: 'fs_temporal',
+        targets: [{ format: HDR_FORMAT }, { format: HDR_FORMAT }],
       },
       primitive: { topology: 'triangle-list' },
     });
@@ -585,18 +665,18 @@ export async function initFractalBackground(canvas, options = {}) {
       compute: { module: fractalModule, entryPoint: 'cs_probe' },
     });
 
-    state.pipelines.bloomH = device.createRenderPipeline({
-      layout: device.createPipelineLayout({ bindGroupLayouts: [resolveBGL] }),
+    // Bloom chain: resolve+prefilter+downsample, downsample, additive upsample.
+    const bloomPipeline = (entryPoint, layout, blend) => device.createRenderPipeline({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
       vertex: { module: compositeModule, entryPoint: 'vs_main' },
-      fragment: { module: compositeModule, entryPoint: 'fs_bloom_h', targets: [{ format: HDR_FORMAT }] },
+      fragment: { module: compositeModule, entryPoint, targets: [{ format: HDR_FORMAT, blend }] },
       primitive: { topology: 'triangle-list' },
     });
-
-    state.pipelines.bloomV = device.createRenderPipeline({
-      layout: device.createPipelineLayout({ bindGroupLayouts: [blurBGL] }),
-      vertex: { module: compositeModule, entryPoint: 'vs_main' },
-      fragment: { module: compositeModule, entryPoint: 'fs_bloom_v', targets: [{ format: HDR_FORMAT }] },
-      primitive: { topology: 'triangle-list' },
+    state.pipelines.bloomPrefilter = bloomPipeline('fs_bloom_prefilter', resolveBGL);
+    state.pipelines.bloomDown = bloomPipeline('fs_bloom_down', blurBGL);
+    state.pipelines.bloomUp = bloomPipeline('fs_bloom_up', blurBGL, {
+      color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+      alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
     });
 
     state.pipelines.composite = device.createRenderPipeline({
@@ -608,42 +688,71 @@ export async function initFractalBackground(canvas, options = {}) {
   }
 
   // ---- Offscreen render targets (recreated on resize / quality change) ----
+  function destroyTargets() {
+    const T = state.targets;
+    if (!T) return;
+    T.sceneTex.destroy();
+    T.auxTex.destroy();
+    T.depthTex.destroy();
+    for (const pair of T.history) { pair.scene.destroy(); pair.aux.destroy(); }
+    for (const t of T.bloomTex) t.destroy();
+    state.targets = null;
+  }
+
   function createTargets(renderW, renderH) {
     const device = state.device;
-    if (state.targets) {
-      state.targets.sceneTex.destroy();
-      state.targets.auxTex.destroy();
-      state.targets.bloomA.destroy();
-      state.targets.bloomB.destroy();
-    }
-    const bw = Math.max(1, Math.floor(renderW / 2));
-    const bh = Math.max(1, Math.floor(renderH / 2));
+    destroyTargets();
 
-    const mk = (w, h) =>
-      device.createTexture({
-        size: { width: w, height: h },
-        format: HDR_FORMAT,
-        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-      });
+    // COPY_SRC/COPY_DST let the two averages hand over to each other: temporal
+    // history seeds the in-place accumulation when the view comes to rest, and
+    // the accumulated image seeds history when it starts moving again.
+    const materialUsage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+                        | GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST;
+    const mk = (w, h, format = HDR_FORMAT, usage =
+      GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING) =>
+      device.createTexture({ size: { width: w, height: h }, format, usage });
 
     // Two full-resolution material attachments replace RGB + two accumulation
     // ping-pong textures. They are averaged in place by blend constants.
-    const sceneTex = mk(renderW, renderH);
-    const auxTex = mk(renderW, renderH);
-    const bloomA = mk(bw, bh);
-    const bloomB = mk(bw, bh);
+    const sceneTex = mk(renderW, renderH, HDR_FORMAT, materialUsage);
+    const auxTex = mk(renderW, renderH, HDR_FORMAT, materialUsage);
+    const depthTex = mk(renderW, renderH, DEPTH_FORMAT);
+
+    // Temporal history: two material pairs, one read and one written each
+    // moving frame. Only allocated where temporal filtering is in use -- it
+    // doubles the material memory, and supersampled rungs do not need it.
+    const history = [];
+    if (temporalAllowed(state.taaOn, state.qualityScale)) {
+      for (let i = 0; i < 2; i++) {
+        const scene = mk(renderW, renderH, HDR_FORMAT, materialUsage);
+        const aux = mk(renderW, renderH, HDR_FORMAT, materialUsage);
+        history.push({ scene, aux, sceneView: scene.createView(), auxView: aux.createView() });
+      }
+    }
+
+    // Bloom chain: level 0 is half the internal resolution, each further level
+    // half again.
+    const bloomTex = [];
+    for (let i = 0, w = renderW, h = renderH; i < BLOOM_LEVELS; i++) {
+      w = Math.max(1, w >> 1);
+      h = Math.max(1, h >> 1);
+      bloomTex.push(mk(w, h));
+    }
 
     const sceneView = sceneTex.createView();
     const auxView = auxTex.createView();
-    const bloomAView = bloomA.createView();
-    const bloomBView = bloomB.createView();
+    const depthView = depthTex.createView();
+    const bloomView = bloomTex.map((t) => t.createView());
 
     state.targets = {
-      sceneTex, auxTex, bloomA, bloomB,
-      sceneView, auxView, bloomAView, bloomBView,
+      sceneTex, auxTex, depthTex, history, bloomTex,
+      sceneView, auxView, depthView, bloomView,
       w: renderW, h: renderH,
     };
     state.accumSamples = 0;
+    // New textures hold nothing: no history to reproject, no average to seed.
+    state.temporal = { historyValid: false, stillCount: 0, accumHeld: 0 };
+    state.historyIndex = 0;
 
     const ub = { buffer: state.uniformBuffer };
     state.bindGroups.raymarch = device.createBindGroup({
@@ -668,33 +777,53 @@ export async function initFractalBackground(canvas, options = {}) {
       ],
     });
 
-    state.bindGroups.bloomH = device.createBindGroup({
-      layout: state._bgl.resolveBGL,
-      entries: [
-        { binding: 0, resource: ub },
-        { binding: 1, resource: state.sampler },
-        { binding: 2, resource: sceneView },
-        { binding: 3, resource: auxView },
-      ],
-    });
-    state.bindGroups.bloomV = device.createBindGroup({
+    // The post chain reads material from one of three places: the in-place
+    // targets (index 0: accumulating, or temporal filtering off), or whichever
+    // history pair the temporal resolve wrote this frame (index 1 + pair).
+    const sources = [{ sceneView, auxView }, ...history];
+    const textureGroup = (view) => device.createBindGroup({
       layout: state._bgl.blurBGL,
       entries: [
         { binding: 0, resource: ub },
         { binding: 1, resource: state.sampler },
-        { binding: 2, resource: bloomAView },
+        { binding: 2, resource: view },
       ],
     });
-    state.bindGroups.composite = device.createBindGroup({
+
+    state.bindGroups.bloomPrefilter = sources.map((src) => device.createBindGroup({
+      layout: state._bgl.resolveBGL,
+      entries: [
+        { binding: 0, resource: ub },
+        { binding: 1, resource: state.sampler },
+        { binding: 2, resource: src.sceneView },
+        { binding: 3, resource: src.auxView },
+      ],
+    }));
+    // bloomLevel[i] samples bloom level i, for the next downsample or upsample.
+    state.bindGroups.bloomLevel = bloomView.map(textureGroup);
+    state.bindGroups.composite = sources.map((src) => device.createBindGroup({
       layout: state._bgl.compositeBGL,
+      entries: [
+        { binding: 0, resource: ub },
+        { binding: 1, resource: state.sampler },
+        { binding: 2, resource: src.sceneView },
+        { binding: 3, resource: src.auxView },
+        { binding: 4, resource: bloomView[0] },
+      ],
+    }));
+    // temporal[i] READS history pair i (and writes the other one).
+    state.bindGroups.temporal = history.map((pair) => device.createBindGroup({
+      layout: state._bgl.temporalBGL,
       entries: [
         { binding: 0, resource: ub },
         { binding: 1, resource: state.sampler },
         { binding: 2, resource: sceneView },
         { binding: 3, resource: auxView },
-        { binding: 4, resource: bloomBView },
+        { binding: 4, resource: depthView },
+        { binding: 5, resource: pair.sceneView },
+        { binding: 6, resource: pair.auxView },
       ],
-    });
+    }));
   }
 
   // ---- Strange attractors: integrate the trajectory into line geometry ----
@@ -1069,16 +1198,71 @@ export async function initFractalBackground(canvas, options = {}) {
     d[U.reducedMotion] = rm ? 1.0 : 0.0;
     d[U.flyMode] = state.fly ? 1.0 : 0.0;
 
-    // Jitter is zero on a moving frame, so the interactive image is untouched.
     const accNow = accumulating(nowMs);
+
+    // ---- Temporal plan for this frame ----
+    // Is this the same picture as the last frame -- same camera, instant,
+    // shape and march settings? Every geometry slot is final by this point.
+    const key = state.geometryKey;
+    let geometrySame = state.frameCount > 0;
+    for (let i = 0; i < GEOMETRY_SLOTS.length; i++) {
+      const v = d[GEOMETRY_SLOTS[i]];
+      if (key[i] !== v) { geometrySame = false; key[i] = v; }
+    }
+    const yaw = d[U.detail + 3];
+    const plan = planTemporalFrame(state.temporal, {
+      allowed: temporalAllowed(state.taaOn, state.qualityScale)
+               && !!state.targets && state.targets.history.length === 2,
+      accumulating: accNow,
+      accumSamples: state.accumSamples,
+      geometrySame,
+    });
+    state.temporalPlan = plan;
+    // Seeded from history: the average carries on from there, not from zero.
+    state.accumSamples = plan.accumSamples;
+    const temporalFrame = plan.mode === 'temporal';
+
+    // Subpixel offset. Accumulation walks its R2 sequence; a temporally
+    // filtered moving frame walks a short Halton cycle; a plain single-sample
+    // frame has none, so that path is exactly what it always was.
     if (accNow && state.accumSamples < ACCUM_CAP) {
       const j = r2jitter(state.accumSamples);
       d[U.jitter] = j[0];
       d[U.jitter + 1] = j[1];
       d[U.accumWeight] = 1 / (state.accumSamples + 1);
+    } else if (temporalFrame) {
+      const j = temporalJitter(state.frameCount);
+      d[U.jitter] = j[0];
+      d[U.jitter + 1] = j[1];
+      d[U.accumWeight] = 1;
     } else {
       d[U.jitter] = 0; d[U.jitter + 1] = 0; d[U.accumWeight] = 1;
     }
+
+    // Reprojection camera: last frame's, or this frame's when there is no
+    // usable history (the weight is then zero and it is never consulted).
+    const pc = state.prevCam;
+    const havePrev = plan.weight > 0;
+    d[U.prevCamPos] = havePrev ? pc[0] : camX;
+    d[U.prevCamPos + 1] = havePrev ? pc[1] : camY;
+    d[U.prevCamPos + 2] = havePrev ? pc[2] : camZ;
+    d[U.prevCamTarget] = havePrev ? pc[3] : tgtX;
+    d[U.prevCamTarget + 1] = havePrev ? pc[4] : tgtY;
+    d[U.prevCamTarget + 2] = havePrev ? pc[5] : tgtZ;
+    d[U.prevYaw] = havePrev ? pc[6] : yaw;
+    d[U.historyWeight] = plan.weight;
+    pc[0] = camX; pc[1] = camY; pc[2] = camZ;
+    pc[3] = tgtX; pc[4] = tgtY; pc[5] = tgtZ; pc[6] = yaw;
+
+    // A frame that is not being accumulated is a single sample per pixel (or a
+    // short temporal average of them), so it stops the march at the pixel's
+    // footprint. An accumulating frame keeps the fixed, finer epsilon: its 96
+    // samples resolve the sub-pixel detail that epsilon finds.
+    d[U.temporal] = accNow ? 0 : MOVING_CONE_RADIUS;
+    // Sharpen only what the temporal filter softened.
+    d[U.temporal + 1] = temporalFrame && plan.weight > 0 ? TEMPORAL_SHARPEN : 0;
+    d[U.temporal + 2] = 0;
+    d[U.temporal + 3] = 0;
     // Whether the image the composite pass is about to read is an average of
     // several jittered samples, rather than a single one. accumWeight cannot
     // answer this: a converged frame takes the branch above and writes 1, the
@@ -1092,7 +1276,12 @@ export async function initFractalBackground(canvas, options = {}) {
     // A/B comparison. The shader asks one question, so both are folded here.
     const settled = accNow && state.accumSamples > 0;
     d[U.edgeAAGain] = settled ? 0.0 : state.edgeAA;
-    d[U._pad] = 0.0;
+    // A third reason: the frame has been through the temporal resolve with
+    // history behind it, so its silhouette is already an average of jittered
+    // samples. The edge filter is for the frames that are still single-sample
+    // -- temporal filtering off, a supersampled rung, or the first frame after
+    // history was lost.
+    if (temporalFrame && plan.weight > 0) d[U.edgeAAGain] = 0.0;
 
     // View-projection for the attractor line pass (matches the raymarcher's
     // camera: same eye, target, and vertical FOV).
@@ -1110,6 +1299,16 @@ export async function initFractalBackground(canvas, options = {}) {
   // ---- Single frame ----
   function renderFrame(nowMs, force) {
     if (state.disposed || !state.device || !state.targets) return;
+
+    // Acquire the swapchain first. If the context is not ready the whole frame
+    // is skipped BEFORE any state advances -- updateUniforms plans the temporal
+    // hand-overs, and a plan must not be recorded for a frame never drawn.
+    let canvasView;
+    try {
+      canvasView = state.context.getCurrentTexture().createView();
+    } catch (e) {
+      return; // context not ready (e.g. zero-size) — skip frame
+    }
 
     updateUniforms(nowMs);
 
@@ -1154,6 +1353,26 @@ export async function initFractalBackground(canvas, options = {}) {
       encoder.copyBufferToBuffer(state.probeBuffer, 0, state.probeStaging, 0, 8);
     }
 
+    const plan = state.temporalPlan;
+    const temporalFrame = plan.mode === 'temporal' && T.history.length === 2;
+    const readIdx = state.historyIndex;   // last frame's resolve
+    const writeIdx = 1 - readIdx;         // this frame's resolve
+    const extent = { width: T.w, height: T.h };
+
+    // Hand-overs between the two averages, done before anything is drawn.
+    if (plan.seedAccum && T.history.length === 2) {
+      // Coming to rest: start the in-place average from the temporal history
+      // instead of from one raw sample.
+      const h = T.history[readIdx];
+      encoder.copyTextureToTexture({ texture: h.scene }, { texture: T.sceneTex }, extent);
+      encoder.copyTextureToTexture({ texture: h.aux }, { texture: T.auxTex }, extent);
+    } else if (plan.seedHistory && temporalFrame) {
+      // Starting to move: the accumulated image is the history to reproject.
+      const h = T.history[readIdx];
+      encoder.copyTextureToTexture({ texture: T.sceneTex }, { texture: h.scene }, extent);
+      encoder.copyTextureToTexture({ texture: T.auxTex }, { texture: h.aux }, extent);
+    }
+
     // Pass 1: raymarch -> palette-independent material attachments. While
     // accumulating, blend the new jitter sample into the running average in
     // place. The first sample clears; subsequent samples load the prior mean.
@@ -1175,6 +1394,12 @@ export async function initFractalBackground(canvas, options = {}) {
             loadOp,
             storeOp: 'store',
           },
+          {
+            view: T.depthView,
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: 'clear',
+            storeOp: 'store',
+          },
         ],
       });
       pass.setBlendConstant({ r: blendWeight, g: blendWeight, b: blendWeight, a: blendWeight });
@@ -1194,40 +1419,54 @@ export async function initFractalBackground(canvas, options = {}) {
       pass.end();
     }
 
-    // Pass 2: bloom horizontal -> bloomA. Sources the average while
-    // accumulating, the raw scene otherwise.
-    {
+    const fullscreen = (view, pipeline, bindGroup, loadOp = 'clear') => {
       const pass = encoder.beginRenderPass({
-        colorAttachments: [{ view: T.bloomAView, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
+        colorAttachments: [{ view, loadOp, storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
       });
-      pass.setPipeline(state.pipelines.bloomH);
-      pass.setBindGroup(0, state.bindGroups.bloomH);
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, bindGroup);
+      pass.draw(3);
+      pass.end();
+    };
+
+    // Pass 2 (moving frames): temporal resolve. Blend this frame's jittered
+    // sample into the reprojected history, writing the other history pair.
+    if (temporalFrame) {
+      const out = T.history[writeIdx];
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [
+          { view: out.sceneView, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } },
+          { view: out.auxView, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } },
+        ],
+      });
+      pass.setPipeline(state.pipelines.temporal);
+      pass.setBindGroup(0, state.bindGroups.temporal[readIdx]);
       pass.draw(3);
       pass.end();
     }
-    // Pass 3: bloom vertical -> bloomB
-    {
-      const pass = encoder.beginRenderPass({
-        colorAttachments: [{ view: T.bloomBView, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
-      });
-      pass.setPipeline(state.pipelines.bloomV);
-      pass.setBindGroup(0, state.bindGroups.bloomV);
-      pass.draw(3);
-      pass.end();
+
+    // Where the post chain reads material from: the temporal resolve just
+    // written, or the in-place targets (accumulating, or no temporal filter).
+    const src = temporalFrame ? 1 + writeIdx : 0;
+
+    // Pass 3: bloom. Resolve + prefilter into the first level, downsample the
+    // rest of the chain...
+    fullscreen(T.bloomView[0], state.pipelines.bloomPrefilter, state.bindGroups.bloomPrefilter[src]);
+    for (let i = 1; i < BLOOM_LEVELS; i++) {
+      fullscreen(T.bloomView[i], state.pipelines.bloomDown, state.bindGroups.bloomLevel[i - 1]);
     }
+    // ...then add each level back into the one above it, widest first.
+    for (let i = BLOOM_LEVELS - 1; i > 0; i--) {
+      fullscreen(T.bloomView[i - 1], state.pipelines.bloomUp, state.bindGroups.bloomLevel[i], 'load');
+    }
+
     // Pass 4: composite -> swapchain
     {
-      let view;
-      try {
-        view = state.context.getCurrentTexture().createView();
-      } catch (e) {
-        return; // context not ready (e.g. zero-size) — skip frame
-      }
       const pass = encoder.beginRenderPass({
-        colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
+        colorAttachments: [{ view: canvasView, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
       });
       pass.setPipeline(state.pipelines.composite);
-      pass.setBindGroup(0, state.bindGroups.composite);
+      pass.setBindGroup(0, state.bindGroups.composite[src]);
       pass.draw(3);
       pass.end();
     }
@@ -1236,6 +1475,28 @@ export async function initFractalBackground(canvas, options = {}) {
 
     if (acc && drawScene) {
       state.accumSamples += 1;
+    }
+
+    // Carry the temporal state forward.
+    if (temporalFrame) state.historyIndex = writeIdx;
+    state.temporal = {
+      historyValid: temporalFrame && plan.historyValid,
+      stillCount: plan.stillCount,
+      // What the in-place targets hold now: an average while accumulating, a
+      // lone sample otherwise (which is no use as history).
+      accumHeld: acc ? state.accumSamples : 0,
+    };
+    state.frameCount += 1;
+
+    // A view that is motionless but not looping (the static pose shown under
+    // reduced motion, or a paused renderer) would otherwise stay one jittered
+    // sample per pixel forever. Keep drawing until the temporal average has
+    // settled; with nothing moving the frames average exactly.
+    if (!state.running && temporalFrame && plan.stillCount < STILL_CAP && !state.settleRaf) {
+      state.settleRaf = requestAnimationFrame((t) => {
+        state.settleRaf = 0;
+        if (!state.running && !state.disposed) renderFrame(t, true);
+      });
     }
 
     if (doProbe) {
@@ -1795,6 +2056,8 @@ export async function initFractalBackground(canvas, options = {}) {
     if (state.disposed) return;
     state.disposed = true;
     stop();
+    if (state.settleRaf) cancelAnimationFrame(state.settleRaf);
+    state.settleRaf = 0;
     if (io) io.disconnect();
     if (ro) ro.disconnect();
     document.removeEventListener('visibilitychange', onVisibility);
@@ -1809,19 +2072,10 @@ export async function initFractalBackground(canvas, options = {}) {
     window.removeEventListener('keyup', onKeyUp);
     window.removeEventListener('blur', onBlur);
     try {
-      if (state.targets) {
-        state.targets.sceneTex.destroy();
-        state.targets.auxTex.destroy();
-        state.targets.bloomA.destroy();
-        state.targets.bloomB.destroy();
-      }
+      destroyTargets();
       state.trajBuffer && state.trajBuffer.destroy();
       state.probeBuffer && state.probeBuffer.destroy();
       state.probeStaging && state.probeStaging.destroy();
-      if (state.targets) {
-        state.targets.accumA.destroy();
-        state.targets.accumB.destroy();
-      }
       state.uniformBuffer && state.uniformBuffer.destroy();
       state.device && state.device.destroy();
     } catch (e) {
@@ -2192,6 +2446,15 @@ export async function initFractalBackground(canvas, options = {}) {
       state.accumSamples = 0;
       nudgeRender();
     },
+    // Temporal antialiasing of moving frames. Off restores the single-sample
+    // moving frame (with the edge filter), which is what to compare against.
+    setTemporalAA(on) {
+      const want = !!on;
+      if (want === state.taaOn) return;
+      state.taaOn = want;
+      // The history textures exist only while this is on.
+      resize();
+    },
     setFlySpeed(v) {
       state.flyCam.speed = Math.max(FLY_SPEED_MIN, Math.min(FLY_SPEED_MAX, v));
       nudgeRender();
@@ -2241,6 +2504,11 @@ export async function initFractalBackground(canvas, options = {}) {
         flyPos: state.fly ? state.flyCam.pos.map((v) => +v.toFixed(2)) : null,
         clearance: Number.isFinite(state.probeDist) ? +state.probeDist.toFixed(4) : null,
         samples: state.accumSamples,
+        // Temporal antialiasing: requested, and whether the frame last drawn
+        // actually went through it (it is skipped on supersampled rungs and
+        // while a still view is being accumulated instead).
+        taa: state.taaOn,
+        taaActive: !!state.temporalPlan && state.temporalPlan.mode === 'temporal',
         colorCycle: state.colorCycle,
         colorCycleActive: state.colorCycle > 0
           && colorCycleMotionAllowed(reducedMotion(), state.colorCycleExplicit),

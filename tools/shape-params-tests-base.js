@@ -289,7 +289,10 @@ ok(packParams('nosuchshape', {}).every((v) => v === 0), 'and packs to all zeros'
 
 // ---- Wiring ----------------------------------------------------------------
 ok(/shapeParams: 104/.test(bg), 'the uniform block gives the parameters their own slots');
-ok(/const UNIFORM_FLOATS = 112;/.test(bg), 'and the buffer was grown to hold them');
+// "Holds them" means the buffer reaches past the last parameter slot (104 + 8).
+// It is allowed to be larger: fields appended after shapeParams (the temporal
+// reprojection block) grow it, and temporal.test.js pins the exact size.
+ok(Number(bg.match(/const UNIFORM_FLOATS = (\d+);/)[1]) >= 104 + 8, 'and the buffer is large enough to hold them');
 ok(/shapeParams\s+: array<vec4<f32>, 2>/.test(shader), 'the shader declares the matching field');
 ok(!/imageAdjust/.test(fs.readFileSync('src/shape-params.js', 'utf8')),
    'nothing is packed into imageAdjust any more');

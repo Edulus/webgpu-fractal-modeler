@@ -75,6 +75,7 @@ mathematicians named there.
 │       ├── engel.wgsl.js         generated plesiohedron tables + its estimator
 │       ├── material.wgsl.js      palette-independent raymarch material pass
 │       ├── composite.wgsl.js     palette resolve, bloom, image controls, tonemap
+│       ├── temporal.wgsl.js      temporal resolve: reprojected history for moving frames
 │       └── attractor.wgsl.js     palette-independent strange-attractor lines
 ├── tools/
 │   ├── shader-check.html         compiles every WGSL module and reports errors
@@ -403,16 +404,17 @@ The renderer uses two principal stages:
    - Strange attractors are integrated on the CPU with RK4 and drawn as weighted additive line geometry.
    - Two `rgba16float` attachments carry palette coordinates and scalar shading terms rather than baked RGB.
    - Progressive samples are averaged directly into those attachments with fixed-function blend constants, so no accumulation ping-pong textures or separate accumulation pass are required.
+   - A third attachment records the ray distance per pixel. While the view moves, a **temporal resolve** pass uses it to reproject the previous frame, so jittered samples keep averaging across motion instead of each moving frame being a single aliased sample. Moving frames also stop the march at the pixel's own footprint, which removes sub-pixel speckle. `?taa=0` turns this off to compare.
 
 2. **Palette resolve + composite pass**
    - The selected cosine palette or imported stop ramp is evaluated from the stored coordinates at the live cycle phase.
-   - Separable Gaussian bloom runs on the resolved HDR colour, so bloom follows the palette cycle too.
+   - A five-level bloom chain runs on the resolved HDR colour, so bloom follows the palette cycle too and has both a tight core and a long soft falloff.
    - The explicit Hue image adjustment, exposure, saturation and contrast follow as post controls.
    - ACES tonemapping, gamma correction, vignette and dithering produce the final presentation image.
 
 Surface shading still includes directional lighting, soft shadows, ambient occlusion, orbit-trap colour, Fresnel rim light, emission and distance fog; the difference is where colour is assigned. Geometry and lighting converge first, then the palette is looked up afterwards.
 
-Uniforms occupy one 400-byte, 16-byte-aligned buffer. The byte offsets are mirrored between the WGSL structs and the JavaScript `U` offset table in `fractal-bg.js`; keep both definitions synchronized when changing the layout.
+Uniforms occupy one 496-byte, 16-byte-aligned buffer. The byte offsets are mirrored between the WGSL structs and the JavaScript `U` offset table in `fractal-bg.js`; keep both definitions synchronized when changing the layout.
 
 ## Model implementations
 
