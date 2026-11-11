@@ -292,7 +292,12 @@ fn fs_material(in : VSOut) -> MaterialOut {
   var trap = 1.0;
   var glow = 0.0;
 
+  // MAX_STEPS is only the compile-time ceiling. The live ceiling is the quality
+  // rung's, in u.detail.x -- without this break every rung marched to 320 and
+  // the ladder's step column bought nothing.
+  let maxSteps = i32(u.detail.x);
   for (var i = 0; i < MAX_STEPS; i = i + 1) {
+    if (i >= maxSteps) { break; }
     let pos = ro2 + rd * t;
     let de = mapDE(pos);
     let d = de.dist;
