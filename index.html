@@ -953,6 +953,10 @@
         const n = raw === null ? NaN : Number(raw);
         return Number.isFinite(n) ? Math.max(0, n) : 1;
       })(),
+      // ?taa=0 turns temporal antialiasing of moving frames off, leaving the
+      // single-sample moving frame and its edge filter -- the picture to
+      // compare against. Anything else leaves it on.
+      taa: new URLSearchParams(location.search).get('taa') !== '0',
       onUnsupported: (reason) => {
         console.warn('Fractal renderer unsupported:', reason);
         canvas.style.display = 'none';

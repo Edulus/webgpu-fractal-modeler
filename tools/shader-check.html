@@ -12,6 +12,7 @@ import { FRACTAL_WGSL } from '../src/shaders/fractal.wgsl.js';
 import { MATERIAL_WGSL } from '../src/shaders/material.wgsl.js';
 import { COMPOSITE_WGSL } from '../src/shaders/composite.wgsl.js';
 import { ATTRACTOR_WGSL } from '../src/shaders/attractor.wgsl.js';
+import { TEMPORAL_WGSL } from '../src/shaders/temporal.wgsl.js';
 
 const out = [];
 try {
@@ -24,6 +25,7 @@ try {
     ['material.wgsl', MATERIAL_WGSL],
     ['composite.wgsl', COMPOSITE_WGSL],
     ['attractor.wgsl', ATTRACTOR_WGSL],
+    ['temporal.wgsl', TEMPORAL_WGSL],
   ];
   let failed = 0;
   for (const [name, code] of modules) {

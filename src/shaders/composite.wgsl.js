@@ -5,12 +5,18 @@
 // selected palette at the live cycle phase, so cycling re-indexes the palette
 // instead of hue-rotating an already shaded pixel.
 //
-// Three fragment entry points share one fullscreen-triangle vertex stage:
-//   fs_bloom_h  : resolve material, prefilter, horizontal Gaussian blur
-//   fs_bloom_v  : vertical Gaussian blur
-//   fs_composite: resolve material + bloom, image controls, tonemap, alpha
+// Fragment entry points sharing one fullscreen-triangle vertex stage:
+//   fs_bloom_prefilter: resolve material, isolate bright/emissive, downsample
+//   fs_bloom_down     : downsample one bloom level into the next
+//   fs_bloom_up       : tent-filter a level back up (blended additively)
+//   fs_composite      : resolve material + bloom, image controls, tonemap, alpha
 //
-// Bloom runs at half internal resolution for softness + speed.
+// Bloom is a chain of levels (half internal res, a quarter, an eighth, ...).
+// The narrow levels keep the glow tight around bright detail; the wide ones
+// give it a long soft falloff. A single blur at one size can only do one.
+
+// Bloom chain length. fractal-bg.js allocates one target per level.
+export const BLOOM_LEVELS = 5;
 
 export const COMPOSITE_WGSL = /* wgsl */ `
 // Must match the layout used by the raymarch pass (same uniform buffer).
@@ -51,6 +57,19 @@ struct Uniforms {
   // separate image adjustment; palette cycling is handled before bloom.
   imageAdjust  : vec4<f32>,
   detail       : vec4<f32>,
+  // Per-shape parameters. Unused by the post chain, declared only so the
+  // fields after them land on the right offsets.
+  shapeParams  : array<vec4<f32>, 2>,
+  // Temporal reprojection of moving frames (see temporal.wgsl.js). The camera
+  // of the previous frame, how much of its result to keep, and its Shape
+  // Explorer yaw (the value detail.w held then).
+  prevCamPos   : vec3<f32>,
+  historyWeight: f32,
+  prevCamTarget: vec3<f32>,
+  prevYaw      : f32,
+  // (hit-cone radius in render pixels or 0 for the fixed epsilon, output
+  //  sharpening strength, spare, spare)
+  temporal     : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;
@@ -134,6 +153,16 @@ fn attractorPalette(t : f32) -> vec3<f32> {
   return col;
 }
 
+// How much of the march glow is laid directly over the surface as light.
+//
+// The glow only exists on pixels where the ray landed (the material pass drops
+// it on a miss), so this term is a tinted veil over the shading itself. At its
+// original 0.4 it flattened the modelling: crevices that should fall dark were
+// lifted towards the glow colour and the surface read as washed out. The halo
+// around bright detail is the bloom's job and is unaffected; this only stops
+// the same light being painted a second time on top of the surface.
+const GLOW_TINT : f32 = 0.18;
+
 // Reconstruct the old HDR scene from palette-independent material weights.
 // The cycle phase is added to palette COORDINATES, not to RGB. A chosen palette
 // therefore remains itself for the entire loop; only which part of it is used
@@ -176,7 +205,7 @@ fn resolveScene(uv : vec2<f32>) -> vec4<f32> {
 
   // The old raymarch tinted near-miss glow with palette(0.5). Shift that lookup
   // by the very same phase so surface, seams and emissive threads stay locked.
-  color = color + palette(0.5 + phase) * m.w * 0.4;
+  color = color + palette(0.5 + phase) * m.w * GLOW_TINT;
   return vec4<f32>(color, m.w);
 }
 
@@ -262,54 +291,70 @@ fn resolveSceneEdgeAA(uv : vec2<f32>) -> vec4<f32> {
   return mix(base, alongMean, blend);
 }
 
-// 9-tap Gaussian weights (normalized).
-const W0 : f32 = 0.227027;
-const W1 : f32 = 0.194594;
-const W2 : f32 = 0.121621;
-const W3 : f32 = 0.054054;
-const W4 : f32 = 0.016216;
+// ---- Bloom ----------------------------------------------------------------
 
+// Isolate bright colour + emissive glow from the resolved scene.
 fn prefilterAt(uv : vec2<f32>) -> vec3<f32> {
   let c = resolveScene(uv);
-  let threshold = 0.55;
-  let bright = max(c.rgb - vec3<f32>(threshold), vec3<f32>(0.0));
-  let glow = c.a;
-  return bright + vec3<f32>(glow) * 0.6;
+  // Soft knee, so bloom fades in rather than switching on at a threshold.
+  let threshold = 0.6;
+  let knee = 0.3;
+  let br = max(c.r, max(c.g, c.b));
+  let soft = clamp(br - threshold + knee, 0.0, 2.0 * knee);
+  let contrib = max(soft * soft / (4.0 * knee), br - threshold) / max(br, 1e-4);
+  // Emission, tinted halfway towards the palette at the live cycle phase, so
+  // the halo carries the shape's colour instead of bleaching towards white.
+  let glowCol = mix(vec3<f32>(1.0), palette(0.5 + u.colorPhase), 0.5);
+  return c.rgb * contrib + glowCol * c.a * 0.6;
 }
 
-// Horizontal blur (+ palette resolve + prefilter on the way in).
+// Level 0: resolve + prefilter at four bilinear taps, each centred on a 2x2
+// block of the material -- a 4x4 box over the source.
 @fragment
-fn fs_bloom_h(in : VSOut) -> @location(0) vec4<f32> {
-  let dims = vec2<f32>(textureDimensions(srcTex, 0));
-  let texel = vec2<f32>(1.0 / dims.x, 0.0);
-  var acc = prefilterAt(in.uv) * W0;
-  acc += prefilterAt(in.uv + texel * 1.0) * W1;
-  acc += prefilterAt(in.uv - texel * 1.0) * W1;
-  acc += prefilterAt(in.uv + texel * 2.0) * W2;
-  acc += prefilterAt(in.uv - texel * 2.0) * W2;
-  acc += prefilterAt(in.uv + texel * 3.0) * W3;
-  acc += prefilterAt(in.uv - texel * 3.0) * W3;
-  acc += prefilterAt(in.uv + texel * 4.0) * W4;
-  acc += prefilterAt(in.uv - texel * 4.0) * W4;
-  return vec4<f32>(acc, 1.0);
+fn fs_bloom_prefilter(in : VSOut) -> @location(0) vec4<f32> {
+  let texel = 1.0 / vec2<f32>(textureDimensions(srcTex, 0));
+  let a = prefilterAt(in.uv + texel * vec2<f32>(-1.0, -1.0));
+  let b = prefilterAt(in.uv + texel * vec2<f32>( 1.0, -1.0));
+  let c = prefilterAt(in.uv + texel * vec2<f32>(-1.0,  1.0));
+  let d = prefilterAt(in.uv + texel * vec2<f32>( 1.0,  1.0));
+  // Karis average: down-weight very bright taps, so one hot pixel cannot
+  // become a flickering blob once it is spread across the wide levels.
+  let wa = 1.0 / (1.0 + luma(a));
+  let wb = 1.0 / (1.0 + luma(b));
+  let wc = 1.0 / (1.0 + luma(c));
+  let wd = 1.0 / (1.0 + luma(d));
+  return vec4<f32>((a * wa + b * wb + c * wc + d * wd) / (wa + wb + wc + wd), 1.0);
 }
 
-// Vertical blur (source already prefiltered).
 @fragment
-fn fs_bloom_v(in : VSOut) -> @location(0) vec4<f32> {
-  let dims = vec2<f32>(textureDimensions(srcTex, 0));
-  let texel = vec2<f32>(0.0, 1.0 / dims.y);
-  var acc = textureSampleLevel(srcTex, samp, in.uv, 0.0).rgb * W0;
-  acc += textureSampleLevel(srcTex, samp, in.uv + texel * 1.0, 0.0).rgb * W1;
-  acc += textureSampleLevel(srcTex, samp, in.uv - texel * 1.0, 0.0).rgb * W1;
-  acc += textureSampleLevel(srcTex, samp, in.uv + texel * 2.0, 0.0).rgb * W2;
-  acc += textureSampleLevel(srcTex, samp, in.uv - texel * 2.0, 0.0).rgb * W2;
-  acc += textureSampleLevel(srcTex, samp, in.uv + texel * 3.0, 0.0).rgb * W3;
-  acc += textureSampleLevel(srcTex, samp, in.uv - texel * 3.0, 0.0).rgb * W3;
-  acc += textureSampleLevel(srcTex, samp, in.uv + texel * 4.0, 0.0).rgb * W4;
-  acc += textureSampleLevel(srcTex, samp, in.uv - texel * 4.0, 0.0).rgb * W4;
-  return vec4<f32>(acc, 1.0);
+fn fs_bloom_down(in : VSOut) -> @location(0) vec4<f32> {
+  let texel = 1.0 / vec2<f32>(textureDimensions(srcTex, 0));
+  var acc = textureSampleLevel(srcTex, samp, in.uv + texel * vec2<f32>(-1.0, -1.0), 0.0).rgb;
+  acc += textureSampleLevel(srcTex, samp, in.uv + texel * vec2<f32>( 1.0, -1.0), 0.0).rgb;
+  acc += textureSampleLevel(srcTex, samp, in.uv + texel * vec2<f32>(-1.0,  1.0), 0.0).rgb;
+  acc += textureSampleLevel(srcTex, samp, in.uv + texel * vec2<f32>( 1.0,  1.0), 0.0).rgb;
+  return vec4<f32>(acc * 0.25, 1.0);
 }
+
+// 3x3 tent upsample of the smaller level. The pipeline blends the result
+// additively onto the level above, so level 0 ends up holding the sum.
+@fragment
+fn fs_bloom_up(in : VSOut) -> @location(0) vec4<f32> {
+  let texel = 1.0 / vec2<f32>(textureDimensions(srcTex, 0));
+  var acc = textureSampleLevel(srcTex, samp, in.uv, 0.0).rgb * 4.0;
+  acc += textureSampleLevel(srcTex, samp, in.uv + texel * vec2<f32>( 1.0,  0.0), 0.0).rgb * 2.0;
+  acc += textureSampleLevel(srcTex, samp, in.uv + texel * vec2<f32>(-1.0,  0.0), 0.0).rgb * 2.0;
+  acc += textureSampleLevel(srcTex, samp, in.uv + texel * vec2<f32>( 0.0,  1.0), 0.0).rgb * 2.0;
+  acc += textureSampleLevel(srcTex, samp, in.uv + texel * vec2<f32>( 0.0, -1.0), 0.0).rgb * 2.0;
+  acc += textureSampleLevel(srcTex, samp, in.uv + texel * vec2<f32>( 1.0,  1.0), 0.0).rgb;
+  acc += textureSampleLevel(srcTex, samp, in.uv + texel * vec2<f32>(-1.0,  1.0), 0.0).rgb;
+  acc += textureSampleLevel(srcTex, samp, in.uv + texel * vec2<f32>( 1.0, -1.0), 0.0).rgb;
+  acc += textureSampleLevel(srcTex, samp, in.uv + texel * vec2<f32>(-1.0, -1.0), 0.0).rgb;
+  return vec4<f32>(acc / 16.0, 1.0);
+}
+
+// The upsample chain sums every level into the top one; normalise by the count.
+const BLOOM_NORM : f32 = ${(1 / BLOOM_LEVELS).toFixed(5)};
 
 // ACES filmic tonemap (Narkowicz approximation).
 fn acesFilm(x : vec3<f32>) -> vec3<f32> {
@@ -366,8 +411,29 @@ fn contrastCurve(c : vec3<f32>, bg : vec3<f32>, k : f32) -> vec3<f32> {
 
 @fragment
 fn fs_composite(in : VSOut) -> @location(0) vec4<f32> {
-  let scene = resolveSceneEdgeAA(in.uv);
-  let bloom = textureSampleLevel(bloomTex, samp, in.uv, 0.0).rgb;
+  var scene = resolveSceneEdgeAA(in.uv);
+
+  // Contrast-limited sharpening, for temporally resolved frames only. The
+  // temporal filter trades a little edge contrast for stability; this pushes
+  // the pixel away from the mean of its four neighbours to win it back, and
+  // clamps to their range so it can never ring. JS writes a strength of zero
+  // for accumulated frames, which are genuinely resolved and are left exactly
+  // as they were.
+  let sharpen = u.temporal.y;
+  if (sharpen > 0.001) {
+    let dims = max(vec2<f32>(textureDimensions(srcTex, 0)), vec2<f32>(1.0));
+    let texel = 1.0 / dims;
+    let n = resolveScene(in.uv - vec2<f32>(0.0, texel.y)).rgb;
+    let s = resolveScene(in.uv + vec2<f32>(0.0, texel.y)).rgb;
+    let e = resolveScene(in.uv + vec2<f32>(texel.x, 0.0)).rgb;
+    let w = resolveScene(in.uv - vec2<f32>(texel.x, 0.0)).rgb;
+    let lo = min(scene.rgb, min(min(n, s), min(e, w)));
+    let hi = max(scene.rgb, max(max(n, s), max(e, w)));
+    let pushed = scene.rgb + (scene.rgb - (n + s + e + w) * 0.25) * sharpen;
+    scene = vec4<f32>(clamp(pushed, lo, hi), scene.a);
+  }
+
+  let bloom = textureSampleLevel(bloomTex, samp, in.uv, 0.0).rgb * BLOOM_NORM;
   let hdr = scene.rgb + bloom * 1.1;
 
   // Colour-cycle phase is already a palette-coordinate offset inside
@@ -393,7 +459,12 @@ fn fs_composite(in : VSOut) -> @location(0) vec4<f32> {
 
   var alpha = 1.0;
   if (u.bgMode < 0.5) {
-    let cov = clamp(luma(scene.rgb) * 1.8 + scene.a * 0.9 + luma(bloom) * 1.4, 0.0, 1.0);
+    // Coverage from the brightest channel rather than luminance, so a
+    // saturated blue or red surface covers the page as solidly as a white one
+    // (blue alone has a luminance weight of 0.07 and used to read as see-through).
+    let sceneMax = max(scene.r, max(scene.g, scene.b));
+    let bloomMax = max(bloom.r, max(bloom.g, bloom.b));
+    let cov = clamp(sceneMax * 2.5 + scene.a * 0.9 + bloomMax * 0.9, 0.0, 1.0);
     alpha = cov;
   }
 

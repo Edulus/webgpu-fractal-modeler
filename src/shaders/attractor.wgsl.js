@@ -12,7 +12,7 @@
 // lets colour cycling remain palette-faithful on a converged frame.
 
 export const ATTRACTOR_WGSL = /* wgsl */ `
-// Mirrors the shared Uniforms struct through viewProj. The backing buffer has
+// Mirrors the shared Uniforms struct through jitter. The backing buffer has
 // more fields after this, but this shader does not need them.
 struct Uniforms {
   resolution : vec2<f32>,
@@ -39,6 +39,7 @@ struct Uniforms {
   reducedMotion: f32,
   _pad         : f32,
   viewProj     : mat4x4<f32>,
+  jitter       : vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;
@@ -58,11 +59,21 @@ struct VSOut {
 fn vs_line(@location(0) inPos : vec3<f32>, @location(1) inSpeed : f32) -> VSOut {
   var out : VSOut;
   out.pos = u.viewProj * vec4<f32>(inPos, 1.0);
+  // The same subpixel offset the raymarch applies (render pixels -> clip
+  // space; +y is down in uv, up in clip). Rasterised lines are one pixel wide
+  // and hard-edged, so it is the averaging of offset frames -- accumulation
+  // when still, the temporal resolve when moving -- that antialiases them.
+  let nudge = vec2<f32>(-u.jitter.x, u.jitter.y) * 2.0
+              / max(u.resolution, vec2<f32>(1.0));
+  out.pos = vec4<f32>(out.pos.xy + nudge * out.pos.w, out.pos.zw);
   out.speed = inSpeed;
   out.depth = length(inPos - u.camPos);
   return out;
 }
 
+// The pass has a third attachment (ray distance, for temporal reprojection).
+// Lines do not write it: the pipeline masks it off, so it keeps the value the
+// background draw gave it.
 struct LineOut {
   @location(0) material : vec4<f32>,
   @location(1) aux : vec4<f32>,
