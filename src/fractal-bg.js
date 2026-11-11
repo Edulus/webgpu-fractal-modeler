@@ -24,6 +24,7 @@ import {
 import {
   temporalJitter, temporalAllowed, planTemporalFrame, STILL_CAP,
 } from './temporal.js';
+import { startProbeReadback } from './probe.js';
 import { getPalette } from './palettes.js';
 import { packParams, clampParams, defaultsFor, paramsFor } from './shape-params.js';
 import { clampStops, averageColor, MAX_STOPS } from './palette-io.js';
@@ -431,9 +432,10 @@ export async function initFractalBackground(canvas, options = {}) {
     // Clearance at the camera, read back from the GPU one frame late. Only the
     // GPU can evaluate the distance estimators, and fly speed scales by this so
     // travel feels the same close up as in open space.
-    probeBuffer: null,
-    probeStaging: null,
-    probeBusy: false,
+    // One object per device: { buffer, staging, bindGroup, busy }. Everything
+    // about the probe's readback lives on it, so a readback that finishes late
+    // can only ever touch the buffers it was started on (see issueProbeReadback).
+    probe: null,
     probeDist: Infinity,
     probeHit: -1,        // centre-ray surface distance, -1 = miss
     probeAt: 0,          // last probe dispatch, for throttling
@@ -589,6 +591,39 @@ export async function initFractalBackground(canvas, options = {}) {
     });
 
     state._bgl = { raymarchBGL, probeBGL, blurBGL, resolveBGL, compositeBGL, temporalBGL };
+
+    // The clearance probe's two eight-byte buffers do not depend on the size of
+    // the render targets, so they are made once per device here -- not in
+    // createTargets(), which runs on every resize and rung change. Recreating
+    // them there left a readback in flight on the discarded staging buffer; when
+    // it finished it cleared the busy flag while a newer readback was still
+    // pending, and the next probe copied into a buffer that was waiting to be
+    // mapped. That is a validation error, and it repeated every probe interval
+    // until the pending map completed.
+    {
+      const buffer = device.createBuffer({
+        label: 'clearance-probe-storage',
+        size: 8,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+      });
+      const staging = device.createBuffer({
+        label: 'clearance-probe-staging',
+        size: 8,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      });
+      state.probe = {
+        buffer,
+        staging,
+        busy: false,
+        bindGroup: device.createBindGroup({
+          layout: probeBGL,
+          entries: [
+            { binding: 0, resource: { buffer: state.uniformBuffer } },
+            { binding: 1, resource: { buffer } },
+          ],
+        }),
+      };
+    }
 
     // Progressive accumulation is done by fixed-function blending directly in
     // the material targets. For sample n, source contributes 1/(n+1) and the
@@ -758,23 +793,6 @@ export async function initFractalBackground(canvas, options = {}) {
     state.bindGroups.raymarch = device.createBindGroup({
       layout: state._bgl.raymarchBGL,
       entries: [{ binding: 0, resource: ub }],
-    });
-
-    state.probeBuffer = device.createBuffer({
-      size: 8,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-    });
-    state.probeStaging = device.createBuffer({
-      size: 8,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-    });
-    state.probeBusy = false;
-    state.bindGroups.probe = device.createBindGroup({
-      layout: state._bgl.probeBGL,
-      entries: [
-        { binding: 0, resource: ub },
-        { binding: 1, resource: { buffer: state.probeBuffer } },
-      ],
     });
 
     // The post chain reads material from one of three places: the in-place
@@ -1336,7 +1354,7 @@ export async function initFractalBackground(canvas, options = {}) {
     // tolerate a stale reading by design.
     const probeDue = nowMs - state.probeAt >= PROBE_INTERVAL_MS;
     const doProbe = (state.fly || state.explorer) && state.pipelines.probe
-                    && !state.probeBusy && probeDue
+                    && state.probe && !state.probe.busy && probeDue
                     // Every distance-estimated surface. Attractors are line
                     // geometry and the cosmic web is a density field, so
                     // neither has a surface to probe for. This was previously
@@ -1347,10 +1365,10 @@ export async function initFractalBackground(canvas, options = {}) {
       state.probeAt = nowMs;
       const cpass = encoder.beginComputePass();
       cpass.setPipeline(state.pipelines.probe);
-      cpass.setBindGroup(0, state.bindGroups.probe);
+      cpass.setBindGroup(0, state.probe.bindGroup);
       cpass.dispatchWorkgroups(1);
       cpass.end();
-      encoder.copyBufferToBuffer(state.probeBuffer, 0, state.probeStaging, 0, 8);
+      encoder.copyBufferToBuffer(state.probe.buffer, 0, state.probe.staging, 0, 8);
     }
 
     const plan = state.temporalPlan;
@@ -1499,18 +1517,16 @@ export async function initFractalBackground(canvas, options = {}) {
       });
     }
 
-    if (doProbe) {
-      // Async map; the value lands a frame or two later, which is fine for a
-      // speed control. Failures (device lost mid-flight) just clear the flag.
-      state.probeBusy = true;
-      state.probeStaging.mapAsync(GPUMapMode.READ).then(() => {
-        const v = new Float32Array(state.probeStaging.getMappedRange());
-        state.probeDist = v[0];
-        state.probeHit = v[1];
-        state.probeStaging.unmap();
-        state.probeBusy = false;
-      }).catch(() => { state.probeBusy = false; });
-    }
+    if (doProbe) issueProbeReadback(state.probe);
+  }
+
+  // Read the probe result back; the logic (and why it takes the probe object
+  // rather than reading state) is in probe.js.
+  function issueProbeReadback(probe) {
+    startProbeReadback(probe, () => probe === state.probe, (dist, hit) => {
+      state.probeDist = dist;
+      state.probeHit = hit;
+    }, GPUMapMode.READ);
   }
 
   // ---- Adaptive quality ----
@@ -2074,8 +2090,8 @@ export async function initFractalBackground(canvas, options = {}) {
     try {
       destroyTargets();
       state.trajBuffer && state.trajBuffer.destroy();
-      state.probeBuffer && state.probeBuffer.destroy();
-      state.probeStaging && state.probeStaging.destroy();
+      state.probe && state.probe.buffer.destroy();
+      state.probe && state.probe.staging.destroy();
       state.uniformBuffer && state.uniformBuffer.destroy();
       state.device && state.device.destroy();
     } catch (e) {
