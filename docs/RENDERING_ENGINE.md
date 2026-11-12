@@ -115,11 +115,15 @@ Bloom is a chain of five levels: half the internal resolution, then a quarter, a
 
 ### 4.5 Composite
 
-The final pass resolves material through the live palette, applies a contrast-limited sharpen to temporally resolved frames, combines bloom, applies explicit Hue, exposure, ACES tonemapping, gamma, saturation, backdrop-relative contrast, and then writes to the swapchain.
+The final pass resolves material through the live palette (with a bicubic upscale when the material is below canvas resolution, see below), applies a contrast-limited sharpen to temporally resolved frames, combines bloom, applies explicit Hue, exposure, ACES tonemapping, gamma, saturation, backdrop-relative contrast, and then writes to the swapchain.
 
 The sharpen pushes each pixel away from the mean of its four neighbours and clamps to their range, so it cannot ring. It wins back the edge contrast the temporal filter trades for stability, and it is gated off for accumulated frames, which are genuinely resolved.
 
 The march glow is laid over the surface only at `GLOW_TINT = 0.18` (it was 0.4). That term exists only on pixels where the ray landed, so at the old strength it was a tinted veil that lifted crevices towards the glow colour and flattened the modelling. The halo around bright detail is the bloom's job and is unaffected.
+
+**Bicubic upscale.** Below scale 1.0 the material is stretched to the canvas, and bilinear filtering does that with visible softness. The composite's centre sample uses Catmull-Rom instead (`resolveSceneUpscaled`), applied to the material before the palette lookup, which is valid because every channel is a weighted sum. Catmull-Rom has negative lobes, so the result is clamped to the four texels it lies between, which keeps weights non-negative and prevents ringing. Only the centre sample pays for the nine taps; the edge filter's taps, the sharpen neighbourhood and the bloom prefilter stay bilinear. At scale 1.0 and above it is plain bilinear: exact at 1:1, and the right filter when reducing a supersampled rung.
+
+The dither is seeded per **canvas** pixel. Seeded from the internal resolution, every internal texel shared one value, which at a half-resolution rung showed as 2x2 blocks.
 
 In transparent mode, page coverage comes from the brightest channel rather than luminance. A saturated blue surface has a luminance weight of 0.07 and used to read as see-through; it now covers the page as solidly as a white one.
 
