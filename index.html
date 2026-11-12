@@ -687,6 +687,7 @@
         <option value="low">Low</option>
         <option value="medium">Medium</option>
         <option value="high">High</option>
+        <option value="ultra">Ultra (native density)</option>
         <option value="auto" selected>Auto</option>
         <option value="max">Max</option>
       </select>
@@ -1441,7 +1442,9 @@
         'cosmicweb', 'ziggurat', 'cubestack', 'quasicrystal'];
       setInterval(() => {
         const i = handle.info;
-        hud.textContent = `${names[i.fractalType]} · q${i.qualityScale} · ${i.fps}fps` +
+        // Ultra shares High's rung, so show the pixel density that sets it apart.
+        hud.textContent = `${names[i.fractalType]} · q${i.qualityScale}`
+          + (i.qualityMode === 'ultra' ? ` @${i.dpr}x` : '') + ` · ${i.fps}fps` +
           (i.fly
             ? ` · fly ${i.flySpeed}×${i.clearance !== null ? ` · gap ${i.clearance}` : ''}`
             : (i.explorer ? ` · ${i.zoom}×${i.pinned ? ' pin' : ''}` : '')) +

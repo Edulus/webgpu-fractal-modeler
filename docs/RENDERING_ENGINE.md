@@ -211,12 +211,15 @@ The loops break at the live values in `u.detail`, so raising the static ceiling 
 
 Fixed presets map onto the same ladder:
 
-| Mode | Rung |
-| --- | ---: |
-| Low | 1 |
-| Medium | 3 |
-| High | 5 |
-| Max preset rung | 9 |
+| Mode | Rung | DPR cap |
+| --- | ---: | ---: |
+| Low | 1 | 2 |
+| Medium | 3 | 2 |
+| High | 5 | 2 |
+| Ultra | 5 | 3 |
+| Max preset rung | 9 | 2 |
+
+**Ultra** is High's rung — the same scale, march steps and iterations — rendered with the device-pixel-ratio cap raised from 2 to 3 (`dprCapFor()` in `quality.js`). It buys pixel density, not mathematics: on a 3× phone or laptop it is the native image rather than a 2× image scaled up by the browser. On a display at 2× or below it is identical to High. It is a fixed mode with no governor, so it holds that density even when the device cannot keep up; that is the point of choosing it. The selector order is Low → Medium → High → Ultra → Auto → Max.
 
 Before Auto has measurements, it makes a disposable starting guess:
 
@@ -372,7 +375,7 @@ The fix is one pure decision function rather than wider comparisons in several c
 
 ## 9. Resolution, supersampling, DPR, and texture limits
 
-The swapchain normally tracks full device-pixel resolution. DPR is capped at 2, and internal material resolution is:
+The swapchain normally tracks full device-pixel resolution. DPR is capped at 2 (3 in Ultra; see section 7.3), and internal material resolution is:
 
 ```text
 render width  = device-pixel width  * quality scale

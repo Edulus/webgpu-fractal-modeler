@@ -5,7 +5,7 @@
 // Public handle API:
 //   handle.setFractal('mandelbulb' | 'mandelbox' | 'menger' | 'julia')
 //   handle.setPalette('aurora' | 'ember' | 'oil-slick' | 'mono-ice')
-//   handle.setQuality('low' | 'medium' | 'high' | 'auto')
+//   handle.setQuality('low' | 'medium' | 'high' | 'ultra' | 'auto' | 'max')
 //   handle.setExplorer(bool)   orbit a model
 //   handle.setFly(bool)        free flight, able to travel inside a model
 //   handle.pause() / handle.resume() / handle.destroy()
@@ -20,6 +20,7 @@ import { ATTRACTOR_WGSL } from './shaders/attractor.wgsl.js';
 import {
   LADDER, TOP, PRESET_RUNG, BUDGET_MS,
   govInit, govSample, govResync, rung, clampIndex, showcaseIndex, planMode, maxRungForLimit,
+  dprCapFor,
 } from './quality.js';
 import {
   temporalJitter, temporalAllowed, planTemporalFrame, STILL_CAP,
@@ -316,7 +317,7 @@ const TEMPORAL_SHARPEN = 0.4;
  * @param {object} [options]
  * @param {string}  [options.fractal='mandelbulb']
  * @param {string}  [options.palette='aurora']
- * @param {string}  [options.quality='auto']  'low'|'medium'|'high'|'auto'
+ * @param {string}  [options.quality='auto']  'low'|'medium'|'high'|'ultra'|'auto'|'max'
  * @param {boolean} [options.transparent=true]
  * @param {number}  [options.edgeAA=1]  moving-frame silhouette filter gain; 0 disables
  * @param {boolean} [options.taa=true]  temporal antialiasing of moving frames
@@ -976,7 +977,8 @@ export async function initFractalBackground(canvas, options = {}) {
 
   // ---- Resize handling ----
   function resize() {
-    const dprCap = 2;
+    // 2 normally; 3 in 'ultra' (see dprCapFor in quality.js).
+    const dprCap = dprCapFor(state.qualityMode);
     const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
     const rect = canvas.getBoundingClientRect();
     const cssW = Math.max(1, rect.width || window.innerWidth);
@@ -2508,6 +2510,9 @@ export async function initFractalBackground(canvas, options = {}) {
         shapeParams: { ...state.shapeParamValues },
         qualityMode: state.qualityMode,
         qualityScale: +state.qualityScale.toFixed(2),
+        // The device pixel ratio actually in use, after the cap. Diagnostics
+        // used to assume the cap was always 2; Ultra raises it.
+        dpr: +state.dpr.toFixed(3),
         rung: state.detailRung,
         steps: LADDER[clampIndex(state.detailRung)].steps,
         iters: LADDER[clampIndex(state.detailRung)].iters,
