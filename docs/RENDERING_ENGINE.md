@@ -29,6 +29,7 @@ The design follows several principles:
 - `src/quality.js` — pure adaptive-quality decision logic, quality ladder, mode planning, texture-limit rung calculation, and optional environment-free diagnostic observation hooks.
 - `src/diagnostics.js` — developer snapshots, bounded rung history, report formatting, and the optional browser-facing diagnostics controller.
 - `src/camera.js` — pure orbit/fly mathematics, drift, zoom-rate helpers, and device-loss policy.
+- `src/probe.js` — the clearance probe's asynchronous readback, scoped to the probe object it belongs to.
 - `src/temporal.js` — pure policy for temporal antialiasing of moving frames: jitter sequence, history weights, and the hand-overs to and from progressive accumulation.
 - `src/palettes.js` — built-in cosine palettes.
 - `src/palette-io.js` — imported palette parsing and persistence.
@@ -68,6 +69,10 @@ It is deliberately:
 - read back asynchronously, accepting a frame or two of latency.
 
 The probe supports clearance-relative fly movement and orbit surface re-pinning for deep zoom.
+
+Its two eight-byte buffers are created **once per device**, in `createStaticResources()`, and not in `createTargets()`: they do not depend on the render-target size, and `createTargets()` runs on every resize and rung change. They used to be recreated there while a readback was still in flight on the old staging buffer. When that readback finished it cleared the busy flag of the *new* probe while the new probe's own readback was pending, and the next probe copied into a buffer waiting to be mapped (`Buffer used in submit while pending map`), repeating every probe interval until the map completed. On a slow GPU that was seconds of console errors and no clearance reading.
+
+The readback itself is `startProbeReadback()` in `src/probe.js`. It is handed the probe object it belongs to and touches nothing else: it may clear only that object's busy flag, and it publishes a reading only if that object is still the live probe. `tools/probe.test.js` drives it with fake buffers through the exact interleaving that used to fail.
 
 ### 4.2 Material pass
 
