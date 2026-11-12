@@ -46,8 +46,23 @@ export const LADDER = [
   { scale: 2.00, steps: 300, iters: 18, shade: 1 },
 ];
 
-export const PRESET_RUNG = { low: 1, medium: 3, high: 5, screenshot: 5, max: 9 };
+// 'ultra' is High's rung -- the same scale, steps and iterations -- rendered at
+// up to 3x device pixel ratio instead of 2x (see dprCapFor). It buys pixel
+// density, not mathematics: on a 3x phone or laptop it is the native image.
+export const PRESET_RUNG = { low: 1, medium: 3, high: 5, ultra: 5, screenshot: 5, max: 9 };
 export const TOP = LADDER.length - 1;
+
+// Device-pixel-ratio cap for the canvas backing store. 2 protects mobile GPUs:
+// a 3x phone at full density has 2.25x the pixels of the same phone at 2x.
+// Ultra lifts it, deliberately and only on request. The swapchain fit and the
+// texture-limit rung cap in fractal-bg.js still apply on top, so a large 3x
+// display cannot ask for a texture the device cannot allocate.
+export const DPR_CAP = 2;
+export const DPR_CAP_ULTRA = 3;
+
+export function dprCapFor(mode) {
+  return mode === 'ultra' ? DPR_CAP_ULTRA : DPR_CAP;
+}
 export const BUDGET_MS = 16.7;
 export const MET_TOLERANCE = 1.05;
 // MEASURED ON REAL HARDWARE: at 2.5 this fired constantly on a healthy 60Hz

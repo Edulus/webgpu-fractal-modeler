@@ -271,7 +271,7 @@ Recommended canvas CSS:
 | --- | --- | --- | --- |
 | `fractal` | string | `'mandelbulb'` | `'mandelbulb'`, `'mandelbox'`, `'menger'`, `'julia'`, `'apollonian'`, `'spherepack'`, `'encrusted'`, `'surfacepack'`, `'gyroid'`, `'kleinian'`, `'attractor'`, or `'lorenz'` |
 | `palette` | string | `'aurora'` | `'aurora'`, `'ember'`, `'oil-slick'`, `'mono-ice'`, or `'iridescence'` |
-| `quality` | string | `'auto'` | `'low'`, `'medium'`, `'high'`, or adaptive `'auto'` |
+| `quality` | string | `'auto'` | `'low'`, `'medium'`, `'high'`, `'ultra'`, or adaptive `'auto'` / `'max'` |
 | `transparent` | boolean | `true` | Premultiplied transparency over the page or an opaque gradient presentation background |
 | `onUnsupported` | function | `() => {}` | Receives a reason string when WebGPU initialization fails or the device is lost |
 
@@ -284,7 +284,7 @@ Recommended canvas CSS:
 | `setPaletteColors(colors)` | Use an imported palette: `[[r,g,b], …]` in 0..1. `null` returns to the preset. |
 | `setColorCycle(rate)` | Palette-coordinate shift rate per second; `0` stops it. Re-indexes the selected palette without resetting accumulation. |
 | `setImageAdjust({exposure, contrast, saturation, hue})` | Post-chain image controls, any subset. `hue` is in turns. Does not reset accumulation. |
-| `setQuality(mode)` | `low`, `medium`, `high`, `auto` or `max`. See [Adaptive quality](#adaptive-quality). |
+| `setQuality(mode)` | `low`, `medium`, `high`, `ultra`, `auto` or `max`. See [Adaptive quality](#adaptive-quality). |
 | `setTransparent(bool)` | Toggle transparent embedding and opaque presentation modes. |
 | `setExplorer(bool)` | Toggle the full model-viewer preset. |
 | `setFly(bool)` | Toggle free flight; interior models drop their bounding clip. |
@@ -677,7 +677,9 @@ Available presets:
 
 ## Adaptive quality
 
-`quality` takes **low**, **medium**, **high**, **auto** or **max**. The three fixed modes pin a rung of a ladder; the two adaptive ones measure the device and choose one.
+`quality` takes **low**, **medium**, **high**, **ultra**, **auto** or **max**. The fixed modes pin a rung of a ladder; the two adaptive ones measure the device and choose one.
+
+**Ultra** is High's rung rendered at up to 3× device pixel ratio instead of 2×, so a high-density phone or laptop gets its native resolution. It is identical to High on a 2× or lower display, and as a fixed mode it holds that density even when the device struggles.
 
 **The ladder spends headroom on mathematics, not only on pixels.** The previous controller moved a single dial — internal resolution between 0.4 and 1.0 — which answers "is this device keeping up" but never "how much has it got left". March steps and iteration depth were compile-time constants, so a workstation rendered exactly what a laptop did, only less blurry. Both are now uniforms, and each rung of the ladder raises resolution, step ceiling, iteration depth and shading quality together, in the order that buys the most visible detail per millisecond: resolution first, because aliasing is the most obvious defect; then steps, which is what stops thin structures being missed; then iteration depth; then soft shadows and occlusion. The top rung is 2× supersampling with 300 steps and 18 iterations, against the old ceiling of 1.0/160/12 — which is still on the ladder, as **high**.
 
