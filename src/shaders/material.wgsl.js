@@ -298,11 +298,11 @@ fn fs_material(in : VSOut) -> MaterialOut {
   // Attractors are rasterized as line geometry after this draw. The raymarch
   // contributes one full background/miss sample; the post chain decides whether
   // that sample is opaque or transparent from the live bgMode.
-  if (abs(u.fractalType - 28.0) < 0.5) {
+  if (isVolumeShape(u.fractalType)) {
     return cosmicWebMaterial(ro, rd);
   }
 
-  if (u.fractalType > 24.5 && u.fractalType < 27.5) {
+  if (isLineShape(u.fractalType)) {
     out.aux.w = 1.0;
     // The lines are drawn over this and have no depth of their own. They sit
     // around the camera target, so reproject every pixel as if it lay on the

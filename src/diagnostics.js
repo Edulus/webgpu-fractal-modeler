@@ -11,16 +11,13 @@ import {
   getQualityDiagnosticsState, subscribeQualityDiagnostics,
 } from './quality.js';
 
+import { SHAPE_NAMES, shapeKind } from './shapes.js';
 export const HISTORY_LIMIT = 32;
 export const DEFAULT_ACCUM_CAP = 96;
 
-export const MODEL_KEYS = [
-  'mandelbulb', 'mandelbox', 'menger', 'julia', 'apollonian',
-  'spherepack', 'encrusted', 'surfacepack', 'penrose', 'gyroid',
-  'kleinian', 'barth', 'schottky', 'schottkyh', 'tetrabrot',
-  'envoct', 'envdodec', 'hyp534', 'hyp435', 'hyp534t', 'hyp534o',
-  'hyp435t', 'hyp435o', 'kleinpack', 'engel', 'attractor', 'lorenz', 'rossler',
-];
+// Derived from the shape registry. This used to be a hand-kept copy that had
+// fallen four shapes behind.
+export const MODEL_KEYS = SHAPE_NAMES;
 
 export function pushBounded(history, event, limit = HISTORY_LIMIT) {
   const out = [...(history || []), event];
@@ -103,7 +100,11 @@ export function buildDiagnosticsSnapshot({
   const accumulating = !!accumOn && samples > 0 && samples < accumCap;
   const converged = !!accumOn && samples >= accumCap;
   const modelKey = MODEL_KEYS[info.fractalType] ?? `model-${info.fractalType ?? '?'}`;
-  const geometryFamily = Number(info.fractalType) >= 25 ? 'attractor' : 'raymarched surface';
+  // From the registry's kind, not an id threshold: 'id >= 25' called the
+  // ziggurat, cube stack and quasicrystal attractors.
+  const kind = shapeKind(Number(info.fractalType));
+  const geometryFamily = kind === 'line' ? 'attractor'
+    : kind === 'volume' ? 'volumetric field' : 'raymarched surface';
   const showcaseRung = telemetry.showcase?.rung ?? null;
   const showcaseIsLatest = (telemetry.showcase?.seq ?? -1) > Math.max(
     telemetry.sample?.seq ?? -1, telemetry.plan?.seq ?? -1);

@@ -6,6 +6,10 @@ import fs from 'node:fs';
 import { FRACTAL_WGSL } from '../src/shaders/fractal.wgsl.js';
 import { MATERIAL_WGSL } from '../src/shaders/material.wgsl.js';
 import { COMPOSITE_WGSL } from '../src/shaders/composite.wgsl.js';
+import { TEMPORAL_WGSL } from '../src/shaders/temporal.wgsl.js';
+import {
+  SHAPES, SHAPE_NAMES, FRACTAL_IDS, CAM_RADIUS, shapeKind, shapeKindWGSL,
+} from '../src/shapes.js';
 
 let passed = 0;
 let failed = 0;
@@ -23,86 +27,77 @@ console.log('\nRegistry consistency across tables, selector and shaders');
 
 const bg = fs.readFileSync('src/fractal-bg.js', 'utf8');
 const index = fs.readFileSync('index.html', 'utf8');
+const diag = fs.readFileSync('src/diagnostics.js', 'utf8');
 const fractal = FRACTAL_WGSL;
 const material = MATERIAL_WGSL;
 const composite = COMPOSITE_WGSL;
+const temporal = TEMPORAL_WGSL;
 
-const idBlock = bg
-  .slice(bg.indexOf('const FRACTAL_IDS = {'), bg.indexOf('};', bg.indexOf('const FRACTAL_IDS = {')))
-  .replace(/\/\/[^\n]*/g, '');
-const IDS = {};
-for (const m of idBlock.matchAll(/(\w+)\s*:\s*(\d+)/g)) IDS[m[1]] = Number(m[2]);
-const names = Object.keys(IDS);
-const maxId = Math.max(...Object.values(IDS));
-
+// ---- The registry itself ---------------------------------------------------
+const IDS = FRACTAL_IDS;
+const names = SHAPE_NAMES;
+const maxId = names.length - 1;
 ok(names.length > 0, `registry parses (${names.length} shapes, ids 0..${maxId})`);
-ok(new Set(Object.values(IDS)).size === names.length, 'no two shapes share an id');
-ok(
-  Array.from({ length: maxId + 1 }, (_, i) => i).every((i) => Object.values(IDS).includes(i)),
-  'ids are contiguous from 0, so every id indexes a real shape',
-);
+ok(new Set(names).size === names.length, 'no two shapes share a name');
+ok(names.every((n, i) => IDS[n] === i), 'every name maps to its own index, so ids are contiguous from 0');
+ok(SHAPES.every((s) => ['surface', 'line', 'volume'].includes(s.kind)), 'every shape has a known kind');
+ok(CAM_RADIUS.length === names.length && CAM_RADIUS.every((r) => Number.isFinite(r) && r > 0),
+   `CAM_RADIUS has a positive entry per id (${CAM_RADIUS.length}/${names.length})`);
 
-const camEntries = bg
-  .match(/const CAM_RADIUS = \[([\s\S]*?)\]/)[1]
-  .split(',')
-  .filter((s) => s.trim()).length;
-ok(camEntries === maxId + 1, `CAM_RADIUS has an entry per id (${camEntries}/${maxId + 1})`);
+// ---- Nothing keeps its own copy any more -----------------------------------
+ok(!/const FRACTAL_IDS = \{/.test(bg) && !/const CAM_RADIUS = \[/.test(bg),
+   'the renderer imports the registry rather than keeping a copy');
+ok(/import \{ FRACTAL_IDS, CAM_RADIUS, shapeKind \} from '\.\/shapes\.js';/.test(bg), 'renderer imports from shapes.js');
+ok(/const names = SHAPE_NAMES;/.test(index), 'the HUD name list is the registry');
+ok(/export const MODEL_KEYS = SHAPE_NAMES;/.test(diag), 'diagnostics model names are the registry');
+ok(!/fractalType\) >= 25/.test(diag), 'diagnostics no longer guesses the kind from an id threshold');
 
-const hudNames = index
-  .match(/const names = \[([\s\S]*?)\]/)[1]
-  .split(',')
-  .map((s) => s.trim().replace(/^['"]|['"]$/g, ''))
-  .filter(Boolean);
-ok(hudNames.length === maxId + 1, `HUD name list has an entry per id (${hudNames.length}/${maxId + 1})`);
-ok(hudNames.every((n, i) => IDS[n] === i), 'every HUD name sits at its own registry id');
-
-// Attribute-tolerant: the select carries an aria-label now that the panel's
-// sections are disclosures and the <label> wrapper that used to name it is
-// gone. Matching the open tag exactly made this fail on an accessibility
-// attribute, which is not what the test is about.
+// ---- Selector --------------------------------------------------------------
+// Attribute-tolerant open tag: the select carries an aria-label.
 const selector = index.match(/<select id="sel-fractal"[^>]*>([\s\S]*?)<\/select>/)[1];
 const options = [...selector.matchAll(/<option value="(\w+)"/g)].map((m) => m[1]);
 ok(options.every((o) => o in IDS), 'every selector option names a registered shape');
+ok(new Set(options).size === options.length, 'no shape is offered twice');
 
 const labelled = new Set([...index.matchAll(/^\s*(\w+): \['/gm)].map((m) => m[1]));
 const unlabelled = options.filter((o) => !labelled.has(o));
 ok(unlabelled.length === 0, `every selectable shape has a wall label${unlabelled.length ? `: missing ${unlabelled}` : ''}`);
 
-const firstAttractor = IDS.attractor;
-const lastAttractor = IDS.rossler;
-const attractorBand = `u.fractalType > ${firstAttractor - 0.5} && u.fractalType < ${lastAttractor + 0.5}`;
+// ---- Kinds reach the shaders through one generated helper -------------------
+const helper = shapeKindWGSL();
+for (const [name, src] of [['fractal', fractal], ['material', material], ['composite', composite], ['temporal', temporal]]) {
+  ok(src.includes(helper), `${name}.wgsl carries the generated shape-kind helpers`);
+}
+ok(material.includes('if (isLineShape(u.fractalType)) {') && material.includes('if (isVolumeShape(u.fractalType)) {'),
+   'material routes lines and volumes through the helpers');
+ok(composite.includes('if (isLineShape(u.fractalType)) {') && composite.includes('let surfaceType = isSurfaceShape(u.fractalType);'),
+   'composite asks the helpers, not an id band');
+ok(fractal.includes('if (!isSurfaceShape(u.fractalType)) {'), 'the legacy fs_main skips non-surfaces through the helper');
+ok(temporal.includes('let lines = isLineShape(u.fractalType);'), 'temporal resolve exempts lines through the helper');
+// The helper agrees with the registry for every id (evaluate its range tests in JS).
+const lineTestRaw = new Function('ft', 'abs', 'return ' + helper.match(/fn isLineShape[^{]*\{\s*return ([^;]+);/)[1] + ';');
+const volTestRaw = new Function('ft', 'abs', 'return ' + helper.match(/fn isVolumeShape[^{]*\{\s*return ([^;]+);/)[1] + ';');
+const lineTest = (ft) => lineTestRaw(ft, Math.abs);
+const volTest = (ft) => volTestRaw(ft, Math.abs);
+ok(names.every((_, i) => lineTest(i) === (shapeKind(i) === 'line') && volTest(i) === (shapeKind(i) === 'volume')),
+   'the generated WGSL classifies every id exactly as the registry does');
+ok(!lineTest(names.length) && !volTest(names.length), 'and an id past the end is not misread as a line or volume');
 
-ok(bg.includes('return id >= FRACTAL_IDS.attractor && id <= FRACTAL_IDS.rossler;'),
-  'isAttractorType spans attractor..rossler');
-ok(material.includes(attractorBand), `material.wgsl attractor band matches the registry (${attractorBand})`);
-ok(composite.includes(attractorBand), `composite.wgsl attractor band matches the registry (${attractorBand})`);
-
-const nonSurfaceBand = `u.fractalType > ${firstAttractor - 0.5} && u.fractalType < ${IDS.cosmicweb + 0.5}`;
-ok(fractal.includes(nonSurfaceBand), `fractal.wgsl skips exactly the non-surface ids (${nonSurfaceBand})`);
-ok(IDS.cosmicweb === lastAttractor + 1,
-  'the volumetric id sits directly after the attractors, so the skip is one contiguous band');
-
-ok(bg.includes('function isSurfaceType(id)'), 'surface-ness is exposed as a predicate');
+ok(bg.includes("return shapeKind(id) === 'line';") && bg.includes("return shapeKind(id) === 'surface';"),
+   'isAttractorType / isSurfaceType read the registry kind');
 ok(/doProbe[\s\S]{0,600}?isSurfaceType\(state\.fractalType\)/.test(bg),
   'the clearance probe gates on the predicate, not on an id threshold');
-const surfacesAboveBand = names.filter((n) => IDS[n] > IDS.cosmicweb);
-ok(surfacesAboveBand.length === 0 || bg.includes('function isSurfaceType(id)'),
-  `surfaces above the non-surface band are handled by predicate (${surfacesAboveBand.join(', ') || 'none'})`);
 
+// ---- mapDE dispatches every surface, and only surfaces ----------------------
 const mapDE = fractal.slice(fractal.indexOf('fn mapDE(pos'), fractal.indexOf('\n}', fractal.indexOf('fn mapDE(pos')));
-const thresholds = [...mapDE.matchAll(/ft < ([\d.]+)/g)].map((m) => Number(m[1]));
-ok(thresholds.length > 0, `mapDE dispatches on ${thresholds.length} thresholds`);
-
-const inBand = thresholds.filter((t) => t > firstAttractor - 0.5 && t <= IDS.cosmicweb + 0.5);
-ok(inBand.length === 0,
-  `no mapDE threshold splits the non-surface band${inBand.length ? `: ${inBand}` : ''}`);
-
-const surfaceIds = Object.values(IDS).filter(
-  (id) => !(id >= firstAttractor && id <= lastAttractor) && id !== IDS.cosmicweb,
-);
-const covered = surfaceIds.filter((id) => id < Math.max(...thresholds) || id > IDS.cosmicweb);
-ok(covered.length === surfaceIds.length,
-  `every surface id is reachable in mapDE (${covered.length}/${surfaceIds.length})`);
+ok(/switch \(i32\(round\(u\.fractalType\)\)\)/.test(mapDE), 'mapDE dispatches by integer id');
+const cased = [...mapDE.matchAll(/case ([\d, ]+):/g)].flatMap((m) => m[1].split(',').map((x) => Number(x.trim())));
+const surfaceIds = names.map((_, i) => i).filter((i) => shapeKind(i) === 'surface');
+const missing = surfaceIds.filter((i) => !cased.includes(i));
+ok(missing.length === 0, `every surface id has a case in mapDE${missing.length ? `: missing ${missing}` : ''}`);
+const strays = cased.filter((i) => shapeKind(i) !== 'surface' || i > maxId);
+ok(strays.length === 0, `no line, volume or unregistered id is dispatched as a surface${strays.length ? `: ${strays}` : ''}`);
+ok(new Set(cased).size === cased.length, 'no id appears in two cases');
 
 // ---- Shader sources must survive being JavaScript template literals --------
 // Every WGSL module is carried in a JS backtick string, so a stray backtick or
@@ -114,7 +109,7 @@ ok(covered.length === surfaceIds.length,
 // six suites at once. Importing the modules at the top of this file is itself
 // the regression test, but assert on the payload too so the failure names the
 // cause rather than appearing as an unrelated syntax error.
-for (const [name, src] of [['fractal', fractal], ['material', material], ['composite', composite]]) {
+for (const [name, src] of [['fractal', fractal], ['material', material], ['composite', composite], ['temporal', temporal]]) {
   ok(typeof src === 'string' && src.length > 0, `${name}.wgsl loaded as a string (${src.length} chars)`);
   ok(!src.includes('`'), `${name}.wgsl contains no backtick that would close its template literal`);
 }

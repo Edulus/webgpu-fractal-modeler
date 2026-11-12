@@ -83,6 +83,11 @@
     /* A closed select truncates; tapping it opens the platform picker, which
        shows every option in full regardless of this width. */
     #panel select { text-overflow: ellipsis; }
+    /* Family and type side by side above the shape list; they stack on narrow
+       panels rather than truncating to unreadable stubs. */
+    #shape-picker { display: flex; gap: 6px; margin-bottom: 6px; }
+    #shape-picker select { flex: 1 1 0; min-width: 0; }
+    @media (max-width: 420px) { #shape-picker { flex-direction: column; } }
     #panel label { display: grid; gap: 4px; color: var(--muted); }
     /* The cycle toggle is a checkbox beside its text, not a stacked field. */
     #panel label.check {
@@ -573,33 +578,42 @@
          the panel without hiding anything that was not already hidden. -->
     <details id="sec-shape" open>
       <summary>Shape</summary>
-      <!-- Grouped by construction, not by name. Thirty-two entries in one flat
-           list gave no clue that six of them are the same honeycomb truncated
-           differently, or that five separate packings are all sphere packings.
-           <optgroup> is native, so the platform picker on a phone groups them
-           too, and the labels can drop the family prefix each option used to
-           repeat. -->
+      <!-- Shape menu. Organised by the branch of mathematics that defines each
+           shape: a family, then a type within it, then the shape. Each
+           <optgroup> is one TYPE and carries its FAMILY in data-family, so this
+           markup is the whole catalogue -- the Family/Type picker below is
+           built from it at runtime, and without JavaScript it still works as
+           one grouped list. Labels use the shapes' proper names; descriptive
+           names for original constructions (Ornate planet, Studded surface)
+           are kept as preset names. -->
+      <div id="shape-picker">
+        <select id="sel-family" aria-label="Shape family"></select>
+        <select id="sel-type" aria-label="Shape type"></select>
+      </div>
       <select id="sel-fractal" aria-label="Shape">
-        <optgroup label="Escape-time fractals">
+        <optgroup label="Escape-time" data-family="Fractals">
           <option value="mandelbulb">Mandelbulb</option>
           <option value="mandelbox">Mandelbox</option>
           <option value="julia">Quaternion Julia</option>
           <option value="tetrabrot">Tetrabrot (bicomplex)</option>
         </optgroup>
-        <optgroup label="Sphere packings">
-          <option value="penrose">Canonical Apollonian (Descartes)</option>
-          <option value="apollonian">Apollonian packing</option>
-          <option value="spherepack">Nested sphere packing</option>
-          <option value="surfacepack">Studded surface packing</option>
-          <option value="kleinpack">Kleinian packing {5,3,6}</option>
-          <option value="encrusted">Ornate planet (polar bloom)</option>
+        <optgroup label="Self-similar (IFS)" data-family="Fractals">
+          <option value="menger">Menger sponge</option>
         </optgroup>
-        <optgroup label="Limit sets of groups">
+        <optgroup label="Sphere packings" data-family="Packings and groups">
+          <option value="penrose">Canonical Apollonian (Descartes)</option>
+          <option value="apollonian">Apollonian packing (inversion)</option>
+          <option value="spherepack">Nested sphere packing</option>
+          <option value="kleinpack">Kleinian packing {5,3,6}</option>
+          <option value="surfacepack">Studded surface (preset)</option>
+          <option value="encrusted">Polar bloom / Ornate planet (preset)</option>
+        </optgroup>
+        <optgroup label="Group limit sets" data-family="Packings and groups">
           <option value="kleinian">Kleinian limit set</option>
           <option value="schottky">Kissing Schottky (parabolic)</option>
           <option value="schottkyh">Schottky (hyperbolic)</option>
         </optgroup>
-        <optgroup label="Hyperbolic honeycombs">
+        <optgroup label="Hyperbolic honeycombs" data-family="Tessellations">
           <option value="hyp534">{5,3,4}</option>
           <option value="hyp534t">{5,3,4} truncated</option>
           <option value="hyp534o">{5,3,4} omnitruncated</option>
@@ -607,30 +621,39 @@
           <option value="hyp435t">{4,3,5} truncated</option>
           <option value="hyp435o">{4,3,5} omnitruncated</option>
         </optgroup>
-        <optgroup label="Surfaces">
-          <option value="gyroid">Gyroid (minimal surface)</option>
-          <option value="barth">Barth sextic (65 nodes)</option>
-        </optgroup>
-        <optgroup label="Stellations">
-          <option value="envoct">Envelope, octahedral seed</option>
-          <option value="envdodec">Envelope, dodecahedral seed</option>
-        </optgroup>
-        <optgroup label="Tilings and quasicrystals">
+        <optgroup label="Euclidean honeycombs and space-fillers" data-family="Tessellations">
           <option value="engel">Engel plesiohedron (38 faces)</option>
+        </optgroup>
+        <optgroup label="Aperiodic order" data-family="Tessellations">
           <option value="quasicrystal">Icosahedral quasicrystal</option>
         </optgroup>
-        <optgroup label="Cube lattices">
-          <option value="menger">Menger sponge</option>
-          <option value="ziggurat">Ziggurat (cube terraces)</option>
-          <option value="cubestack">Cube stack (block of cubes)</option>
+        <optgroup label="Triply periodic minimal surfaces" data-family="Surfaces">
+          <option value="gyroid">Gyroid</option>
         </optgroup>
-        <optgroup label="Strange attractors">
+        <optgroup label="Algebraic surfaces" data-family="Surfaces">
+          <option value="barth">Barth sextic (65 nodes)</option>
+        </optgroup>
+        <optgroup label="Stellated and star polyhedra" data-family="Polyhedra">
+          <option value="envoct">Stella octangula</option>
+          <option value="envdodec">Small stellated dodecahedron</option>
+        </optgroup>
+        <optgroup label="Strange attractors" data-family="Curves and dynamics">
           <option value="attractor">Aizawa</option>
           <option value="lorenz">Lorenz</option>
           <option value="rossler">Rössler</option>
+          <option value="thomas">Thomas</option>
+          <option value="halvorsen">Halvorsen</option>
+          <option value="dadras">Dadras</option>
+          <option value="chen">Chen</option>
+          <option value="sprott">Sprott (case B)</option>
+          <option value="rabinovich">Rabinovich–Fabrikant</option>
         </optgroup>
-        <optgroup label="Volumetric fields">
+        <optgroup label="Volumetric fields" data-family="Fields and assemblies">
           <option value="cosmicweb">Cosmic Web</option>
+        </optgroup>
+        <optgroup label="Procedural assemblies" data-family="Fields and assemblies">
+          <option value="ziggurat">Ziggurat (cube terraces)</option>
+          <option value="cubestack">Cube stack</option>
         </optgroup>
       </select>
       <!-- Mathematical parameters of the current shape, built from the
@@ -766,6 +789,8 @@
     import { installRendererDiagnostics, formatDiagnosticsPanel } from './src/diagnostics.js';
     import { TOUR_STEPS, STEP_MS, tourStateAt, bootPhaseAt } from './src/tour.js';
     import { paramsFor, effectiveRange } from './src/shape-params.js';
+    import { SHAPE_NAMES } from './src/shapes.js';
+    import { buildCatalog, locate, pick } from './src/catalog.js';
 
     const canvas = document.getElementById('bg');
     const hud = document.getElementById('hud');
@@ -1235,6 +1260,18 @@
           'A hierarchical volumetric web of filaments and dense knots surrounding vast voids, inspired by the multifractal large-scale structure of the universe.'],
         rossler: ['Rössler attractor',
           'The simplest strange attractor there is: one curved term in three equations. It winds outwards in a flat spiral, then folds sharply up and back into the middle, and that fold is where the chaos comes from.'],
+        thomas: ['Thomas attractor',
+          'Each coordinate is pushed by the sine of the next and gently pulled back to zero, the same rule for all three in turn. That cyclic symmetry is all there is, and it is enough for a trajectory that wanders a lattice of cells forever.'],
+        halvorsen: ['Halvorsen attractor',
+          'Three identical equations, each feeding the next with a squared term. The result has a threefold symmetry about the diagonal, three lobes swept out in turn and never in the same order twice.'],
+        dadras: ['Dadras attractor',
+          'Two wings joined through the middle, from a system found by searching for simple equations with complicated motion. It switches wings at moments that cannot be predicted however finely you start it.'],
+        chen: ['Chen attractor',
+          'Built as a mirror of the Lorenz system: the same kind of quadratic terms, arranged so the feedback runs the other way. It is related to Lorenz without being a disguised copy of it, and its two wings fold more tightly.'],
+        sprott: ['Sprott attractor (case B)',
+          'One of the simplest chaotic flows there is, found by a computer search through thousands of three-variable systems for the fewest terms that still never repeat.'],
+        rabinovich: ['Rabinovich–Fabrikant attractor',
+          'A model of waves in a medium kept away from equilibrium by an energy supply. Its trajectory loops tightly around two centres and is notoriously sensitive: tiny changes to its constants change its whole shape.'],
         lorenz: ['Lorenz attractor',
           'The original strange attractor: convection stripped down to three equations, and the reason weather cannot be forecast far ahead.'],
       };
@@ -1261,6 +1298,39 @@
           if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); dismiss(); }
         });
       }
+      // Family -> Type -> Shape picker, built from the shape <select>'s own
+      // optgroups (see src/catalog.js). The shape select stays the single
+      // source of truth: picking a family or type refills it and, when that
+      // changes the shape, fires its ordinary 'change' event, so everything that
+      // already listens to it (renderer, note, shape maths) keeps working.
+      {
+        const selShape = document.getElementById('sel-fractal');
+        const selFamily = document.getElementById('sel-family');
+        const selType = document.getElementById('sel-type');
+        const catalog = buildCatalog([...selShape.querySelectorAll('optgroup')].map((g) => ({
+          label: g.label,
+          family: g.dataset.family,
+          options: [...g.querySelectorAll('option')].map((o) => ({ value: o.value, label: o.textContent })),
+        })));
+        const fill = (select, items) => {
+          select.replaceChildren(...items.map(([value, label]) => new Option(label, value)));
+        };
+        fill(selFamily, catalog.families.map((f, i) => [String(i), f.name]));
+        const show = (choice) => {
+          if (!choice) return;
+          selFamily.value = String(choice.family);
+          fill(selType, catalog.families[choice.family].types.map((t, i) => [String(i), t.label]));
+          selType.value = String(choice.type);
+          fill(selShape, choice.shapes.map((sh) => [sh.value, sh.label]));
+          selShape.value = choice.value;
+          if (choice.changed) selShape.dispatchEvent(new Event('change'));
+        };
+        const here = locate(catalog, selShape.value) || { family: 0, type: 0 };
+        show(pick(catalog, selShape.value, here.family, here.type));
+        selFamily.addEventListener('change', () => show(pick(catalog, selShape.value, Number(selFamily.value), 0)));
+        selType.addEventListener('change', () => show(pick(catalog, selShape.value, Number(selFamily.value), Number(selType.value))));
+      }
+
       showNote(document.getElementById('sel-fractal').value);
 
       document.getElementById('sel-fractal').addEventListener('change', (e) => {
@@ -1434,12 +1504,8 @@
       // worth looking at should not throw it away.)
 
       // HUD: show live fractal/quality/fps (+ zoom while exploring).
-      const names = ['mandelbulb', 'mandelbox', 'menger', 'julia', 'apollonian',
-        'spherepack', 'encrusted', 'surfacepack', 'penrose', 'gyroid',
-        'kleinian', 'barth', 'schottky', 'schottkyh', 'tetrabrot',
-        'envoct', 'envdodec', 'hyp534', 'hyp435', 'hyp534t', 'hyp534o',
-        'hyp435t', 'hyp435o', 'kleinpack', 'engel', 'attractor', 'lorenz', 'rossler',
-        'cosmicweb', 'ziggurat', 'cubestack', 'quasicrystal'];
+      // Ids index the shape registry (src/shapes.js).
+      const names = SHAPE_NAMES;
       setInterval(() => {
         const i = handle.info;
         // Ultra shares High's rung, so show the pixel density that sets it apart.
