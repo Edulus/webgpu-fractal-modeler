@@ -1,5 +1,8 @@
 # Future Mathematical Models
 
+> The current menu, what has been built from these notes, and the next steps
+> are tracked in [SHAPE_CATALOG.md](SHAPE_CATALOG.md).
+
 This document is the model roadmap for **WebGPU Fractal Modeler**. It focuses on mathematically substantial objects that create genuinely interesting three-dimensional exploration.
 
 The catalog deliberately excludes elementary solids such as cubes, spheres, cones, cylinders, ordinary tori, prisms, and simple extrusions. A future model should have a recognizable mathematical identity, reveal meaningful structure from multiple viewpoints, and justify its computational cost.

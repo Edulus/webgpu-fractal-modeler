@@ -74,6 +74,41 @@ export const SHAPES = [
   { name: 'chen', kind: 'line', cam: 3.0 },            // 35
   { name: 'sprott', kind: 'line', cam: 3.0 },          // 36
   { name: 'rabinovich', kind: 'line', cam: 3.0 },      // 37
+  // ---- Triply periodic minimal surfaces (catalog.wgsl.js) ----
+  { name: 'schwarzp', kind: 'surface', cam: 3.2 },  // 38
+  { name: 'schwarzd', kind: 'surface', cam: 3.2 },  // 39
+  { name: 'neovius', kind: 'surface', cam: 3.2 },   // 40
+  { name: 'iwp', kind: 'surface', cam: 3.2 },       // 41
+  // ---- Algebraic surfaces (catalog.wgsl.js) ----
+  { name: 'cayley', kind: 'surface', cam: 3.6 },    // 42
+  { name: 'clebsch', kind: 'surface', cam: 3.6 },   // 43
+  { name: 'kummer', kind: 'surface', cam: 3.6 },    // 44
+  // ---- Star polyhedra and compounds (catalog.wgsl.js) ----
+  { name: 'gsdodec', kind: 'surface', cam: 3.4 },   // 45
+  { name: 'gdodec', kind: 'surface', cam: 3.0 },    // 46
+  { name: 'tet5', kind: 'surface', cam: 2.8 },      // 47
+  { name: 'cube5', kind: 'surface', cam: 2.6 },     // 48
+  // ---- Self-similar (IFS) fractals (catalog.wgsl.js) ----
+  { name: 'sierpinski', kind: 'surface', cam: 4.0 },// 49
+  { name: 'octaflake', kind: 'surface', cam: 2.6 }, // 50
+  { name: 'jerusalem', kind: 'surface', cam: 4.0 }, // 51
+  { name: 'cantordust', kind: 'surface', cam: 4.0 },// 52
+  { name: 'stellafractal', kind: 'surface', cam: 3.0 },// 53
+  { name: 'kifs', kind: 'surface', cam: 3.2 },      // 54
+  // ---- Euclidean honeycombs (catalog.wgsl.js) ----
+  { name: 'cubichc', kind: 'surface', cam: 3.0 },   // 55
+  { name: 'tetoct', kind: 'surface', cam: 3.0 },    // 56
+  { name: 'rhombichc', kind: 'surface', cam: 3.0 }, // 57
+  { name: 'kelvinhc', kind: 'surface', cam: 3.0 },  // 58
+  // ---- Ruled surfaces, tori and implicit forms (catalog.wgsl.js) ----
+  { name: 'hyperboloid', kind: 'surface', cam: 2.8 },// 59
+  { name: 'hypar', kind: 'surface', cam: 3.0 },     // 60
+  { name: 'horntorus', kind: 'surface', cam: 3.0 }, // 61
+  { name: 'spindletorus', kind: 'surface', cam: 2.8 },// 62
+  { name: 'linkedtori', kind: 'surface', cam: 2.8 },// 63
+  { name: 'genus2', kind: 'surface', cam: 3.2 },    // 64
+  { name: 'metaballs', kind: 'surface', cam: 3.0 }, // 65
+  { name: 'superquadric', kind: 'surface', cam: 2.6 },// 66
 ];
 
 export const SHAPE_NAMES = SHAPES.map((s) => s.name);

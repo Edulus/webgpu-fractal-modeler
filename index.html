@@ -599,6 +599,14 @@
         </optgroup>
         <optgroup label="Self-similar (IFS)" data-family="Fractals">
           <option value="menger">Menger sponge</option>
+          <option value="sierpinski">Sierpinski tetrahedron</option>
+          <option value="octaflake">Octahedron flake</option>
+          <option value="jerusalem">Jerusalem cube</option>
+          <option value="cantordust">Cantor dust</option>
+          <option value="stellafractal">Stella octangula fractal</option>
+        </optgroup>
+        <optgroup label="Kaleidoscopic and folding" data-family="Fractals">
+          <option value="kifs">Kaleidoscopic IFS</option>
         </optgroup>
         <optgroup label="Sphere packings" data-family="Packings and groups">
           <option value="penrose">Canonical Apollonian (Descartes)</option>
@@ -623,19 +631,50 @@
         </optgroup>
         <optgroup label="Euclidean honeycombs and space-fillers" data-family="Tessellations">
           <option value="engel">Engel plesiohedron (38 faces)</option>
+          <option value="cubichc">Cubic honeycomb</option>
+          <option value="tetoct">Tetrahedral-octahedral honeycomb</option>
+          <option value="rhombichc">Rhombic dodecahedral honeycomb</option>
+          <option value="kelvinhc">Bitruncated cubic honeycomb</option>
         </optgroup>
         <optgroup label="Aperiodic order" data-family="Tessellations">
           <option value="quasicrystal">Icosahedral quasicrystal</option>
         </optgroup>
         <optgroup label="Triply periodic minimal surfaces" data-family="Surfaces">
           <option value="gyroid">Gyroid</option>
+          <option value="schwarzp">Schwarz P surface</option>
+          <option value="schwarzd">Schwarz D surface</option>
+          <option value="neovius">Neovius surface</option>
+          <option value="iwp">Schoen I-WP</option>
         </optgroup>
         <optgroup label="Algebraic surfaces" data-family="Surfaces">
           <option value="barth">Barth sextic (65 nodes)</option>
+          <option value="cayley">Cayley nodal cubic (4 nodes)</option>
+          <option value="clebsch">Clebsch diagonal cubic (27 lines)</option>
+          <option value="kummer">Kummer quartic (16 nodes)</option>
+        </optgroup>
+        <optgroup label="Ruled surfaces" data-family="Surfaces">
+          <option value="hyperboloid">Hyperboloid of one sheet</option>
+          <option value="hypar">Hyperbolic paraboloid</option>
+        </optgroup>
+        <optgroup label="Tori and higher genus" data-family="Surfaces">
+          <option value="horntorus">Horn torus</option>
+          <option value="spindletorus">Spindle torus</option>
+          <option value="linkedtori">Linked tori (Hopf link)</option>
+          <option value="genus2">Genus-two surface</option>
+        </optgroup>
+        <optgroup label="Implicit and blended" data-family="Surfaces">
+          <option value="metaballs">Metaballs</option>
+          <option value="superquadric">Superquadric</option>
         </optgroup>
         <optgroup label="Stellated and star polyhedra" data-family="Polyhedra">
           <option value="envoct">Stella octangula</option>
           <option value="envdodec">Small stellated dodecahedron</option>
+          <option value="gdodec">Great dodecahedron</option>
+          <option value="gsdodec">Great stellated dodecahedron</option>
+        </optgroup>
+        <optgroup label="Compounds" data-family="Polyhedra">
+          <option value="tet5">Compound of five tetrahedra</option>
+          <option value="cube5">Compound of five cubes</option>
         </optgroup>
         <optgroup label="Strange attractors" data-family="Curves and dynamics">
           <option value="attractor">Aizawa</option>
@@ -1272,6 +1311,64 @@
           'One of the simplest chaotic flows there is, found by a computer search through thousands of three-variable systems for the fewest terms that still never repeat.'],
         rabinovich: ['Rabinovich–Fabrikant attractor',
           'A model of waves in a medium kept away from equilibrium by an energy supply. Its trajectory loops tightly around two centres and is notoriously sensitive: tiny changes to its constants change its whole shape.'],
+        schwarzp: ['Schwarz P surface',
+          'A minimal surface whose cells are cubes joined at the centres of their faces, so space is split into two identical networks of tubes. Schwarz found it in 1865, a century before anyone needed it for crystals.'],
+        schwarzd: ['Schwarz D surface',
+          'The diamond surface: it separates space into two interwoven copies of the diamond crystal network. Every point is a saddle, curving up one way and down the other by the same amount.'],
+        neovius: ['Neovius surface',
+          'A triply periodic minimal surface with a fatter, more knotted cell than Schwarz P, found by Neovius in 1883. It is drawn here from the standard trigonometric approximation, as all of these periodic surfaces are.'],
+        iwp: ['Schoen I-WP surface',
+          'One of Alan Schoen\u2019s minimal surfaces from 1970, found while working for NASA on lightweight structures. Its name records the two lattices it separates: body-centred (I) and the wrapped package (WP).'],
+        cayley: ['Cayley nodal cubic',
+          'The cubic surface with four cone points, the most any cubic surface can carry. The four points sit at the corners of a tetrahedron, where three of its face planes meet.'],
+        clebsch: ['Clebsch diagonal cubic',
+          'Every smooth cubic surface contains exactly 27 straight lines. On this one, found by Clebsch in 1871, all 27 are real and visible at once.'],
+        kummer: ['Kummer quartic',
+          'A surface of degree four with sixteen cone points, the most a quartic can have. Kummer found the whole family in 1864; the points sit in a pattern tied to the symmetries of a tetrahedron.'],
+        gsdodec: ['Great stellated dodecahedron',
+          'The final stellation of the dodecahedron: its twelve face planes extended until they meet in twenty three-sided spikes. Kepler found the small one in 1619; Poinsot found this one in 1809.'],
+        gdodec: ['Great dodecahedron',
+          'Twelve pentagons meeting five at a corner, but threaded through one another so the solid looks like an icosahedron with every face pushed in. It is the third layer of the dodecahedron\u2019s stellations.'],
+        tet5: ['Compound of five tetrahedra',
+          'Five regular tetrahedra sharing the twenty corners of a dodecahedron, each corner used once. The arrangement is chiral: its mirror image is a different compound that no rotation can reach.'],
+        cube5: ['Compound of five cubes',
+          'Five cubes inscribed in one dodecahedron, each using eight of its twenty corners. A fifth of a turn about any five-fold axis carries each cube onto the next.'],
+        sierpinski: ['Sierpinski tetrahedron',
+          'A tetrahedron replaced by four half-size copies at its corners, forever. What is left has no volume at all, yet its shadow from the right angle is a solid square.'],
+        octaflake: ['Octahedron flake',
+          'The same rule on an octahedron: six half-size copies, one at each corner, recursively. The copies touch at the centre and the gaps form a lattice of octahedral holes.'],
+        jerusalem: ['Jerusalem cube',
+          'Eight corner cubes and twelve smaller edge cubes, in the ratio of the square root of two minus one, so that the cross-shaped holes left between them repeat exactly at every scale.'],
+        cantordust: ['Cantor dust',
+          'The middle third removed along every axis, then from what remains, without end. In three dimensions what survives is a cloud of points with no two of them joined.'],
+        stellafractal: ['Stella octangula fractal',
+          'A stella octangula made of smaller stellae, one at its centre and one at each of its eight points, and each of those made the same way. Carried on forever the stars would merge into the solid cube the first one fits inside, so it is shown after two or three rounds.'],
+        kifs: ['Kaleidoscopic IFS',
+          'Space folded into one chamber of the cube\u2019s mirror group, twisted, and scaled away from a corner, over and over. The kaleidoscope multiplies a single chamber into the whole ornament.'],
+        cubichc: ['Cubic honeycomb',
+          'Space filled with cubes, eight around every corner. The only regular honeycomb of ordinary space, drawn shrunk a little so the joints show.'],
+        tetoct: ['Tetrahedral-octahedral honeycomb',
+          'Regular tetrahedra and octahedra together fill space, two of each around every edge. Neither shape can do it alone; the four families of planes that cut them out are all there is.'],
+        rhombichc: ['Rhombic dodecahedral honeycomb',
+          'The cells of face-centred cubic packing: every point of space assigned to the nearest sphere centre, which gives twelve-sided rhombic cells. Bees build the ends of their cells in the same shape.'],
+        kelvinhc: ['Bitruncated cubic honeycomb',
+          'Kelvin\u2019s answer to the foam problem: truncated octahedra filling space, the cells of body-centred cubic packing. It was the best known division of space into equal cells for a century.'],
+        hyperboloid: ['Hyperboloid of one sheet',
+          'A curved surface made entirely of straight lines: two families of them, every line of one family crossing every line of the other. Cooling towers are built this way because straight beams are easy to make.'],
+        hypar: ['Hyperbolic paraboloid',
+          'The saddle: it curves up along one diagonal and down along the other, yet every line parallel to the square\u2019s edges lies flat on it. A Pringle has this shape.'],
+        horntorus: ['Horn torus',
+          'A torus whose hole has shrunk to a point: the tube is exactly as wide as its distance from the centre, so it closes up and touches itself there. A quarter is cut away to show the meeting point.'],
+        spindletorus: ['Spindle torus',
+          'A torus whose tube is wider than its circle, so the surface passes through itself and encloses a lemon-shaped inner spindle. The cutaway shows both.'],
+        linkedtori: ['Linked tori',
+          'Two rings that cannot be separated without cutting one, the simplest non-trivial link. Mathematicians call it the Hopf link.'],
+        genus2: ['Genus-two surface',
+          'A surface with two holes, made as a tube around a figure-of-eight curve, the lemniscate of Bernoulli. After the sphere and the torus it is the next surface in the classification.'],
+        metaballs: ['Metaballs',
+          'Spheres that merge smoothly as they approach, each one a field that adds to the others. Invented for computer graphics in 1982 to draw molecules.'],
+        superquadric: ['Superquadric',
+          'A sphere measured with different rules for distance: squarer around its waist, pinched towards its poles. Barr introduced the family in 1981 as building blocks for modelling.'],
         lorenz: ['Lorenz attractor',
           'The original strange attractor: convection stripped down to three equations, and the reason weather cannot be forecast far ahead.'],
       };

@@ -30,9 +30,9 @@ export const STEP_MS = 4200;
 // measured in seconds.
 export const TOUR_STEPS = [
   {
-    target: '#sel-fractal',
+    target: '#shape-picker',
     title: 'Shape',
-    body: 'Thirty-one objects, from the Mandelbulb to hyperbolic honeycombs. Every one is drawn live, not loaded.',
+    body: 'Sixty-seven objects in seven families. Pick a family, then a type, then the shape. Every one is drawn live, not loaded.',
   },
   {
     target: '#shape-params',

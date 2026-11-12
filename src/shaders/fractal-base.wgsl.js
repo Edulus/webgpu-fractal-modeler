@@ -1833,6 +1833,28 @@ fn mapDE(pos : vec3<f32>) -> DEResult {
     case 29: { return deZiggurat(pos); }
     case 30: { return deCubestack(pos); }
     case 31: { return deQuasicrystal(pos); }
+    // Catalogue shapes (catalog.wgsl.js).
+    case 38, 39, 40, 41: { return catTPMS(pos, i32(round(u.fractalType)) - 38); }
+    case 42, 43, 44: { return catAlgebraic(pos, i32(round(u.fractalType)) - 42); }
+    case 45: { return catStellation(pos, 4, 0.263); }   // great stellated dodecahedron
+    case 46: { return catStellation(pos, 3, 0.56); }    // great dodecahedron
+    case 47: { return catCompound5(pos, false); }
+    case 48: { return catCompound5(pos, true); }
+    case 49: { return catSierpinski(pos); }
+    case 50: { return catOctaflake(pos); }
+    case 51: { return catJerusalem(pos); }
+    case 52: { return catCantorDust(pos); }
+    case 53: { return catStellaFractal(pos); }
+    case 54: { return catKIFS(pos); }
+    case 55, 56, 57, 58: { return catHoneycomb(pos, i32(round(u.fractalType)) - 55); }
+    case 59: { return catHyperboloid(pos); }
+    case 60: { return catHypar(pos); }
+    case 61: { return catCutTorus(pos, 0.6, 0.6); }    // horn: tube radius = circle radius
+    case 62: { return catCutTorus(pos, 0.38, 0.62); }  // spindle: tube wider than circle
+    case 63: { return catLinkedTori(pos); }
+    case 64: { return catGenus2(pos); }
+    case 65: { return catMetaballs(pos); }
+    case 66: { return catSuperquadric(pos); }
     default: { return deMandelbulb(pos); }
   }
 }
