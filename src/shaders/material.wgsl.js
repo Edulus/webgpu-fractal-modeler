@@ -382,7 +382,12 @@ fn fs_material(in : VSOut) -> MaterialOut {
     var sh = 1.0;
     var ao = 1.0;
     if (u.detail.z > 0.5) {
-      sh = mix(1.0, softShadow(pos + n * 0.002, keyDir, u.shadowSoftness), 0.9);
+      // Lift the shadow ray off the surface by at least the hit tolerance. A
+      // moving frame stops rays up to a pixel footprint short of the surface
+      // (hitEpsilon), and a fixed 0.002 offset could then start the shadow ray
+      // inside the estimator's hit zone and self-shadow in speckles.
+      let shadowBias = max(0.002, hitEps * t * 2.0);
+      sh = mix(1.0, softShadow(pos + n * shadowBias, keyDir, u.shadowSoftness), 0.9);
       ao = mix(1.0, calcAO(pos, n), u.aoStrength);
     }
     let fres = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);

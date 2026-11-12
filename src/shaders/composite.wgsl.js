@@ -168,8 +168,78 @@ const GLOW_TINT : f32 = 0.18;
 // therefore remains itself for the entire loop; only which part of it is used
 // at each surface point changes.
 fn resolveScene(uv : vec2<f32>) -> vec4<f32> {
-  let m = textureSampleLevel(srcTex, samp, uv, 0.0);
-  let a = textureSampleLevel(auxTex, samp, uv, 0.0);
+  return resolveMaterial(textureSampleLevel(srcTex, samp, uv, 0.0),
+                         textureSampleLevel(auxTex, samp, uv, 0.0), uv);
+}
+
+// ---- Bicubic upscale ------------------------------------------------------
+// Below native resolution (scale < 1, which is where the governor puts most
+// moving views) the material is stretched to the canvas. Bilinear filtering
+// does that with a visible softness; Catmull-Rom keeps the edges crisp.
+//
+// It is applied to the MATERIAL, before the palette lookup, which is valid
+// because every channel is a weighted sum. Catmull-Rom has negative lobes, so
+// the result is clamped to the range of the 2x2 texels it lies between: that
+// keeps weights non-negative and stops ringing at silhouettes, while leaving
+// the sharpening of everything in between.
+//
+// Only the centre sample of the composite uses this. The edge filter's taps,
+// the sharpen neighbourhood and the bloom prefilter stay bilinear: nine taps
+// per material texture is affordable once per pixel, not ten times.
+
+fn catmullRomWeights(f : vec2<f32>) -> array<vec2<f32>, 4> {
+  return array<vec2<f32>, 4>(
+    f * (-0.5 + f * (1.0 - 0.5 * f)),
+    1.0 + f * f * (-2.5 + 1.5 * f),
+    f * (0.5 + f * (2.0 - 1.5 * f)),
+    f * f * (-0.5 + 0.5 * f),
+  );
+}
+
+fn sampleCatmullRom(tex : texture_2d<f32>, uv : vec2<f32>, dims : vec2<f32>) -> vec4<f32> {
+  let samplePos = uv * dims;
+  let texPos1 = floor(samplePos - 0.5) + 0.5;
+  let w = catmullRomWeights(samplePos - texPos1);
+  let w12 = w[1] + w[2];
+  let tp0 = (texPos1 - 1.0) / dims;
+  let tp3 = (texPos1 + 2.0) / dims;
+  let tp12 = (texPos1 + w[2] / w12) / dims;
+
+  var r = vec4<f32>(0.0);
+  r += textureSampleLevel(tex, samp, vec2<f32>(tp0.x, tp0.y), 0.0) * (w[0].x * w[0].y);
+  r += textureSampleLevel(tex, samp, vec2<f32>(tp12.x, tp0.y), 0.0) * (w12.x * w[0].y);
+  r += textureSampleLevel(tex, samp, vec2<f32>(tp3.x, tp0.y), 0.0) * (w[3].x * w[0].y);
+  r += textureSampleLevel(tex, samp, vec2<f32>(tp0.x, tp12.y), 0.0) * (w[0].x * w12.y);
+  r += textureSampleLevel(tex, samp, vec2<f32>(tp12.x, tp12.y), 0.0) * (w12.x * w12.y);
+  r += textureSampleLevel(tex, samp, vec2<f32>(tp3.x, tp12.y), 0.0) * (w[3].x * w12.y);
+  r += textureSampleLevel(tex, samp, vec2<f32>(tp0.x, tp3.y), 0.0) * (w[0].x * w[3].y);
+  r += textureSampleLevel(tex, samp, vec2<f32>(tp12.x, tp3.y), 0.0) * (w12.x * w[3].y);
+  r += textureSampleLevel(tex, samp, vec2<f32>(tp3.x, tp3.y), 0.0) * (w[3].x * w[3].y);
+
+  // Anti-ringing: stay within the four texels this point lies between.
+  let base = vec2<i32>(floor(samplePos - 0.5));
+  let maxP = vec2<i32>(dims) - vec2<i32>(1);
+  let t00 = textureLoad(tex, clamp(base, vec2<i32>(0), maxP), 0);
+  let t10 = textureLoad(tex, clamp(base + vec2<i32>(1, 0), vec2<i32>(0), maxP), 0);
+  let t01 = textureLoad(tex, clamp(base + vec2<i32>(0, 1), vec2<i32>(0), maxP), 0);
+  let t11 = textureLoad(tex, clamp(base + vec2<i32>(1, 1), vec2<i32>(0), maxP), 0);
+  return clamp(r, min(min(t00, t10), min(t01, t11)), max(max(t00, t10), max(t01, t11)));
+}
+
+// The composite's centre sample: bicubic when the material is smaller than the
+// canvas, plain bilinear otherwise (exact at 1:1, and the right filter when a
+// supersampled rung is being reduced).
+fn resolveSceneUpscaled(uv : vec2<f32>) -> vec4<f32> {
+  if (u.qualityScale > 0.999) {
+    return resolveScene(uv);
+  }
+  let dims = max(vec2<f32>(textureDimensions(srcTex, 0)), vec2<f32>(1.0));
+  return resolveMaterial(sampleCatmullRom(srcTex, uv, dims),
+                         sampleCatmullRom(auxTex, uv, dims), uv);
+}
+
+// Material -> HDR colour, from already-sampled material and aux values.
+fn resolveMaterial(m : vec4<f32>, a : vec4<f32>, uv : vec2<f32>) -> vec4<f32> {
   // Reduced-motion policy is enforced on the CPU. If the user explicitly
   // moves the colour-speed slider, u.colorPhase is allowed to advance even
   // under reduced motion, so the shader must consume that phase unchanged.
@@ -238,7 +308,7 @@ fn surfaceCoverage(uv : vec2<f32>) -> f32 {
 }
 
 fn resolveSceneEdgeAA(uv : vec2<f32>) -> vec4<f32> {
-  let base = resolveScene(uv);
+  let base = resolveSceneUpscaled(uv);
   let surfaceType = u.fractalType < 24.5 || u.fractalType > 28.5;
   let aaStrength = clamp((1.0 - u.qualityScale) * 2.0, 0.0, 1.0);
   // Once the average has more than one sample in it the silhouette is already
@@ -453,7 +523,10 @@ fn fs_composite(in : VSOut) -> @location(0) vec4<f32> {
   let vig = smoothstep(0.9, 0.35, length(q));
   col = col * mix(0.72, 1.0, vig);
 
-  let d = (hash21(in.uv * u.resolution + u.time) - 0.5) / 255.0;
+  // One dither value per CANVAS pixel. Seeding it from the internal resolution
+  // gave every internal texel the same value, which at a half-resolution rung
+  // showed as 2x2 blocks of noise -- itself a visible pattern.
+  let d = (hash21(in.pos.xy + fract(u.time) * 61.0) - 0.5) / 255.0;
   col = col + vec3<f32>(d);
   col = clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
 
