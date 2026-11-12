@@ -30,33 +30,31 @@ mathematicians named there.
 
 ## Included models
 
-- Mandelbulb
-- Mandelbox
-- Menger sponge
-- Quaternion Julia
-- Apollonian sphere packing
-- Nested sphere packing
-- Ornate planet with a polar bloom
-- Studded surface packing
-- Gyroid minimal surface
-- Kleinian limit set
-- Barth sextic
-- Kissing Schottky group (parabolic)
-- Schottky group (hyperbolic)
-- Tetrabrot (bicomplex Mandelbrot slice)
-- Envelope extrusion, octahedral seed (stella octangula)
-- Envelope extrusion, dodecahedral seed (small stellated dodecahedron)
-- Hyperbolic honeycomb {5,3,4}
-- Hyperbolic honeycomb {4,3,5}
-- Truncated and omnitruncated forms of both honeycombs
-- Kleinian sphere packing {5,3,6}
-- Engel plesiohedron tiling (38 faces)
-- Aizawa strange attractor
-- Lorenz strange attractor
-- Rössler strange attractor
-- Ziggurat cube terraces
-- Icosahedral quasicrystal
-- Cube stack (block of ~16,700 cubes)
+67 shapes in seven families, chosen in the demo with a Family → Type → Shape
+picker. The full table, how shapes are registered, and what comes next are in
+[docs/SHAPE_CATALOG.md](docs/SHAPE_CATALOG.md).
+
+- **Fractals** — escape-time (Mandelbulb, Mandelbox, quaternion Julia,
+  Tetrabrot); self-similar IFS solids (Menger sponge, Sierpiński tetrahedron,
+  octahedron flake, Jerusalem cube, Cantor dust, stella octangula fractal); a
+  kaleidoscopic IFS.
+- **Packings and groups** — the canonical Descartes Apollonian packing, the
+  inversion Apollonian packing, nested sphere packing, the Kleinian {5,3,6}
+  packing, two decorative presets; Kleinian and Schottky limit sets.
+- **Tessellations** — six hyperbolic honeycombs ({5,3,4} and {4,3,5}, regular,
+  truncated, omnitruncated); Euclidean honeycombs (Engel plesiohedron, cubic,
+  tetrahedral–octahedral, rhombic dodecahedral, Kelvin); an icosahedral
+  quasicrystal.
+- **Surfaces** — triply periodic minimal surfaces (gyroid, Schwarz P and D,
+  Neovius, Schoen I-WP); algebraic surfaces (Barth sextic, Cayley cubic, Clebsch
+  cubic, Kummer quartic); ruled surfaces as string models; horn and spindle tori,
+  linked tori, a genus-two surface; metaballs and a superquadric.
+- **Polyhedra** — stella octangula and the small stellated, great, and great
+  stellated dodecahedra; compounds of five tetrahedra and five cubes.
+- **Curves and dynamics** — nine strange attractors: Aizawa, Lorenz, Rössler,
+  Thomas, Halvorsen, Dadras, Chen, Sprott (case B), Rabinovich–Fabrikant.
+- **Fields and assemblies** — the Cosmic Web volume; ziggurat and cube-stack
+  assemblies.
 
 ## Project structure
 
@@ -70,9 +68,13 @@ mathematicians named there.
 │   ├── quality.js                adaptive-quality governor (pure, no WebGPU)
 │   ├── tour.js                   boot-tour steps and timing (pure, no DOM)
 │   ├── shape-params.js           per-shape parameter registry + constraints (pure)
+│   ├── shapes.js                 THE shape registry: ids, kinds, orbit distances (pure)
+│   ├── catalog.js                Family/Type/Shape picker logic (pure, no DOM)
+│   ├── attractors.js             strange attractors: equations, fits, trajectories (pure)
 │   └── shaders/
 │       ├── fractal.wgsl.js       distance estimators + clearance compute shader
 │       ├── engel.wgsl.js         generated plesiohedron tables + its estimator
+│       ├── catalog.wgsl.js       estimators for the catalogue shapes (ids 38+)
 │       ├── material.wgsl.js      palette-independent raymarch material pass
 │       ├── composite.wgsl.js     palette resolve, bloom, image controls, tonemap
 │       ├── temporal.wgsl.js      temporal resolve: reprojected history for moving frames
@@ -88,7 +90,8 @@ mathematicians named there.
 │   ├── attractor.test.js         attractor fits and Lyapunov exponents
 │   ├── engel.test.js             plesiohedron tables, tiling and Lipschitz bound
 │   ├── quality.test.js           governor behaviour against simulated devices
-│   ├── registry.test.js          shape tables, selector and shader bands agree
+│   ├── registry.test.js          registry, menu, mapDE dispatch and shader kinds agree
+│   ├── catalog.test.js           Family/Type/Shape picker and menu markup
 │   ├── tour.test.js              boot-tour sequencing and step targets
 │   └── shape-params.test.js      parameter ranges, constraints and packing
 └── .github/workflows/pages.yml   deploys the demo to GitHub Pages

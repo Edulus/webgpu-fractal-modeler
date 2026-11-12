@@ -16,6 +16,8 @@
 // give it a long soft falloff. A single blur at one size can only do one.
 
 // Bloom chain length. fractal-bg.js allocates one target per level.
+import { shapeKindWGSL } from '../shapes.js';
+
 export const BLOOM_LEVELS = 5;
 
 export const COMPOSITE_WGSL = /* wgsl */ `
@@ -77,6 +79,7 @@ struct Uniforms {
 @group(0) @binding(2) var srcTex : texture_2d<f32>;   // encoded material, or blur source
 @group(0) @binding(3) var auxTex : texture_2d<f32>;   // encoded auxiliary material
 @group(0) @binding(4) var bloomTex : texture_2d<f32>; // composite only
+${shapeKindWGSL()}
 
 const PI : f32 = 3.14159265359;
 const TAU : f32 = 6.28318530718;
@@ -248,7 +251,7 @@ fn resolveMaterial(m : vec4<f32>, a : vec4<f32>, uv : vec2<f32>) -> vec4<f32> {
   let missBg = select(0.0, a.w, u.bgMode >= 0.5);
   var color = bg * (a.x + missBg);
 
-  if (u.fractalType > 24.5 && u.fractalType < 27.5) {
+  if (isLineShape(u.fractalType)) {
     // Cosine presets use the unwrapped linear mean in material.xy. Imported
     // ramps are period-1 by construction, so use the circular mean in aux.xyz
     // to keep samples on either side of the 1->0 seam adjacent.
@@ -309,7 +312,7 @@ fn surfaceCoverage(uv : vec2<f32>) -> f32 {
 
 fn resolveSceneEdgeAA(uv : vec2<f32>) -> vec4<f32> {
   let base = resolveSceneUpscaled(uv);
-  let surfaceType = u.fractalType < 24.5 || u.fractalType > 28.5;
+  let surfaceType = isSurfaceShape(u.fractalType);
   let aaStrength = clamp((1.0 - u.qualityScale) * 2.0, 0.0, 1.0);
   // Once the average has more than one sample in it the silhouette is already
   // antialiased properly, by up to 96 jittered samples of the real surface.

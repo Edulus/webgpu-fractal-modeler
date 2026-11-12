@@ -16,6 +16,8 @@ import { FRACTAL_WGSL } from './shaders/fractal.wgsl.js';
 import { MATERIAL_WGSL } from './shaders/material.wgsl.js';
 import { COMPOSITE_WGSL, BLOOM_LEVELS } from './shaders/composite.wgsl.js';
 import { TEMPORAL_WGSL } from './shaders/temporal.wgsl.js';
+import { FRACTAL_IDS, CAM_RADIUS, shapeKind } from './shapes.js';
+import { ATTRACTORS, ATTRACTOR_FOR_SHAPE, buildTrajectory, trajectoryPoints } from './attractors.js';
 import { ATTRACTOR_WGSL } from './shaders/attractor.wgsl.js';
 import {
   LADDER, TOP, PRESET_RUNG, BUDGET_MS,
@@ -129,52 +131,10 @@ const GEOMETRY_SLOTS = (() => {
   return out;
 })();
 
-// Distance-estimated fractals occupy ids 0..23; the volumetric/line-rendered
-// attractors follow at 24+ and must stay contiguous at the end. The shader keys off that split (see the
-// `fractalType > 23.5` test in fractal.wgsl.js), so keep DE types contiguous at
-// the front when adding new ones and move the attractors up to match.
-//
-// The two Schottky entries share a single estimator and differ only in regime:
-// `schottky` is the kissing configuration, where all five spheres are tangent
-// and every generator is parabolic, and `schottkyh` separates them so every
-// generator becomes hyperbolic. deSchottky keys off the id to pick the regime,
-// so these two must stay adjacent and in this order.
-const FRACTAL_IDS = {
-  mandelbulb: 0, mandelbox: 1, menger: 2, julia: 3, apollonian: 4,
-  // penrose (8) is RETIRED: it is an honest P3 tiling, but engraved on a disc,
-  // which is the 2D-pattern-on-a-primitive case the roadmap warns against. The
-  // id and its estimator are kept so nothing renumbers and the work is not
-  // lost; it is simply no longer offered in the selector. Still reachable via
-  // setFractal('penrose').
-  spherepack: 5, encrusted: 6, surfacepack: 7, penrose: 8, gyroid: 9,
-  kleinian: 10, barth: 11, schottky: 12, schottkyh: 13, tetrabrot: 14,
-  envoct: 15, envdodec: 16, hyp534: 17, hyp435: 18,
-  // Wythoffian forms of the same two groups: the active-mirror string picks
-  // which member of the family the seed generates. deHoneycomb groups these by
-  // id ({5,3,4} holds 17/19/20, {4,3,5} holds 18/21/22), so they must stay put.
-  hyp534t: 19, hyp534o: 20, hyp435t: 21, hyp435o: 22,
-  // The packing shares the honeycombs' machinery but not their group: [5,3,6]
-  // is cusped, which is what gives it horoballs to make a packing out of.
-  kleinpack: 23,
-  // Engel's plesiohedron: a space-filling tiling, not a fractal, and the only
-  // estimator here that is an exact signed distance.
-  engel: 24,
-  attractor: 25, lorenz: 26, rossler: 27,
-  // Volumetric density field. Kept after the line attractors so their
-  // established ids remain stable.
-  cosmicweb: 28,
-  // A distance-estimated surface, but appended after the non-surface ids rather
-  // than inserted among the surfaces, so that nothing already shipped
-  // renumbers. Surface-ness is therefore a predicate, not an id threshold.
-  ziggurat: 29,
-  // The ziggurat's volumetric relative: cubes filling a 3D lattice rather than
-  // a heightfield over a plane.
-  cubestack: 30,
-  // Six plane waves on the icosahedron's 5-fold axes. Aperiodic because those
-  // axes meet at arccos(1/sqrt5) and sqrt5 = 2*phi - 1 is irrational.
-  quasicrystal: 31,
-};
-
+// The shape registry -- ids, kinds and orbit distances -- lives in shapes.js,
+// shared with the shaders and diagnostics. Notes on individual ids (the retired
+// Penrose relief at 8, why the Schottky and honeycomb entries must stay
+// adjacent) are kept there and beside their estimators.
 // The registry is keyed by name while the renderer works in ids, so the two
 // need one bridge. Built once from FRACTAL_IDS rather than restated, so it
 // cannot drift from it.
@@ -186,7 +146,7 @@ function shapeName(id) {
 }
 
 function isAttractorType(id) {
-  return id >= FRACTAL_IDS.attractor && id <= FRACTAL_IDS.rossler;
+  return shapeKind(id) === 'line';
 }
 
 // A distance-estimated surface: anything that is neither line geometry nor a
@@ -194,7 +154,7 @@ function isAttractorType(id) {
 // because surfaces are no longer one contiguous block, and because naming the
 // last surface means every new surface has to remember to update this.
 function isSurfaceType(id) {
-  return !isAttractorType(id) && id !== FRACTAL_IDS.cosmicweb;
+  return shapeKind(id) === 'surface';
 }
 
 // Quality tiers -> internal-resolution scale factor.
@@ -226,14 +186,9 @@ const QUALITY_SCALE = Object.fromEntries(
 // clip would slice a cap off every one of them.
 // The quasicrystal is clipped at 1.25, between the honeycombs' 0.85 and the
 // Barth sextic's 2.0, and 3.1 frames it to the same fraction of the view.
-const CAM_RADIUS = [2.55, 6.5, 3.6, 3.0, 3.0, 2.9, 3.1, 3.0, 3.5, 3.2, 3.6, 4.6,
-                    1.55, 1.75, 3.4, 2.85, 5.75, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
-                    2.3, 3.0, 3.2, 3.0, 3.0, 6.2, 2.6, 2.6, 3.1];
+// CAM_RADIUS is imported from shapes.js (one entry per id).
 
-// Number of integrated trajectory samples drawn as a line strip per attractor.
-// These are exact float positions (vector geometry), so the curve stays crisp
-// at any zoom — unlike a baked voxel grid, which quantizes it.
-const TRAJECTORY_POINTS = 600000;
+// Trajectory point counts are per attractor (attractors.js: trajectoryPoints).
 
 // Progressive accumulation. While the view is still, frames are re-rendered
 // with a subpixel offset and averaged, which resolves the aliasing the
@@ -854,102 +809,18 @@ export async function initFractalBackground(canvas, options = {}) {
   // Per-attractor config: the derivative, integration step, and a fit transform
   // (center + scale) placing the attractor in roughly [-1,1]^3. Lorenz is large
   // and fast-moving, so it needs a much smaller dt than the compact Aizawa.
-  const ATTRACTORS = {
-    // dx/dt = (z-b)x - dy
-    // dy/dt = dx + (z-b)y
-    // dz/dt = c + az - z^3/3 - (x^2+y^2)(1+ez) + f z x^3
-    aizawa: {
-      init: [0.1, 0.0, 0.0],
-      dt: 0.002, warm: 5000,
-      center: [0, 0, 0.6], scale: 0.9 / 1.35,
-      deriv: (x, y, z) => {
-        const a = 0.95, b = 0.7, c = 0.6, d = 3.5, e = 0.25, f = 0.1;
-        return [
-          (z - b) * x - d * y,
-          d * x + (z - b) * y,
-          c + a * z - (z * z * z) / 3 - (x * x + y * y) * (1 + e * z) + f * z * x * x * x,
-        ];
-      },
-    },
-    // dx/dt = -y - z, dy/dt = x + ay, dz/dt = b + z(x - c)
-    //
-    // The simplest of the three: one quadratic term, where Lorenz has two. It
-    // spends most of its time in a nearly flat spiral and then folds sharply up
-    // out of the plane, which is what makes it the textbook picture of period
-    // doubling. Fitted from a measured run: the box is x[-9.11, 11.43],
-    // y[-10.79, 7.84], z[0.01, 22.85], so the centre is off-axis, unlike the two
-    // symmetric attractors above. dt gives 0.034 of arc per step, between the
-    // other two, and the spiral sits at the bottom of the box with the fold
-    // reaching the top.
-    rossler: {
-      init: [0.1, 0.0, 0.0],
-      dt: 0.004, warm: 4000,
-      center: [1.2, -1.5, 11.4], scale: 0.9 / 11.5,
-      deriv: (x, y, z) => {
-        const a = 0.2, b = 0.2, c = 5.7;
-        return [-y - z, x + a * y, b + z * (x - c)];
-      },
-    },
-    // dx/dt = sigma(y-x), dy/dt = x(rho-z)-y, dz/dt = xy - beta*z
-    lorenz: {
-      init: [0.1, 0.0, 0.0],
-      dt: 0.0005, warm: 3000,
-      center: [0, 0, 25], scale: 0.9 / 28,
-      deriv: (x, y, z) => {
-        const sigma = 10, rho = 28, beta = 8 / 3;
-        return [sigma * (y - x), x * (rho - z) - y, x * y - beta * z];
-      },
-    },
-  };
+  // The attractors themselves (derivatives, steps, measured fits) are in
+  // attractors.js, where Node can test them.
+
 
   // Integrate with RK4 so the path stays accurate at larger steps (fewer,
   // better-placed points beat many sloppy Euler ones). Writes interleaved
   // [x, y, z, age] vertices.
   function buildAttractorTrajectory(variant) {
     const cfg = ATTRACTORS[variant] || ATTRACTORS.aizawa;
-    const N = TRAJECTORY_POINTS;
-    const verts = new Float32Array(N * 4);
-
-    let x = cfg.init[0], y = cfg.init[1], z = cfg.init[2];
-    const dt = cfg.dt, h = dt * 0.5;
-    const cx = cfg.center[0], cy = cfg.center[1], cz = cfg.center[2];
-    const s = cfg.scale;
-
-    const step = () => {
-      const k1 = cfg.deriv(x, y, z);
-      const k2 = cfg.deriv(x + k1[0] * h, y + k1[1] * h, z + k1[2] * h);
-      const k3 = cfg.deriv(x + k2[0] * h, y + k2[1] * h, z + k2[2] * h);
-      const k4 = cfg.deriv(x + k3[0] * dt, y + k3[1] * dt, z + k3[2] * dt);
-      x += (dt / 6) * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]);
-      y += (dt / 6) * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]);
-      z += (dt / 6) * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]);
-    };
-
-    // Discard the transient so we only draw the attractor itself.
-    for (let i = 0; i < cfg.warm; i++) step();
-
-    // Store |velocity| per point. Speed is a smooth function of position on the
-    // attractor, so it gives spatially coherent color — neighbouring strands
-    // share a hue and additive overlap deepens it instead of averaging to white.
-    let sMin = Infinity, sMax = 0;
-    for (let i = 0; i < N; i++) {
-      step();
-      verts[i * 4] = (x - cx) * s;
-      verts[i * 4 + 1] = (y - cy) * s;
-      verts[i * 4 + 2] = (z - cz) * s;
-      const v = cfg.deriv(x, y, z);
-      const sp = Math.hypot(v[0], v[1], v[2]);
-      verts[i * 4 + 3] = sp;
-      if (sp < sMin) sMin = sp;
-      if (sp > sMax) sMax = sp;
-    }
-
-    // Normalize speed to 0..1. The sqrt spreads the low end, where most of the
-    // trajectory sits, across more of the palette.
-    const range = sMax - sMin || 1;
-    for (let i = 0; i < N; i++) {
-      verts[i * 4 + 3] = Math.sqrt((verts[i * 4 + 3] - sMin) / range);
-    }
+    const N = trajectoryPoints(cfg);
+    // Integration, fit and speed colouring live in attractors.js (tested there).
+    const verts = buildTrajectory(cfg, N);
 
     if (state.trajBuffer) state.trajBuffer.destroy();
     state.trajBuffer = state.device.createBuffer({
@@ -963,9 +834,7 @@ export async function initFractalBackground(canvas, options = {}) {
 
   // Which attractor a given fractal id maps to.
   function attractorVariantForType(ft) {
-    if (ft === FRACTAL_IDS.lorenz) return 'lorenz';
-    if (ft === FRACTAL_IDS.rossler) return 'rossler';
-    return 'aizawa';
+    return ATTRACTOR_FOR_SHAPE[shapeName(ft)] ?? 'aizawa';
   }
 
   // (Re)build the trajectory if missing or holding a different attractor.

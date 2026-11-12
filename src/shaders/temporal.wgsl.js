@@ -18,6 +18,7 @@
 // image controls — stays live and unchanged.
 
 import { COMPOSITE_WGSL } from './composite.wgsl.js';
+import { shapeKindWGSL } from '../shapes.js';
 
 // One Uniforms struct, not a fifth hand-kept copy: lift the composite pass's.
 const structStart = COMPOSITE_WGSL.indexOf('struct Uniforms {');
@@ -37,6 +38,7 @@ ${UNIFORMS_STRUCT}
 @group(0) @binding(4) var curDepth : texture_2d<f32>;      // ray distance, .x
 @group(0) @binding(5) var histMaterial : texture_2d<f32>;  // last frame's resolve
 @group(0) @binding(6) var histAux : texture_2d<f32>;
+${shapeKindWGSL()}
 
 struct VSOut {
   @builtin(position) pos : vec4<f32>,
@@ -218,7 +220,7 @@ fn fs_temporal(in : VSOut) -> TemporalOut {
 
   // The line attractors use these channels differently (aux.xyz is a circular
   // mean), so the coordinate clamp applies to everything else.
-  let lines = u.fractalType > 24.5 && u.fractalType < 27.5;
+  let lines = isLineShape(u.fractalType);
   if (!lines) {
     if (hm.y > 1e-6 && baseHi >= baseLo) {
       hm.x = clamp(hm.x / hm.y, baseLo, baseHi) * hm.y;

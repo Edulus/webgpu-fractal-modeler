@@ -9,6 +9,7 @@
 // model's extent while CAM_RADIUS is still a hand-written table.
 
 import fs from 'node:fs';
+import { FRACTAL_IDS } from '../src/shapes.js';
 import {
   SHAPE_PARAMS, CONSTRAINT_KINDS, PARAM_SLOTS, PARAM_DOMAINS, REL_MARGIN,
   paramsFor, defaultsFor, clampParams, packParams, effectiveRange,
@@ -34,11 +35,7 @@ const index = fs.readFileSync('index.html', 'utf8');
 const shapes = Object.keys(SHAPE_PARAMS);
 
 // ---- Only real shapes, and only measured ones ------------------------------
-const idBlock = bg
-  .slice(bg.indexOf('const FRACTAL_IDS = {'), bg.indexOf('};', bg.indexOf('const FRACTAL_IDS = {')))
-  .replace(/\/\/[^\n]*/g, '');
-const IDS = {};
-for (const m of idBlock.matchAll(/(\w+)\s*:\s*(\d+)/g)) IDS[m[1]] = Number(m[2]);
+const IDS = FRACTAL_IDS;   // the shape registry (src/shapes.js)
 
 ok(shapes.length > 0, `${shapes.length} shapes are parameterised`);
 ok(shapes.every((s) => s in IDS), 'every parameterised shape is a registered shape');

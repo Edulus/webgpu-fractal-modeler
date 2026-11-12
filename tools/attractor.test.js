@@ -1,51 +1,16 @@
 // Strange-attractor fits. Run: node tools/attractor.test.js
 //
-// The three attractors are placed by measurement: integrate, take the bounding
-// box, then choose a centre and scale that put the trajectory in roughly
-// [-1,1]^3. Those constants live in fractal-bg.js, which cannot be imported
-// here because it wants a GPU device and a DOM, so they are mirrored below --
-// the same arrangement colorcycle.test.js and kleinpack.test.js use. If a fit
-// is edited there and not here, the box assertions fail rather than silently
-// drifting.
+// Each attractor is placed by measurement: integrate, take the bounding box,
+// then choose a centre and scale that put the trajectory in roughly [-1,1]^3.
+// The constants live in src/attractors.js and are imported here -- they used to
+// be mirrored by hand, because they lived inside the renderer, which needs a GPU.
 //
 // What is actually being checked: that each attractor stays bounded, lands
 // inside the frame after its own transform, is not so coarsely stepped that the
 // integration falls apart, and is genuinely aperiodic rather than settling onto
 // a cycle.
-
-const ATTRACTORS = {
-  aizawa: {
-    init: [0.1, 0.0, 0.0],
-    dt: 0.002, warm: 5000,
-    center: [0, 0, 0.6], scale: 0.9 / 1.35,
-    deriv: (x, y, z) => {
-      const a = 0.95, b = 0.7, c = 0.6, d = 3.5, e = 0.25, f = 0.1;
-      return [
-        (z - b) * x - d * y,
-        d * x + (z - b) * y,
-        c + a * z - (z * z * z) / 3 - (x * x + y * y) * (1 + e * z) + f * z * x * x * x,
-      ];
-    },
-  },
-  rossler: {
-    init: [0.1, 0.0, 0.0],
-    dt: 0.004, warm: 4000,
-    center: [1.2, -1.5, 11.4], scale: 0.9 / 11.5,
-    deriv: (x, y, z) => {
-      const a = 0.2, b = 0.2, c = 5.7;
-      return [-y - z, x + a * y, b + z * (x - c)];
-    },
-  },
-  lorenz: {
-    init: [0.1, 0.0, 0.0],
-    dt: 0.0005, warm: 3000,
-    center: [0, 0, 25], scale: 0.9 / 28,
-    deriv: (x, y, z) => {
-      const sigma = 10, rho = 28, beta = 8 / 3;
-      return [sigma * (y - x), x * (rho - z) - y, x * y - beta * z];
-    },
-  },
-};
+import { ATTRACTORS, ATTRACTOR_FOR_SHAPE, buildTrajectory } from '../src/attractors.js';
+import { SHAPES } from '../src/shapes.js';
 
 let passed = 0, failed = 0;
 const check = (name, ok, detail = '') => {
@@ -164,6 +129,32 @@ for (const [name, cfg] of Object.entries(ATTRACTORS)) {
         `median z ${median.toFixed(3)}`);
   check('and folds far out of it', r.hi[2] > 10 * Math.max(median, 0.1),
         `max z ${r.hi[2].toFixed(2)} against median ${median.toFixed(3)}`);
+}
+
+// The vertex data the renderer uploads is finite everywhere. One NaN speed is
+// enough to blank a rectangle of the screen through the bloom chain; four of
+// these attractors produced exactly one before the speed clamp.
+for (const [name, cfg] of Object.entries(ATTRACTORS)) {
+  const v = buildTrajectory(cfg, 600000);
+  let bad = 0, lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < v.length; i++) {
+    if (!Number.isFinite(v[i])) bad++;
+    if (i % 4 === 3) { lo = Math.min(lo, v[i]); hi = Math.max(hi, v[i]); }
+  }
+  check(`${name}: every uploaded vertex value is finite`, bad === 0, `${bad} non-finite`);
+  check(`${name}: speed colour spans 0..1`, lo === 0 && hi === 1, `range ${lo}..${hi}`);
+}
+
+// Every line shape in the registry has an attractor, and nothing is orphaned.
+{
+  const lineShapes = SHAPES.filter((s) => s.kind === 'line').map((s) => s.name);
+  check('every line shape maps to an attractor',
+        lineShapes.every((n) => ATTRACTOR_FOR_SHAPE[n] in ATTRACTORS),
+        lineShapes.filter((n) => !(ATTRACTOR_FOR_SHAPE[n] in ATTRACTORS)).join(', '));
+  check('every attractor is reachable from a shape',
+        Object.keys(ATTRACTORS).every((a) => Object.values(ATTRACTOR_FOR_SHAPE).includes(a)));
+  check('the mapping names only line shapes',
+        Object.keys(ATTRACTOR_FOR_SHAPE).every((n) => lineShapes.includes(n)));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -6,6 +6,7 @@
 // MATERIAL_WGSL imports this final string too, so the visible raymarch and the
 // clearance probe always use identical maths.
 import { FRACTAL_WGSL as BASE_FRACTAL_WGSL } from './fractal-base.wgsl.js';
+import { CATALOG_WGSL } from './catalog.wgsl.js';
 
 const PENROSE_START = '// Penrose tiling engraved into a disc';
 const GYROID_START = '// ---- Gyroid ---------------------------------------------------------------';
@@ -254,5 +255,7 @@ fn deGyroid(pos : vec3<f32>) -> DEResult {
 
 `;
 
+// The catalogue estimators (ids 38+) are appended; WGSL resolves module-scope
+// functions regardless of order, so mapDE in the base can call them.
 export const FRACTAL_WGSL =
-  withDescartes.slice(0, gStart) + GYROID_WGSL + withDescartes.slice(gEnd);
+  withDescartes.slice(0, gStart) + GYROID_WGSL + withDescartes.slice(gEnd) + CATALOG_WGSL;

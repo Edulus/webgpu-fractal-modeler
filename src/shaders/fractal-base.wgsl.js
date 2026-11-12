@@ -11,6 +11,8 @@
 // estimator live in their own module and are spliced in below.
 import { ENGEL_WGSL } from './engel.wgsl.js';
 
+import { shapeKindWGSL } from '../shapes.js';
+
 export const FRACTAL_WGSL = /* wgsl */ `
 // Stop count carried for an imported palette. Mirrored by MAX_STOPS in
 // palette-io.js, which resamples longer palettes down to it.
@@ -129,6 +131,7 @@ fn shapeParam(i : u32) -> f32 {
 }
 
 @group(0) @binding(0) var<uniform> u : Uniforms;
+${shapeKindWGSL()}
 
 // ---- Vertex: fullscreen triangle (no vertex buffer) -----------------------
 struct VSOut {
@@ -1800,53 +1803,60 @@ fn deQuasicrystal(pos : vec3<f32>) -> DEResult {
 
 // Dispatch to the selected estimator.
 fn mapDE(pos : vec3<f32>) -> DEResult {
-  let ft = u.fractalType;
-  if (ft < 0.5) {
-    return deMandelbulb(pos);
-  } else if (ft < 1.5) {
-    return deMandelbox(pos);
-  } else if (ft < 2.5) {
-    return deMenger(pos);
-  } else if (ft < 3.5) {
-    return deJulia(pos);
-  } else if (ft < 4.5) {
-    return deApollonian(pos);
-  } else if (ft < 5.5) {
-    return deSpherePack(pos);
-  } else if (ft < 6.5) {
-    return deEncrusted(pos);
-  } else if (ft < 7.5) {
-    return deSurfacePack(pos);
-  } else if (ft < 8.5) {
-    return dePenrose(pos);
-  } else if (ft < 9.5) {
-    return deGyroid(pos);
-  } else if (ft < 10.5) {
-    return deKleinian(pos);
-  } else if (ft < 11.5) {
-    return deBarth(pos);
-  } else if (ft < 13.5) {
+  // Dispatch by integer id. A switch rather than a ladder of float thresholds:
+  // shape kinds no longer form contiguous bands (see src/shapes.js), and a
+  // threshold ladder silently routes any id past its last rung to whatever
+  // estimator happens to be at the end. Line and volume ids never reach here.
+  switch (i32(round(u.fractalType))) {
+    case 0: { return deMandelbulb(pos); }
+    case 1: { return deMandelbox(pos); }
+    case 2: { return deMenger(pos); }
+    case 3: { return deJulia(pos); }
+    case 4: { return deApollonian(pos); }
+    case 5: { return deSpherePack(pos); }
+    case 6: { return deEncrusted(pos); }
+    case 7: { return deSurfacePack(pos); }
+    case 8: { return dePenrose(pos); }
+    case 9: { return deGyroid(pos); }
+    case 10: { return deKleinian(pos); }
+    case 11: { return deBarth(pos); }
     // Both Schottky entries share one estimator; the id selects the regime.
-    return deSchottky(pos);
-  } else if (ft < 14.5) {
-    return deTetrabrot(pos);
-  } else if (ft < 16.5) {
+    case 12, 13: { return deSchottky(pos); }
+    case 14: { return deTetrabrot(pos); }
     // Both envelope entries share one estimator; the id selects the seed.
-    return deEnvelope(pos);
-  } else if (ft < 22.5) {
-    // The six honeycomb entries share one estimator; the id selects {p,q,r}
-    // and the active-mirror string.
-    return deHoneycomb(pos);
-  } else if (ft < 23.5) {
-    return deKleinPack(pos);
-  } else if (ft < 24.5) {
-    return deEngel(pos);
-  } else if (ft < 29.5) {
-    return deZiggurat(pos);
-  } else if (ft < 30.5) {
-    return deCubestack(pos);
+    case 15, 16: { return deEnvelope(pos); }
+    // The six honeycombs share one estimator; the id selects {p,q,r} and the
+    // active-mirror string.
+    case 17, 18, 19, 20, 21, 22: { return deHoneycomb(pos); }
+    case 23: { return deKleinPack(pos); }
+    case 24: { return deEngel(pos); }
+    case 29: { return deZiggurat(pos); }
+    case 30: { return deCubestack(pos); }
+    case 31: { return deQuasicrystal(pos); }
+    // Catalogue shapes (catalog.wgsl.js).
+    case 38, 39, 40, 41: { return catTPMS(pos, i32(round(u.fractalType)) - 38); }
+    case 42, 43, 44: { return catAlgebraic(pos, i32(round(u.fractalType)) - 42); }
+    case 45: { return catStellation(pos, 4, 0.263); }   // great stellated dodecahedron
+    case 46: { return catStellation(pos, 3, 0.56); }    // great dodecahedron
+    case 47: { return catCompound5(pos, false); }
+    case 48: { return catCompound5(pos, true); }
+    case 49: { return catSierpinski(pos); }
+    case 50: { return catOctaflake(pos); }
+    case 51: { return catJerusalem(pos); }
+    case 52: { return catCantorDust(pos); }
+    case 53: { return catStellaFractal(pos); }
+    case 54: { return catKIFS(pos); }
+    case 55, 56, 57, 58: { return catHoneycomb(pos, i32(round(u.fractalType)) - 55); }
+    case 59: { return catHyperboloid(pos); }
+    case 60: { return catHypar(pos); }
+    case 61: { return catCutTorus(pos, 0.6, 0.6); }    // horn: tube radius = circle radius
+    case 62: { return catCutTorus(pos, 0.38, 0.62); }  // spindle: tube wider than circle
+    case 63: { return catLinkedTori(pos); }
+    case 64: { return catGenus2(pos); }
+    case 65: { return catMetaballs(pos); }
+    case 66: { return catSuperquadric(pos); }
+    default: { return deMandelbulb(pos); }
   }
-  return deQuasicrystal(pos);
 }
 
 fn mapDist(pos : vec3<f32>) -> f32 {
@@ -1993,7 +2003,7 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   // background here so those lines have something to blend onto.
   // 25-28 are the line attractors and the volumetric cosmic web. The ziggurat
   // sits at 29, past them, so this is a band rather than a threshold.
-  if (u.fractalType > 24.5 && u.fractalType < 28.5) {
+  if (!isSurfaceShape(u.fractalType)) {
     let bg = backgroundColor(rd);
     return vec4<f32>(select(vec3<f32>(0.0), bg, u.bgMode >= 0.5), 0.0);
   }
